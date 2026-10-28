@@ -546,3 +546,19 @@ def test_exactly_funded_reservation_can_dispatch_at_zero_unreserved_credit(servi
         service.start_reservation(reservation["reservation_id"])
     service.settle(reservation["reservation_id"], 5_000_000, PROVIDER, ACCOUNT, "exact-charge")
     assert service.balance("run")["available_micro_usd"] == 0
+
+
+@pytest.mark.parametrize("table", ["ledger", "events", "operations", "charges", "payment_transactions", "payment_events", "reconciliations", "payment_components"])
+def test_sql_replace_cannot_rewrite_immutable_identity(service, table):
+    """SQLite REPLACE otherwise bypasses UPDATE/DELETE triggers with recursive_triggers off."""
+    reservation = _reserve(service, "replace-charge", 100_000)
+    service.start_reservation(reservation["reservation_id"])
+    service.settle(reservation["reservation_id"], 50_000, PROVIDER, ACCOUNT, "replace-charge")
+    _register(service)
+    _apply(service, _snapshot(_transaction("replace-payment", 1_000_000)), event_id="replace-event", event_digest="digest")
+    with sqlite3.connect(service.path) as connection:
+        assert connection.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+        assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            connection.execute(f"INSERT OR REPLACE INTO {table} SELECT * FROM {table} LIMIT 1")
+    assert service.balance("run")["posted_micro_usd"] == 5_950_000

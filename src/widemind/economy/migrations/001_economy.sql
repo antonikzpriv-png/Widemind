@@ -90,3 +90,19 @@ CREATE TABLE IF NOT EXISTS payment_components (
 );
 CREATE TRIGGER IF NOT EXISTS payment_components_no_update BEFORE UPDATE ON payment_components BEGIN SELECT RAISE(ABORT,'append-only payment components'); END;
 CREATE TRIGGER IF NOT EXISTS payment_components_no_delete BEFORE DELETE ON payment_components BEGIN SELECT RAISE(ABORT,'append-only payment components'); END;
+
+CREATE TRIGGER IF NOT EXISTS ledger_no_replace BEFORE INSERT ON ledger WHEN EXISTS(SELECT 1 FROM ledger WHERE entry_id=NEW.entry_id) OR (NEW.kind='opening_grant' AND EXISTS(SELECT 1 FROM ledger WHERE run_id=NEW.run_id AND kind='opening_grant')) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS events_no_replace BEFORE INSERT ON events WHEN EXISTS(SELECT 1 FROM events WHERE sequence=NEW.sequence) OR EXISTS(SELECT 1 FROM events WHERE event_id=NEW.event_id) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS operations_no_replace BEFORE INSERT ON operations WHEN EXISTS(SELECT 1 FROM operations WHERE run_id=NEW.run_id AND scope=NEW.scope AND idempotency_key=NEW.idempotency_key) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS charges_no_replace BEFORE INSERT ON charges WHEN EXISTS(SELECT 1 FROM charges WHERE provider=NEW.provider AND account=NEW.account AND mode=NEW.mode AND external_charge_id=NEW.external_charge_id) OR EXISTS(SELECT 1 FROM charges WHERE reservation_id=NEW.reservation_id) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS payment_transactions_no_replace BEFORE INSERT ON payment_transactions WHEN EXISTS(SELECT 1 FROM payment_transactions WHERE provider=NEW.provider AND account=NEW.account AND mode=NEW.mode AND transaction_id=NEW.transaction_id) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS payment_events_no_replace BEFORE INSERT ON payment_events WHEN EXISTS(SELECT 1 FROM payment_events WHERE provider=NEW.provider AND account=NEW.account AND mode=NEW.mode AND event_id=NEW.event_id) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS reconciliations_no_replace BEFORE INSERT ON reconciliations WHEN EXISTS(SELECT 1 FROM reconciliations WHERE reconciliation_id=NEW.reconciliation_id) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
+
+CREATE TRIGGER IF NOT EXISTS payment_components_no_replace BEFORE INSERT ON payment_components WHEN EXISTS(SELECT 1 FROM payment_components WHERE provider=NEW.provider AND account=NEW.account AND mode=NEW.mode AND transaction_id=NEW.transaction_id AND component=NEW.component) BEGIN SELECT RAISE(ABORT,'append-only identity cannot be replaced'); END;
