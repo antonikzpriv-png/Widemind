@@ -13,7 +13,7 @@ From the repository root:
 ```sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e '.[test]'
+python -m pip install -r requirements.lock -e .
 python -m pytest -q
 ```
 
@@ -114,3 +114,11 @@ For webhook delivery errors, preserve Stripe retry/reconciliation paths; a faile
 - Run IDs are durable: exhaustion does not erase a run. Reconciliation and explicit owner recovery remain available. Any owner top-up or new experiment must be visible, rather than silently resetting the balance.
 - Live payment acceptance still needs the owner's verified business/account, enabled live payment method/capabilities, correct country/tax/refund policies, live key and endpoint signing secret, deployed HTTPS ingress, reachable `api.stripe.com`, and valid return URLs. Use separate live service/database/run/credentials. The cloud development network may need explicit Stripe API access; fixture tests do not require it. Running on another machine does not require the development sandbox's network policy.
 - No website, model runtime, mailbox, customer delivery authorization, public projection or business tax/revenue recognition compliance is provided by the economy module. These need their assigned modules. Keep private ledger data behind authentication; a future public feed must explicitly allowlist non-private totals/events.
+
+## Service isolation example
+
+[deploy/widemind-economy.service](../deploy/widemind-economy.service) is an example systemd unit, not a deployed service. Build/install the wheel in a root-owned `/opt/widemind-economy/.venv`, keep `/etc/widemind/economy.env` root-owned mode `0600`, and install the unit as administrator. Its dynamic service identity and `0700` state directory keep the accounting database separate from an autonomous agent running under a different unprivileged OS identity. The service has no capabilities and a read-only system view. Configure HTTPS ingress separately. Do not run the future agent with root privileges, the economy service identity, operator/gateway tokens, or write access to `/opt/widemind-economy` or `/etc/widemind`.
+
+Development tests verify API authorization and SQL append-only enforcement; they do not claim that this example unit has been deployed, or that a future agent sandbox has already been built. Establish that filesystem/process boundary before live agent execution.
+
+`requirements.lock` records the exact Python dependency versions used for local validation and CI, including test dependencies. The package manifest retains compatible dependency ranges for embedding the module in a future application. CI runs provider fixtures without account secrets or external payment calls.

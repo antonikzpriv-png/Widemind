@@ -2,7 +2,7 @@
 
 ## Status
 
-This document proposes implementation boundaries. No application stack, hosting provider, payment processor, model provider, or database has been selected.
+This document proposes implementation boundaries. The economy module selects Python 3.12+, FastAPI, HTTPX, SQLite and a Stripe REST adapter; see [implemented economy contracts](ECONOMY_CONTRACT.md). The worker, website and other adapters remain unimplemented. Hosting, model providers and actual accounts remain unconfigured.
 
 ## Product requirements
 

@@ -572,6 +572,8 @@ class EconomyService:
                 raise EconomyError('idempotency_conflict', 'Checkout already completed differently')
             self._register_payment(db, old['run_id'], provider, account, mode, payment_id, old['job_id'])
             db.execute('UPDATE checkouts SET payment_id=?,url=? WHERE provider=? AND account=? AND mode=? AND request_id=?', (payment_id, url, *key))
+            if old['payment_id'] is None:
+                self._event(db, old['run_id'], 'economy.checkout_created', {'provider': provider, 'account': account, 'request_id': request_id, 'payment_id': payment_id})
             return self._checkout(db, *key)
 
     def reconciliations(self, run_id):

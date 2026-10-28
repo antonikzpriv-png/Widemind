@@ -10,7 +10,7 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 - `balance(run_id)`, `ledger(run_id)`, `reservations(run_id)`, `events(run_id, after=0)`, `payments(run_id)`, `reconciliations(run_id)`: private read projections.
 - `reserve(run_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits)`: atomic admission; store the bounded adapter limits. Reusing an action/key with different parameters conflicts.
 - `start_reservation(reservation_id)`: persist dispatch before an external call; a repeat never authorizes redispatch.
-- `settle(reservation_id, actual_micro_usd, provider, account, external_charge_id, usage=None, outcome='succeeded')`: actual integer cost atomically posts and releases unused reservation; `None` marks unknown and retains the reservation. A failed call with a known charge still posts. Explicit later trusted settlement reconciles unknown. Known overages remain visible even below zero.
+- `settle(reservation_id, actual_micro_usd, provider, account, external_charge_id, usage=None, outcome='succeeded')`: actual integer cost atomically posts and releases unused reservation; `None` marks unknown and retains the reservation. A failed call with a known charge still posts. Explicit later trusted settlement reconciles unknown. Known overages remain visible even below zero. For a verified known subtotal with an unresolved outcome, submit `outcome=unknown` with the subtotal: it posts that charge and retains the unused original cap. Final reconciliation with the same charge ID supplies the total, posts the difference, and releases the remainder. A pure timeout submits `actual_micro_usd=None` and retains the full cap. A subtotal cannot decrease except through final reconciliation.
 - `cancel_reservation(reservation_id)`: only an undispatched reservation can be released without provider reconciliation.
 - `set_hold(run_id, hold_id, amount_micro_usd, kind, reason, idempotency_key)`: audited customer/refund exposure, may exceed balance.
 - `record_funding(run_id, amount_micro_usd, category, reference, idempotency_key)`: operator-only owner funding/test funding; test funds prohibited in live runs.
@@ -26,7 +26,7 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 
 ```
 provider: str; account: str; mode: 'test'|'live'; payment_id: str;
-run_id: str; job_id: str | null; status: str;
+run_id: str; job_id: str | null; status: str; expected_revision: int;
 transactions: list[{
   transaction_id: str,
   kind: 'receipt'|'refund'|'chargeback'|'chargeback_reversal'|'adjustment',
@@ -37,7 +37,9 @@ transactions: list[{
 pending_liability_micro_usd: int (default 0)
 ```
 
-Each balance transaction is immutable and idempotent by provider/account/mode/transaction ID, independently of webhook-event IDs. `net = amount - fee`: ledger posts gross once and fee once. Only settled positive receipts credit cash. Negative liabilities post immediately even if the processor marks them pending. Positive chargeback reversals require settled verification. Snapshots come from fresh authenticated provider reads, never webhook arrival order, model claims or metadata alone. Refund/chargeback events received before the receipt preserve the debit, and later receipt posting cannot erase it.
+Read `payment(...).revision` before fetching provider state and supply it as `expected_revision`. A concurrent change raises `stale_snapshot`; fetch current provider state again, with bounded retries. This also fences fulfillment/hold changes against stale snapshots across processes.
+
+Each balance transaction is immutable and idempotent by provider/account/mode/transaction ID, independently of webhook-event IDs. `net = amount - fee`: ledger posts gross once and fee once. Gross and fee components post independently once each. Every negative component is an immediate liability, including known fees on a pending receipt. Positive receipt, chargeback reversal, adjustment and fee-rebate components require verified availability. A pending refund with a fee rebate therefore debits gross immediately and credits the rebate only on settlement. Original provider observations are preserved; changing availability/timestamps does not change immutable monetary amounts. Reconciliation records append subsequent native observations. Snapshots come from fresh authenticated provider reads, never webhook arrival order, model claims or metadata alone. Refund/chargeback events received before the receipt preserve the debit, and later receipt posting cannot erase it.
 
 Webhook event IDs deduplicate per provider/account/mode. Same ID with a different digest conflicts. Unknown payment mapping fails closed for retry/reconciliation. Complete authoritative snapshots reconcile payment/hold projections. Positive receipt net automatically receives a customer hold; an operator fulfillment decision releases it via `release_payment_hold(provider, account, mode, payment_id, idempotency_key)`. Later refunds/disputes still post and may make the wallet negative. Pending exposure remains held. No money is granted by earned revenue, pending invoices, payment-link creation or checkout-completed events.
 
@@ -47,7 +49,7 @@ Webhook event IDs deduplicate per provider/account/mode. Same ID with a differen
 
 `EconomyError(code, message, status=409)`; attributes `code`, `status`. Unknown IDs use 404; invalid integer/identity input uses 422; insufficient funds uses 409.
 
-Every mutation appends an event in the same SQLite transaction: `{sequence, event_id, version: 1, type, run_id, occurred_at, data}`. `sequence` supports cursor polling without paid inference. Private projections omit provider secrets and raw webhook bodies. Public publication is a future separate allowlist projection.
+Every new mutation appends an event in the same SQLite transaction: `{sequence, event_id, version: 1, type, run_id, occurred_at, data}`. `sequence` supports cursor polling without paid inference. Idempotent replays return the original result without repeating financial mutations. Balances also expose noncash `metrics.earned_revenue_micro_usd` and `metrics.infrastructure_subsidy_micro_usd`. Agent reads are limited to its configured run; operator/gateway reads are trusted. Private projections omit provider secrets and raw webhook bodies. Public publication is a future separate allowlist projection.
 
 ## Authorization boundary
 

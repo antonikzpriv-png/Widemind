@@ -6,7 +6,7 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below are a proposed implementation contract. No ledger or payment integration exists yet.
+The economy module now implements the ledger, reservations, settlement, holds and a Stripe adapter. See [the implemented v1 interface](ECONOMY_CONTRACT.md) and [setup/verification requirements](ECONOMY_SETUP.md). Provider-fixture tests are local verification, not real payments; account setup and an actual sandbox receipt remain unverified. The financial invariants below remain the governing requirements.
 
 ## Units
 
