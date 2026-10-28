@@ -2,7 +2,7 @@
 
 ## Current status
 
-The repository contains the product foundation. It does not yet provide a working agent, Gmail connection, payment integration, or deployed website.
+The repository contains the product foundation and an implemented economy/payment service. Its ledger, reservations, holds, settlement and Stripe adapter are locally verified using synthetic provider fixtures. Real Stripe sandbox verification, the autonomous runtime, Gmail and deployed website remain pending; see [economy setup](ECONOMY_SETUP.md).
 
 All milestones below are unchecked. Mark work complete only after demonstrating its acceptance criteria.
 

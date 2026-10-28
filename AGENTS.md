@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The foundation currently contains documentation only. Do not invent existing scripts, passing tests, deployment URLs, integrations, or completed milestones.
+The economy module is implemented with Python 3.12+, FastAPI, HTTPX and SQLite, including a Stripe adapter. The worker, website and other tool integrations remain planned. Read docs/ECONOMY_CONTRACT.md and docs/ECONOMY_SETUP.md before integrating billable execution. Do not invent live payment verification, deployments, integrations or completed milestones.
 
 ## Working approach
 
@@ -57,7 +57,7 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-There are no established build or test commands yet. When scaffolding the application, add real commands and document how to run them.
+Install the economy dependencies with `python -m pip install -r requirements.lock -e .` and run `python -m pytest -q`. Provider fixtures are explicitly synthetic, not live/sandbox payments. Build an installable wheel with `python -m pip wheel --no-deps .`. Record actual commands and results for changes.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.
