@@ -96,6 +96,9 @@ class StripePayments:
             raise EconomyError("invalid_provider_record", "Stripe returned invalid JSON", 502) from None
         if not isinstance(result, dict):
             raise EconomyError("invalid_provider_record", "Stripe returned an unexpected response", 502)
+        requested_id = path.rsplit("/", 1)[-1]
+        if method == "GET" and requested_id.startswith(("cs_", "pi_", "ch_", "re_", "dp_", "txn_")) and result.get("id") != requested_id:
+            raise EconomyError("invalid_provider_record", "Stripe response identity differs from the requested object", 502)
         return result
 
     def verify_setup(self) -> dict:
@@ -201,7 +204,7 @@ class StripePayments:
         elif event_type.startswith("charge.dispute."):
             dispute = self._request("GET", f"/disputes/{_identifier(obj.get('id'), 'dp_')}")
             payment_id = self._session_for_charge(_identifier(_id(dispute.get("charge")), "ch_"))
-        elif event_type.startswith("refund."):
+        elif event_type.startswith("refund.") or event_type == "charge.refund.updated":
             refund = self._request("GET", f"/refunds/{_identifier(obj.get('id'), 're_')}")
             payment_id = self._session_for_charge(_identifier(_id(refund.get("charge")), "ch_"))
         elif event_type.startswith("charge."):
@@ -258,11 +261,14 @@ class StripePayments:
             raise EconomyError("unmapped_payment", "Stripe payment does not have exactly one registered WideMind checkout", 404 if not matches else 409)
         return matches[0]
 
-    def _transaction(self, value, kind: str) -> dict | None:
+    def _transaction(self, value, kind: str, *, sources: set[str] | None = None) -> dict | None:
         if not value:
             return None
         transaction = value if isinstance(value, dict) else self._request("GET", f"/balance_transactions/{_identifier(value, 'txn_')}")
         _identifier(transaction.get("id"), "txn_")
+        source_id = _id(transaction.get("source"))
+        if source_id is not None and (not isinstance(source_id, str) or (sources is not None and source_id not in sources)):
+            raise EconomyError("invalid_provider_record", "Stripe balance transaction belongs to a different source", 502)
         if transaction.get("currency") != "usd":
             raise EconomyError("unsupported_currency", "Only verified USD Stripe settlement is supported; no implicit FX credit was posted", 409)
         amount = _integer(transaction.get("amount"), "balance amount")
@@ -270,11 +276,15 @@ class StripePayments:
         net = _integer(transaction.get("net"), "balance net")
         if amount - fee != net or transaction.get("status") not in {"pending", "available"}:
             raise EconomyError("invalid_provider_record", "Stripe gross, fee, net or settlement status is inconsistent", 502)
-        return {"transaction_id": transaction["id"], "kind": kind,
+        result = {"transaction_id": transaction["id"], "kind": kind,
                 "amount_micro_usd": amount * MICRO_PER_CENT, "fee_micro_usd": fee * MICRO_PER_CENT,
                 "net_micro_usd": net * MICRO_PER_CENT, "currency": "USD",
                 "settled": transaction["status"] == "available",
                 "native": {key: transaction.get(key) for key in ("id", "type", "source", "currency", "amount", "fee", "net", "status", "available_on", "created", "exchange_rate", "fee_details")}}
+        # A source may be expanded to a full Charge with private billing data.
+        # Retain only its stable identifier in accounting supporting records.
+        result["native"]["source"] = source_id
+        return result
 
     def reconcile(self, payment_id: str, *, event_id=None, event_digest=None) -> dict:
         payment_id = _identifier(payment_id, "cs_")
@@ -283,74 +293,123 @@ class StripePayments:
             binding = self.service.payment("stripe", self.account, self.mode, payment_id)
             session = self._request("GET", f"/checkout/sessions/{payment_id}")
             self._assert_mode(session)
-            if session.get("id") != payment_id or session.get("mode") != "payment":
-                raise EconomyError("invalid_provider_record", "Stripe checkout identity or mode mismatch", 502)
+            if session.get("mode") != "payment":
+                raise EconomyError("invalid_provider_record", "Stripe checkout mode mismatch", 502)
             transactions, pending_liability = [], 0
-            status = "pending"
+            status = "failed" if session.get("status") == "expired" else "pending"
             intent_id = _id(session.get("payment_intent"))
             if intent_id:
-                intent = self._request("GET", f"/payment_intents/{_identifier(intent_id, 'pi_')}")
+                intent_id = _identifier(intent_id, "pi_")
+                intent = self._request("GET", f"/payment_intents/{intent_id}")
                 self._assert_mode(intent)
-                charge_id = _id(intent.get("latest_charge"))
-                if charge_id:
-                    charge_id = _identifier(charge_id, "ch_")
+                if intent.get("status") in {"canceled", "requires_payment_method"}:
+                    status = "failed"
+                latest = _id(intent.get("latest_charge"))
+                charges = self._list("/charges", {"payment_intent": intent_id})
+                charge_ids = [_identifier(charge.get("id"), "ch_") for charge in charges]
+                if latest and latest not in charge_ids:
+                    raise EconomyError("incomplete_provider_snapshot", "Stripe latest charge is absent from the complete charge history", 502)
+                captured_total, refunded_total, disputed = 0, 0, False
+                latest_failed = False
+                for charge_id in charge_ids:
                     charge = self._request("GET", f"/charges/{charge_id}")
                     self._assert_mode(charge)
                     if _id(charge.get("payment_intent")) != intent_id:
                         raise EconomyError("invalid_provider_record", "Stripe charge is not owned by the checkout's payment intent", 502)
-                    receipt = self._transaction(charge.get("balance_transaction"), "receipt")
+                    amount = _integer(charge.get("amount"), "charge amount")
+                    captured = _integer(charge.get("amount_captured"), "captured amount")
+                    if amount <= 0 or captured < 0 or captured > amount or type(charge.get("paid")) is not bool or type(charge.get("captured")) is not bool:
+                        raise EconomyError("invalid_provider_record", "Stripe charge amount or capture state is invalid", 502)
+                    if charge.get("currency") != "usd" or session.get("currency") != "usd":
+                        raise EconomyError("unsupported_currency", "Only USD checkout and charge records are supported", 409)
+                    if _integer(session.get("amount_total"), "checkout total") != amount:
+                        raise EconomyError("invalid_provider_record", "Stripe checkout total differs from its charge", 502)
+                    receipt = self._transaction(charge.get("balance_transaction"), "receipt", sources={charge_id})
+                    failure = self._transaction(charge.get("failure_balance_transaction"), "adjustment", sources={charge_id})
                     if receipt:
-                        if receipt["amount_micro_usd"] <= 0:
-                            raise EconomyError("invalid_provider_record", "Stripe receipt amount must be positive", 502)
+                        gross = receipt["amount_micro_usd"]
+                        if gross <= 0 or (charge["captured"] and gross != captured * MICRO_PER_CENT):
+                            raise EconomyError("invalid_provider_record", "Stripe receipt differs from the captured charge", 502)
+                        # Authorization alone is not receipt. A failure reversal
+                        # means both historical balance movements must be kept,
+                        # including a receipt that settled before later failure.
+                        if not failure and not (charge["paid"] and charge["captured"]):
+                            receipt["settled"] = False
+                        receipt["native"].update(charge_id=charge_id, payment_intent=intent_id,
+                            charge_currency=charge["currency"], charge_amount=amount, amount_captured=captured,
+                            paid=charge["paid"], captured=charge["captured"])
                         transactions.append(receipt)
-                        status = "settled" if receipt["settled"] else "pending"
+                        if receipt["settled"]:
+                            captured_total += gross
+                            status = "settled"
+                    if failure:
+                        transactions.append(failure)
+                        captured_total += failure["amount_micro_usd"] if failure["settled"] or failure["amount_micro_usd"] < 0 else 0
+                        latest_failed |= charge_id == latest
                     refunds = self._list("/refunds", {"charge": charge_id})
-                    refunded_amount = 0
                     for refund in refunds:
                         self._assert_mode(refund, required=False)
+                        refund_id = _identifier(refund.get("id"), "re_")
                         if _id(refund.get("charge")) != charge_id:
                             raise EconomyError("invalid_provider_record", "Stripe refund belongs to another charge", 502)
-                        amount = _integer(refund.get("amount"), "refund amount") * MICRO_PER_CENT
-                        if amount < 0:
-                            raise EconomyError("invalid_provider_record", "Stripe refund amount is negative", 502)
-                        debit = self._transaction(refund.get("balance_transaction"), "refund")
-                        reversal = self._transaction(refund.get("failure_balance_transaction"), "adjustment")
+                        refund_amount = _integer(refund.get("amount"), "refund amount") * MICRO_PER_CENT
+                        refund_status = refund.get("status")
+                        if refund_amount < 0 or refund_status not in {"pending", "requires_action", "succeeded", "failed", "canceled"}:
+                            raise EconomyError("invalid_provider_record", "Stripe refund amount or status is invalid", 502)
+                        debit = self._transaction(refund.get("balance_transaction"), "refund", sources={refund_id})
+                        reversal = self._transaction(refund.get("failure_balance_transaction"), "adjustment", sources={refund_id})
+                        principal_posted = 0
                         if debit:
                             if debit["amount_micro_usd"] > 0:
                                 raise EconomyError("invalid_provider_record", "Stripe refund debit has a positive amount", 502)
+                            principal_posted = -debit["amount_micro_usd"]
                             transactions.append(debit)
                         if reversal:
                             transactions.append(reversal)
-                        if refund.get("status") in {"pending", "requires_action"} and not debit:
-                            pending_liability += amount
-                        if refund.get("status") == "succeeded":
-                            refunded_amount += amount
-                    if refunded_amount:
-                        status = "refunded" if refunded_amount >= _integer(charge.get("amount"), "charge amount") * MICRO_PER_CENT else "partially_refunded"
-                    disputes = self._list("/disputes", {"charge": charge_id})
-                    for dispute in disputes:
+                        # A succeeded refund is a known obligation even if its
+                        # balance transaction has not appeared yet. Fee-only or
+                        # partial debits cannot release the principal exposure.
+                        if refund_status in {"pending", "requires_action", "succeeded"}:
+                            pending_liability += max(0, refund_amount-principal_posted)
+                        if refund_status == "succeeded":
+                            refunded_total += refund_amount
+                    for dispute in self._list("/disputes", {"charge": charge_id}):
                         self._assert_mode(dispute, required=False)
+                        dispute_id = _identifier(dispute.get("id"), "dp_")
                         if _id(dispute.get("charge")) != charge_id:
                             raise EconomyError("invalid_provider_record", "Stripe dispute belongs to another charge", 502)
                         dispute_transactions = dispute.get("balance_transactions")
                         if not isinstance(dispute_transactions, list):
                             raise EconomyError("invalid_provider_record", "Stripe dispute balance transactions are unavailable", 502)
-                        known_debit = False
+                        principal_posted = 0
                         for value in dispute_transactions:
-                            tx = self._transaction(value, "chargeback")
+                            # Stripe versions/payment rails may identify the
+                            # dispute or its original charge as the source.
+                            tx = self._transaction(value, "chargeback", sources={dispute_id, charge_id})
                             if tx is not None:
-                                if tx["amount_micro_usd"] > 0:
+                                gross = tx["amount_micro_usd"]
+                                if gross > 0:
                                     tx["kind"] = "chargeback_reversal"
-                                known_debit |= tx["net_micro_usd"] < 0
+                                if gross < 0 or tx["settled"]:
+                                    principal_posted -= gross
                                 transactions.append(tx)
                         dispute_status = dispute.get("status")
+                        if dispute_status not in {"won", "warning_closed", "lost", "needs_response", "under_review", "warning_needs_response", "warning_under_review"}:
+                            raise EconomyError("invalid_provider_record", "Stripe dispute status is unrecognized", 502)
                         if dispute_status not in {"won", "warning_closed"}:
-                            status = "disputed"
-                            if not known_debit:
-                                exposure = _integer(dispute.get("amount"), "dispute amount") * MICRO_PER_CENT
-                                if exposure < 0:
-                                    raise EconomyError("invalid_provider_record", "Stripe dispute amount is negative", 502)
-                                pending_liability += exposure
+                            disputed = True
+                            exposure = _integer(dispute.get("amount"), "dispute amount") * MICRO_PER_CENT
+                            if exposure < 0:
+                                raise EconomyError("invalid_provider_record", "Stripe dispute amount is negative", 502)
+                            pending_liability += max(0, exposure-max(0, principal_posted))
+                if captured_total > 0:
+                    status = "settled"
+                elif latest_failed or intent.get("status") in {"canceled", "requires_payment_method"}:
+                    status = "failed"
+                if refunded_total:
+                    status = "refunded" if refunded_total >= captured_total else "partially_refunded"
+                if disputed:
+                    status = "disputed"
             snapshot = {"provider": "stripe", "account": self.account, "mode": self.mode,
                         "payment_id": payment_id, "run_id": binding["run_id"], "job_id": binding.get("job_id"),
                         "expected_revision": binding["revision"], "status": status,

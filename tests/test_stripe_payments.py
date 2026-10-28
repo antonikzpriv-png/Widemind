@@ -25,16 +25,16 @@ class StripeFixture:
         self.refunds, self.disputes = [], []
         self.records = {
             "/account": {"id": ACCOUNT, "charges_enabled": True, "details_submitted": True},
-            "/checkout/sessions/cs_fixture": {"id": "cs_fixture", "mode": "payment", "livemode": False, "payment_intent": "pi_fixture"},
+            "/checkout/sessions/cs_fixture": {"id": "cs_fixture", "mode": "payment", "livemode": False, "payment_intent": "pi_fixture", "currency": "usd", "amount_total": 1000},
             "/payment_intents/pi_fixture": {"id": "pi_fixture", "livemode": False, "latest_charge": "ch_fixture"},
-            "/charges/ch_fixture": {"id": "ch_fixture", "livemode": False, "payment_intent": "pi_fixture", "amount": 1000, "balance_transaction": "txn_receipt"},
+            "/charges/ch_fixture": {"id": "ch_fixture", "livemode": False, "payment_intent": "pi_fixture", "amount": 1000, "amount_captured": 1000, "paid": True, "captured": True, "currency": "usd", "balance_transaction": "txn_receipt"},
             "/balance_transactions/txn_receipt": self.tx("txn_receipt", 1000, 59),
         }
 
     @staticmethod
     def tx(identifier, amount, fee=0, status="available"):
         return {"id": identifier, "amount": amount, "fee": fee, "net": amount-fee,
-                "currency": "usd", "status": status, "type": "charge", "source": "ch_fixture",
+                "currency": "usd", "status": status, "type": "charge", "source": "ch_fixture" if identifier == "txn_receipt" else None,
                 "created": 1_700_000_000, "available_on": 1_700_000_100, "fee_details": [], "exchange_rate": None}
 
     def __call__(self, request):
@@ -55,6 +55,8 @@ class StripeFixture:
                 self.fail_once = False
                 raise httpx.ReadTimeout("fixture response lost", request=request)
             return httpx.Response(200, json={"id": "cs_created", "livemode": False, "url": "https://checkout.stripe.com/c/pay/fixture"})
+        if path == "/charges":
+            return httpx.Response(200, json={"data": [record for key,record in self.records.items() if key.startswith("/charges/") and record.get("payment_intent") == request.url.params["payment_intent"]], "has_more": False})
         if path == "/refunds":
             return httpx.Response(200, json={"data": self.refunds, "has_more": False})
         if path == "/disputes":
@@ -346,3 +348,91 @@ def test_signed_malformed_type_is_validation_error(invalid_type, setup):
         adapter.handle_webhook(*signed(bad))
     assert exc.value.code == "invalid_webhook"
     assert not stripe.calls
+
+
+def test_succeeded_refund_without_balance_record_reserves_full_principal(setup):
+    service, stripe, adapter = setup
+    adapter.reconcile("cs_fixture")
+    service.release_payment_hold("stripe", ACCOUNT, "test", "cs_fixture", "fulfilled")
+    stripe.refunds = [{"id": "re_fixture", "charge": "ch_fixture", "amount": 100,
+                       "status": "succeeded", "balance_transaction": None}]
+    adapter.reconcile("cs_fixture")
+    assert service.balance("run")["held_micro_usd"] == 1_000_000
+
+
+@pytest.mark.parametrize("kind", ["refund", "dispute"])
+def test_fee_only_balance_record_does_not_erase_principal_exposure(kind, setup):
+    service, stripe, adapter = setup
+    adapter.reconcile("cs_fixture")
+    service.release_payment_hold("stripe", ACCOUNT, "test", "cs_fixture", "fulfilled")
+    if kind == "refund":
+        stripe.refunds = [{"id": "re_fixture", "charge": "ch_fixture", "amount": 100,
+                           "status": "succeeded", "balance_transaction": "txn_fee"}]
+        stripe.records["/balance_transactions/txn_fee"] = stripe.tx("txn_fee", 0, 15)
+    else:
+        stripe.disputes = [{"id": "dp_fixture", "livemode": False, "charge": "ch_fixture", "amount": 100,
+                            "status": "needs_response", "balance_transactions": [stripe.tx("txn_fee", 0, 15)]}]
+    adapter.reconcile("cs_fixture")
+    assert service.balance("run")["held_micro_usd"] == 1_000_000
+    assert service.balance("run")["posted_micro_usd"] == 14_260_000
+
+
+@pytest.mark.parametrize("mutate", ["intent_id", "charge_id", "bt_id", "source", "session_total", "currency", "captured_amount"])
+def test_cross_record_identity_or_amount_mismatch_fails_closed(mutate, setup):
+    service, stripe, adapter = setup
+    if mutate == "intent_id":
+        stripe.records["/payment_intents/pi_fixture"]["id"] = "pi_other"
+    elif mutate == "charge_id":
+        stripe.records["/charges/ch_fixture"]["id"] = "ch_other"
+    elif mutate == "bt_id":
+        stripe.records["/balance_transactions/txn_receipt"]["id"] = "txn_other"
+    elif mutate == "source":
+        stripe.records["/balance_transactions/txn_receipt"]["source"] = "ch_other"
+    elif mutate == "session_total":
+        stripe.records["/checkout/sessions/cs_fixture"]["amount_total"] = 999
+    elif mutate == "currency":
+        stripe.records["/charges/ch_fixture"]["currency"] = "eur"
+    else:
+        stripe.records["/charges/ch_fixture"]["amount_captured"] = 500
+    with pytest.raises(EconomyError):
+        adapter.reconcile("cs_fixture")
+    assert service.balance("run")["posted_micro_usd"] == 5_000_000
+
+
+def test_authorization_without_capture_does_not_create_cash(setup):
+    service, stripe, adapter = setup
+    stripe.records["/charges/ch_fixture"].update(captured=False, amount_captured=0)
+    adapter.reconcile("cs_fixture")
+    assert service.balance("run")["posted_micro_usd"] == 4_410_000
+    assert service.payment("stripe", ACCOUNT, "test", "cs_fixture")["status"] == "pending"
+
+
+def test_prior_failed_charge_and_its_reversal_are_reconciled_not_only_latest(setup):
+    service, stripe, adapter = setup
+    prior = dict(stripe.records["/charges/ch_fixture"])
+    prior.update(id="ch_prior", paid=False, captured=False, amount_captured=0,
+                 balance_transaction="txn_prior", failure_balance_transaction="txn_failure")
+    stripe.records["/charges/ch_prior"] = prior
+    stripe.records["/balance_transactions/txn_prior"] = stripe.tx("txn_prior", 1000, 59)
+    stripe.records["/balance_transactions/txn_prior"]["source"] = "ch_prior"
+    stripe.records["/balance_transactions/txn_failure"] = stripe.tx("txn_failure", -1000, -59)
+    stripe.records["/balance_transactions/txn_failure"]["source"] = "ch_prior"
+    adapter.reconcile("cs_fixture")
+    assert service.balance("run")["posted_micro_usd"] == 14_410_000
+    refs = [row["reference"] for row in service.ledger("run")]
+    assert "txn_prior" in refs and "txn_failure" in refs
+    assert service.payment("stripe", ACCOUNT, "test", "cs_fixture")["status"] == "settled"
+
+
+def test_expanded_source_private_customer_fields_are_not_persisted(setup):
+    service, stripe, adapter = setup
+    stripe.records["/balance_transactions/txn_receipt"]["source"] = {"id": "ch_fixture", "billing_details": {"email": "private@example.invalid"}}
+    adapter.reconcile("cs_fixture")
+    assert "private@example.invalid" not in json.dumps(service.ledger("run"))
+
+
+def test_legacy_charge_refund_updated_event_maps_refund_object(setup):
+    service, stripe, adapter = setup
+    stripe.records["/refunds/re_fixture"] = {"id": "re_fixture", "charge": "ch_fixture"}
+    adapter.handle_webhook(*signed(event("charge.refund.updated", "re_fixture")))
+    assert service.balance("run")["posted_micro_usd"] == 14_410_000
