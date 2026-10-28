@@ -147,14 +147,18 @@ class EconomyService:
     def _balance(self, db, run_id):
         run = self._run(db, run_id)
         totals = {}
-        for row in db.execute('SELECT category,amount_micro_usd FROM ledger WHERE run_id=?', (run_id,)):
+        metrics = {'earned_revenue_micro_usd': 0, 'infrastructure_subsidy_micro_usd': 0}
+        for row in db.execute('SELECT category,amount_micro_usd,metadata FROM ledger WHERE run_id=?', (run_id,)):
             totals[row['category']] = totals.get(row['category'], 0) + row['amount_micro_usd']
+            metric = row['category'] + '_micro_usd'
+            if metric in metrics:
+                metrics[metric] += json.loads(row['metadata'])['reported_micro_usd']
         posted = sum(totals.values())
         reserved = sum(max(0, r[0]-r[1]) for r in db.execute("SELECT amount_micro_usd,provisional_micro_usd FROM reservations WHERE run_id=? AND state IN ('reserved','running','unknown')", (run_id,)))
         held = sum(r[0] for r in db.execute('SELECT amount_micro_usd FROM holds WHERE run_id=?', (run_id,)))
         available = posted - reserved - held
         return dict(run_id=run_id, mode=run['mode'], posted_micro_usd=posted, reserved_micro_usd=reserved,
-                    held_micro_usd=held, available_micro_usd=available, exhausted=available <= 0, totals=totals)
+                    held_micro_usd=held, available_micro_usd=available, exhausted=available <= 0, totals=totals, metrics=metrics)
 
     def balance(self, run_id):
         with self._read() as db:
@@ -238,6 +242,8 @@ class EconomyService:
             row = self._reservation(db, reservation_id)
             if row['state'] != 'reserved':
                 raise EconomyError('duplicate_dispatch', 'Action already dispatched or closed; reconcile before retry')
+            if self._balance(db, row['run_id'])['available_micro_usd'] < 0:
+                raise EconomyError('insufficient_funds', 'New liability invalidated this authorization; reconcile or cancel before dispatch')
             db.execute("UPDATE reservations SET state='running',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
             self._event(db, row['run_id'], 'economy.dispatched', {'reservation_id': reservation_id})
             return self._reservation(db, reservation_id)
@@ -411,9 +417,15 @@ class EconomyService:
     def _payment_hold_id(provider, account, mode, payment_id):
         return 'payment:' + fingerprint([provider, account, mode, payment_id])
 
+    def _payment_posted_net(self, db, key):
+        return sum(r[0] for r in db.execute(
+            'SELECT c.amount_micro_usd FROM payment_components c JOIN payment_transactions t '
+            'ON c.provider=t.provider AND c.account=t.account AND c.mode=t.mode AND c.transaction_id=t.transaction_id '
+            'WHERE t.provider=? AND t.account=? AND t.mode=? AND t.payment_id=?', key))
+
     def _refresh_payment_hold(self, db, payment, pending=None):
         key = (payment['provider'], payment['account'], payment['mode'], payment['payment_id'])
-        net = sum(r[0] for r in db.execute('SELECT net_micro_usd FROM payment_transactions WHERE provider=? AND account=? AND mode=? AND payment_id=?', key))
+        net = self._payment_posted_net(db, key)
         amount = max(0, net - payment['released_micro_usd'], payment['pending_liability_micro_usd'] if pending is None else pending)
         self._hold(db, payment['run_id'], self._payment_hold_id(*key), amount, 'customer', 'Unfulfilled customer funds or pending refund/dispute exposure')
 
@@ -450,6 +462,7 @@ class EconomyService:
                 raise EconomyError('stale_snapshot', 'Payment changed during provider read; fetch again')
             seen = set()
             posted = []
+            observations = []
             for tx in transactions:
                 if not isinstance(tx, dict):
                     raise EconomyError('invalid_snapshot', 'Invalid transaction', 422)
@@ -465,29 +478,35 @@ class EconomyService:
                     raise EconomyError('invalid_snapshot', 'Inconsistent provider gross/fee/net', 422)
                 native = encode(tx.get('native', {}))
                 old = db.execute('SELECT * FROM payment_transactions WHERE provider=? AND account=? AND mode=? AND transaction_id=?', (*key[:3], tid)).fetchone()
-                expected = (key[3], payment['run_id'], kind, gross, fee, net, native)
+                expected = (key[3], payment['run_id'], kind, gross, fee, net)
                 if old:
-                    actual = tuple(old[k] for k in ('payment_id', 'run_id', 'kind', 'amount_micro_usd', 'fee_micro_usd', 'net_micro_usd', 'native'))
+                    actual = tuple(old[k] for k in ('payment_id', 'run_id', 'kind', 'amount_micro_usd', 'fee_micro_usd', 'net_micro_usd'))
                     if actual != expected:
                         raise EconomyError('transaction_conflict', 'Immutable provider transaction changed; append a correction')
-                    continue
-                # Pending invoices and positive pending processor balances are never cash.
-                if not tx['settled'] and (gross > 0 or net > 0 or fee < 0):
-                    continue
-                db.execute('INSERT INTO payment_transactions VALUES(?,?,?,?,?,?,?,?,?,?,?)', (*key[:3], tid, *expected))
+                else:
+                    db.execute('INSERT INTO payment_transactions VALUES(?,?,?,?,?,?,?,?,?,?,?)', (*key[:3], tid, *expected, native))
+                observations.append({'transaction_id': tid, 'settled': tx['settled'], 'native': tx.get('native', {})})
                 ledger_kind = {'receipt': 'customer_receipt', 'refund': 'refund', 'chargeback': 'chargeback', 'chargeback_reversal': 'chargeback_reversal', 'adjustment': 'payment_adjustment'}[kind]
                 meta = {'provider': key[0], 'account': key[1], 'mode': key[2], 'payment_id': key[3], 'transaction_id': tid,
                         'job_id': payment['job_id'], 'gross_micro_usd': gross, 'fee_micro_usd': fee, 'net_micro_usd': net, 'native': tx.get('native', {})}
-                self._entry(db, payment['run_id'], ledger_kind, gross, tid, meta)
-                if fee:
-                    self._entry(db, payment['run_id'], 'processor_fee', -fee, tid, meta)
-                posted.append(tid)
+                # Admit liabilities immediately, but each positive component must be available.
+                # A pending refund with a fee rebate debits gross now; rebate posts only on settlement.
+                for component, amount, entry_kind in (('gross', gross, ledger_kind), ('fee', -fee, 'processor_fee')):
+                    if amount == 0 or (amount > 0 and not tx['settled']):
+                        continue
+                    exists = db.execute('SELECT 1 FROM payment_components WHERE provider=? AND account=? AND mode=? AND transaction_id=? AND component=?', (*key[:3], tid, component)).fetchone()
+                    if exists:
+                        continue
+                    entry_id = self._entry(db, payment['run_id'], entry_kind, amount, tid, meta)
+                    db.execute('INSERT INTO payment_components VALUES(?,?,?,?,?,?,?)', (*key[:3], tid, component, entry_id, amount))
+                    if tid not in posted:
+                        posted.append(tid)
             db.execute('UPDATE payments SET status=?,pending_liability_micro_usd=?,revision=revision+1 WHERE provider=? AND account=? AND mode=? AND payment_id=?', (status, pending, *key))
             payment = self._payment(db, *key)
             self._refresh_payment_hold(db, payment, pending)
             if event_id is not None:
                 db.execute('INSERT INTO payment_events VALUES(?,?,?,?,?,?)', (*key[:3], event_id, event_digest, key[3]))
-            summary = {'posted_transaction_ids': posted, 'status': status, 'event_id': event_id, 'pending_liability_micro_usd': pending}
+            summary = {'posted_transaction_ids': posted, 'status': status, 'event_id': event_id, 'pending_liability_micro_usd': pending, 'observations': observations}
             rid = str(uuid.uuid4())
             db.execute('INSERT INTO reconciliations VALUES(?,?,?,?,?,?,?,?)', (rid, payment['run_id'], key[0], key[1], key[3], payment['revision'], now(), encode(summary)))
             self._event(db, payment['run_id'], 'economy.payment_reconciled', {'reconciliation_id': rid, 'payment_id': key[3], **summary})
@@ -498,7 +517,7 @@ class EconomyService:
             payment = self._payment(db, provider, account, mode, payment_id)
             key = (provider, account, mode, payment_id)
             def action():
-                net = sum(r[0] for r in db.execute('SELECT net_micro_usd FROM payment_transactions WHERE provider=? AND account=? AND mode=? AND payment_id=?', key))
+                net = self._payment_posted_net(db, key)
                 released = max(payment['released_micro_usd'], net, 0)
                 db.execute('UPDATE payments SET released_micro_usd=?,revision=revision+1 WHERE provider=? AND account=? AND mode=? AND payment_id=?', (released, *key))
                 # A fulfillment decision cannot release a currently disputed exposure.

@@ -81,3 +81,12 @@ CREATE TRIGGER IF NOT EXISTS payment_events_no_update BEFORE UPDATE ON payment_e
 CREATE TRIGGER IF NOT EXISTS payment_events_no_delete BEFORE DELETE ON payment_events BEGIN SELECT RAISE(ABORT,'append-only payment events'); END;
 CREATE TRIGGER IF NOT EXISTS reconciliations_no_update BEFORE UPDATE ON reconciliations BEGIN SELECT RAISE(ABORT,'append-only reconciliations'); END;
 CREATE TRIGGER IF NOT EXISTS reconciliations_no_delete BEFORE DELETE ON reconciliations BEGIN SELECT RAISE(ABORT,'append-only reconciliations'); END;
+
+CREATE TABLE IF NOT EXISTS payment_components (
+ provider TEXT NOT NULL, account TEXT NOT NULL, mode TEXT NOT NULL, transaction_id TEXT NOT NULL,
+ component TEXT NOT NULL CHECK(component IN ('gross','fee')), entry_id TEXT NOT NULL REFERENCES ledger(entry_id),
+ amount_micro_usd INTEGER NOT NULL,
+ PRIMARY KEY(provider,account,mode,transaction_id,component)
+);
+CREATE TRIGGER IF NOT EXISTS payment_components_no_update BEFORE UPDATE ON payment_components BEGIN SELECT RAISE(ABORT,'append-only payment components'); END;
+CREATE TRIGGER IF NOT EXISTS payment_components_no_delete BEFORE DELETE ON payment_components BEGIN SELECT RAISE(ABORT,'append-only payment components'); END;
