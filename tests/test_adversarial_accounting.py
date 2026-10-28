@@ -299,7 +299,9 @@ def test_receipt_pending_to_settled_transition_credits_once(service):
     _register(service)
     pending = _transaction("eventually-settled", 2_000_000, fee=50_000, settled=False)
     _apply(service, _snapshot(pending, status="pending"))
-    assert service.balance("run")["posted_micro_usd"] == 5_000_000
+    # A verified processor fee is already a liability; the pending gross is not cash.
+    assert service.balance("run")["posted_micro_usd"] == 4_950_000
+    assert not [entry for entry in service.ledger("run") if entry["kind"] == "customer_receipt"]
     settled = copy.deepcopy(pending)
     settled["settled"] = True
     _apply(service, _snapshot(settled))
@@ -376,6 +378,8 @@ def test_funding_and_revenue_are_independently_visible_without_double_cash(servi
     first = service.balance("run")
     assert first["posted_micro_usd"] == 8_000_000
     assert first["available_micro_usd"] == 8_000_000
+    assert first["metrics"]["earned_revenue_micro_usd"] == 4_000_000
+    assert first["metrics"]["infrastructure_subsidy_micro_usd"] == 3_000_000
     # Replayed operator submissions do not repeat either money or performance metrics.
     service.record_funding("run", 1_000_000, "owner_funding", "owner-wire", "owner-1")
     service.record_funding("run", 2_000_000, "test_funding", "sandbox", "test-1")
@@ -491,7 +495,7 @@ def test_pending_refund_debit_cannot_hide_behind_a_positive_fee_rebate(service):
     assert service.balance("run")["posted_micro_usd"] == 4_030_000
 
 
-@pytest.mark.parametrize("table", ["ledger", "events", "operations", "charges", "payment_transactions", "payment_events", "reconciliations"])
+@pytest.mark.parametrize("table", ["ledger", "events", "operations", "charges", "payment_transactions", "payment_events", "payment_components", "reconciliations"])
 @pytest.mark.parametrize("mutation", ["update", "delete"])
 def test_database_itself_rejects_rewriting_durable_accounting_records(service, tmp_path, table, mutation):
     _register(service)
@@ -521,3 +525,24 @@ def test_newer_schema_is_rejected_without_downgrading_or_mutating_records(servic
     with sqlite3.connect(database) as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 42
     assert service.ledger("run") == before
+
+
+def test_new_liability_invalidates_dispatch_but_preserves_recovery(service):
+    reservation = _reserve(service, "not-yet-dispatched", 5_000_000)
+    assert service.balance("run")["available_micro_usd"] == 0
+    service.set_hold("run", "refund-risk", 1_000_000, "refund", "new claim", "claim")
+    with pytest.raises(EconomyError):
+        service.start_reservation(reservation["reservation_id"])
+    assert service.reservation(reservation["reservation_id"])["state"] == "reserved"
+    service.cancel_reservation(reservation["reservation_id"])
+    assert service.balance("run")["available_micro_usd"] == 4_000_000
+
+
+def test_exactly_funded_reservation_can_dispatch_at_zero_unreserved_credit(service):
+    reservation = _reserve(service, "exact-budget", 5_000_000)
+    assert service.balance("run")["available_micro_usd"] == 0
+    service.start_reservation(reservation["reservation_id"])
+    with pytest.raises(EconomyError):
+        service.start_reservation(reservation["reservation_id"])
+    service.settle(reservation["reservation_id"], 5_000_000, PROVIDER, ACCOUNT, "exact-charge")
+    assert service.balance("run")["available_micro_usd"] == 0
