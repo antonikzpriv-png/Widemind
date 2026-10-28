@@ -6,6 +6,7 @@ outside the model's writable workspace. Agent identity is limited to one run.
 from __future__ import annotations
 
 import hmac
+from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, Query, Request
@@ -124,7 +125,16 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
             account=settings.stripe_account, mode=settings.stripe_mode,
             success_url=settings.checkout_success_url, cancel_url=settings.checkout_cancel_url,
         )
-    app = FastAPI(title="WideMind economy", version="1", docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            if payments is not None:
+                await run_in_threadpool(payments.close)
+
+    app = FastAPI(title="WideMind economy", version="1", docs_url=None, redoc_url=None,
+                  openapi_url=None, lifespan=lifespan)
     app.router.route_class = BoundedRoute
     app.state.economy = economy
     app.state.payments = payments

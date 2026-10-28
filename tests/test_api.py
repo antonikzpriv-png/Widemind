@@ -218,6 +218,10 @@ def test_configuration_environment_has_no_credential_defaults(monkeypatch):
     ("live", "sk_live_fixture", "http://localhost:8080/success", False),
     ("test", "sk_test_fixture", "javascript:alert(1)", False),
     ("test", "sk_test_fixture", "https://user:password@example.com/", False),
+    ("test", "sk_test_fixture", "https://example.com:not-a-port/", False),
+    ("test", "sk_test_fixture", "https://example.com:65536/", False),
+    ("test", "sk_test_fixture", "https://example.com:0/", False),
+    ("test", "sk_test_fixture", "https://example.com/\nheader", False),
 ])
 def test_stripe_configuration_mode_and_redirect_safety(settings, mode, key, url, valid):
     values = dict(stripe_api_key=key, stripe_webhook_secret="whsec_fixture", stripe_account="acct_fixture", stripe_mode=mode, checkout_success_url=url, checkout_cancel_url=url)

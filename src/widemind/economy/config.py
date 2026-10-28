@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -28,7 +29,7 @@ class Settings:
                 raise ValueError("Each economy bearer token must be 32–512 ASCII characters without whitespace")
         if len(set(tokens)) != 3:
             raise ValueError("Operator, gateway and agent tokens must be distinct")
-        if not self.agent_run_id or len(self.agent_run_id) > 200 or not self.agent_run_id.isascii():
+        if not isinstance(self.agent_run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", self.agent_run_id):
             raise ValueError("WIDEMIND_AGENT_RUN_ID must identify the one run authorized to the agent")
         if not self.database_path or self.database_path == ":memory:":
             raise ValueError("Use a persistent economy database path")
@@ -44,17 +45,18 @@ class Settings:
             restricted = "rk_test_" if self.stripe_mode == "test" else "rk_live_"
             if not self.stripe_api_key.startswith((prefix, restricted)):
                 raise ValueError("Stripe API key does not match the configured mode")
-            if not self.stripe_webhook_secret.startswith("whsec_"):
+            if not self.stripe_webhook_secret.startswith("whsec_") or len(self.stripe_webhook_secret) < 12:
                 raise ValueError("Invalid Stripe webhook signing-secret format")
-            if not self.stripe_account.startswith("acct_"):
+            if not re.fullmatch(r"acct_[A-Za-z0-9_]+", self.stripe_account):
                 raise ValueError("Configure the expected Stripe acct_ account ID")
             for address in (self.checkout_success_url, self.checkout_cancel_url):
                 try:
                     url = urlsplit(address)
+                    port = url.port
                 except ValueError as exc:
                     raise ValueError("Invalid checkout redirect URL") from exc
                 local_test = self.stripe_mode == "test" and url.scheme == "http" and url.hostname in {"127.0.0.1", "localhost", "::1"}
-                if (url.scheme != "https" and not local_test) or not url.hostname or url.username or url.password:
+                if (url.scheme != "https" and not local_test) or not url.hostname or url.username or url.password or any(ord(c) < 32 for c in address) or (port is not None and port == 0):
                     raise ValueError("Checkout redirects require HTTPS; loopback HTTP is permitted in test mode")
 
     @property
