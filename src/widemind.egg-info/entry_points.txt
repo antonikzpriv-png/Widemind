@@ -1,0 +1,2 @@
+[console_scripts]
+widemind-economy = widemind.economy.cli:main

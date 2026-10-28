@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+src/widemind/__init__.py
+src/widemind.egg-info/PKG-INFO
+src/widemind.egg-info/SOURCES.txt
+src/widemind.egg-info/dependency_links.txt
+src/widemind.egg-info/entry_points.txt
+src/widemind.egg-info/requires.txt
+src/widemind.egg-info/top_level.txt
+src/widemind/economy/__init__.py
+src/widemind/economy/service.py
+src/widemind/economy/migrations/001_economy.sql
