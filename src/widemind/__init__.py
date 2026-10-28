@@ -1,0 +1,1 @@
+"""WideMind application modules."""
