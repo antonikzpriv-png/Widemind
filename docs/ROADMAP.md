@@ -2,18 +2,18 @@
 
 ## Current status
 
-The repository contains the product foundation. It does not yet provide a working agent, Gmail connection, payment integration, or deployed website.
+The repository now provides the locally runnable foundation, independent worker, SQLite state, authenticated operator controls and explicit zero-cost local demonstration. It does not yet provide live business strategy, funded accounting, Gmail, payments, or a deployed website.
 
-All milestones below are unchecked. Mark work complete only after demonstrating its acceptance criteria.
+Milestone 1 is locally implemented and tested; it is not a live survival pilot. Subsequent milestones remain planned. See [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 
 ## 1. Runnable foundation
 
-- [ ] Select and document the application stack, configuration, migrations, and actual development commands.
-- [ ] Implement a persistent worker and minimal website/API.
-- [ ] Persist runs, actions, results, and errors.
-- [ ] Add explicit active, waiting, paused, exhausted, and failed states.
+- [x] Select and document the application stack, configuration, migrations, and actual development commands.
+- [x] Implement a persistent worker and minimal website/API.
+- [x] Persist runs, actions, results, and errors.
+- [x] Add explicit active, waiting, paused, exhausted, stopped, and failed states.
 
 **Deliverable:** A locally runnable website and worker using a deterministic demonstration task.
 
