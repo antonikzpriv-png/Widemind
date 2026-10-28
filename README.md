@@ -8,7 +8,7 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
-This repository contains the project foundation and implementation plan. The runtime, website, Gmail integration, tools, and payments are **planned, not implemented**.
+The economy service implements an append-only ledger, atomic spending reservations and Stripe Checkout/webhook reconciliation. Its provider tests use explicit fixtures; real account/sandbox setup is required. The autonomous runtime, website, Gmail integration and tools remain planned. See [economy setup](docs/ECONOMY_SETUP.md) and the [versioned contracts](docs/ECONOMY_CONTRACT.md).
 
 Start with [AGENTS.md](AGENTS.md) for developer instructions and [the roadmap](docs/ROADMAP.md) for implementation milestones.
 
@@ -57,7 +57,7 @@ Public activity uses a deliberately selected projection of events. Customer conv
 
 ## Start building
 
-Choose and document a small, maintainable stack, then implement the first runnable milestone. No dependency manifest, build command, or deployment configuration has been established yet.
+The economy module uses Python 3.12+, FastAPI, HTTPX and SQLite. Install with `python -m pip install -e '.[test]'`, validate with `python -m pytest -q`, then follow [economy setup](docs/ECONOMY_SETUP.md) to configure and launch `widemind-economy`. This service is the payment/accounting slice; it does not implement the worker or website.
 
 The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
 
@@ -65,4 +65,4 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-Application stack, hosting, domain/path, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+Hosting, domain/path, model provider, Gmail account, and graphics/publishing providers remain unconfigured. Stripe is the implemented payment adapter, but no live account or credential is bundled. Record these choices during implementation without inventing working credentials or integrations.
