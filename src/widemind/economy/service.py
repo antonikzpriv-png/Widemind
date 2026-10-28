@@ -346,7 +346,7 @@ class EconomyService:
             return self._operation(db, run_id, 'funding', idempotency_key, [amount_micro_usd, category, reference], action)
 
     def _metric(self, run_id, amount, kind, reference, key, job_id=None):
-        money(amount, signed=kind == 'earned_revenue'); ident(reference)
+        money(amount, signed=True); ident(reference)
         if job_id is not None:
             ident(job_id)
         with self._tx() as db:
@@ -368,6 +368,8 @@ class EconomyService:
             original = db.execute('SELECT * FROM ledger WHERE run_id=? AND entry_id=?', (run_id, entry_id)).fetchone()
             if original is None:
                 raise EconomyError('not_found', 'Original entry not found', 404)
+            if original['kind'] in ('earned_revenue', 'infrastructure_subsidy'):
+                raise EconomyError('noncash_correction', 'Correct performance/subsidy metrics with a signed metric entry, not a cash correction', 422)
             def action():
                 eid = self._entry(db, run_id, 'correction', amount_micro_usd, entry_id, {'reason': reason, 'corrects_entry_id': entry_id})
                 self._event(db, run_id, 'economy.corrected', {'entry_id': eid, 'original_entry_id': entry_id, 'amount_micro_usd': amount_micro_usd, 'reason': reason})

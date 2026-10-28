@@ -236,3 +236,21 @@ def test_event_cursor_is_bounded_before_sqlite(client, settings):
     create_run(client, settings)
     for cursor in (-1, 2 ** 100):
         assert client.get("/v1/runs/run-a/events", params={"after": cursor}, headers=headers(settings, "agent")).status_code == 422
+
+
+def test_signed_metric_compensation_never_changes_cash(client, settings):
+    app = client
+    operator = {"Authorization": "Bearer " + settings.operator_token}
+    app.post("/v1/runs", headers=operator, json={"run_id": "run-a"})
+    for endpoint, extra in (("earned-revenue", {"job_id": "job"}), ("subsidies", {})):
+        for key, amount in (("reported", 1_000_000), ("reversal", -1_000_000)):
+            response = app.post(f"/v1/runs/run-a/{endpoint}", headers=operator,
+                                json={"amount_micro_usd": amount, "reference": key, "idempotency_key": endpoint+key, **extra})
+            assert response.status_code == 200, response.text
+        entry_id = response.json()["entry_id"]
+        correction = app.post("/v1/runs/run-a/corrections", headers=operator,
+                              json={"entry_id": entry_id, "amount_micro_usd": -1_000_000, "reason": "wrong metric channel", "idempotency_key": endpoint+"cash"})
+        assert correction.status_code == 422
+    balance = app.get("/v1/runs/run-a/balance", headers=operator).json()
+    assert balance["posted_micro_usd"] == 5_000_000
+    assert balance["metrics"] == {"earned_revenue_micro_usd": 0, "infrastructure_subsidy_micro_usd": 0}

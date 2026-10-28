@@ -70,7 +70,7 @@ class FundingInput(Input):
 
 
 class ReferenceInput(Input):
-    amount_micro_usd: PositiveMoney
+    amount_micro_usd: SignedMoney
     reference: Note
     idempotency_key: Identifier
 

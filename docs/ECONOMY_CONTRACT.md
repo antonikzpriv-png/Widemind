@@ -14,9 +14,9 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 - `cancel_reservation(reservation_id)`: only an undispatched reservation can be released without provider reconciliation.
 - `set_hold(run_id, hold_id, amount_micro_usd, kind, reason, idempotency_key)`: audited customer/refund exposure, may exceed balance.
 - `record_funding(run_id, amount_micro_usd, category, reference, idempotency_key)`: operator-only owner funding/test funding; test funds prohibited in live runs.
-- `record_subsidy(run_id, amount_micro_usd, reference, idempotency_key)`: noncash infrastructure support, does not increase available credit.
-- `record_earned_revenue(run_id, amount_micro_usd, job_id, reference, idempotency_key)`: performance metric, does not increase cash.
-- `correct_entry(run_id, entry_id, amount_micro_usd, reason, idempotency_key)`: operator-only append-only compensating correction.
+- `record_subsidy(run_id, amount_micro_usd, reference, idempotency_key)`: noncash infrastructure support, does not increase available credit. Signed metric entries permit compensating corrections.
+- `record_earned_revenue(run_id, amount_micro_usd, job_id, reference, idempotency_key)`: performance metric, does not increase cash. Signed metric entries permit compensating corrections.
+- `correct_entry(run_id, entry_id, amount_micro_usd, reason, idempotency_key)`: operator-only append-only compensating cash correction; noncash metric originals are rejected and use signed metric corrections instead.
 
 ## Payment adapter boundary
 
