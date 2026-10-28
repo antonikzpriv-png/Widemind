@@ -2,9 +2,11 @@
 
 ## Current status
 
-The repository contains the product foundation. It does not yet provide a working agent, Gmail connection, payment integration, or deployed website.
+The repository contains the product foundation plus a runnable business/fulfillment slice. [BUSINESS.md](BUSINESS.md) documents the Python/SQLite implementation, real local commands, version 1 integration interfaces, and an offline research-brief demonstration. A writing-service test verifies extensibility.
 
-All milestones below are unchecked. Mark work complete only after demonstrating its acceptance criteria.
+Live Gmail, payments, enforced economy, autonomous model/tool execution, production controls, and a deployed website remain unimplemented/unconfigured. The local business scheduler and operator API do not establish completion of those full milestones.
+
+The full milestones below remain unchecked because their integrated/live acceptance criteria are not yet satisfied. Local business behavior is verified by the reproducible tests and fixture demonstration; do not mark a production milestone complete from that evidence alone.
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 

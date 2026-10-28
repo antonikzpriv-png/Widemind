@@ -2,7 +2,9 @@
 
 ## Status
 
-This document proposes implementation boundaries. No application stack, hosting provider, payment processor, model provider, or database has been selected.
+The business/fulfillment slice is implemented in Python 3.11+ with SQLite, a standard-library WSGI integration API, and an independent event worker. See [BUSINESS.md](BUSINESS.md) for actual commands, storage, and version 1 host contracts.
+
+The wider component boundaries below remain the product architecture. Production runtime controls, economy enforcement, live tool adapters, hosting, payment processing, and model providers are not implemented/configured by the business slice. Its external-dependency demonstration is explicitly simulated.
 
 ## Product requirements
 

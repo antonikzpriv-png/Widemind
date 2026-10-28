@@ -6,7 +6,7 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below are a proposed implementation contract. No ledger or payment integration exists yet.
+The rules below define the required economy implementation. The business module now consumes an injected `Economy` interface for reservations, payment links, verified snapshots, fulfillment recognition, release, and reconciliation; see [BUSINESS.md](BUSINESS.md). It implements no ledger or live payment integration. Demo/test payment values are explicitly scripted fixtures and cannot fund live work.
 
 ## Units
 

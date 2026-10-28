@@ -43,3 +43,7 @@ htmlcov/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Python packaging and worker coordination
+*.egg-info/
+*.worker.lock

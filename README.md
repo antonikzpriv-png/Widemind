@@ -2,13 +2,15 @@
 
 **Starts with $5. Everything after that is earned.**
 
-WideMind is a planned autonomous online business agent. It starts a survival run with **$5 of operating credit**, chooses opportunities, creates useful work, earns real customer revenue, and uses those earnings to fund its next actions.
+WideMind is an autonomous online business agent under development. It starts a survival run with **$5 of operating credit**, chooses opportunities, creates useful work, earns real customer revenue, and uses those earnings to fund its next actions.
 
 It is an applied AI product and research experiment. Building a new foundation model is outside this project's scope.
 
 ## Current status
 
-This repository contains the project foundation and implementation plan. The runtime, website, Gmail integration, tools, and payments are **planned, not implemented**.
+The first runnable **business and fulfillment module** is implemented: durable opportunities, scoped quotes, conditional orders, event-driven fulfillment, recovery, private memory, an operator API, and a redacted activity projection.
+
+Economy enforcement, live tools/Gmail, production runtime controls, and payment processing remain host integrations. The included offline demonstration uses **explicit fixtures only** and claims no real customers, payments, mail, or revenue. See [Business setup and integration](docs/BUSINESS.md).
 
 Start with [AGENTS.md](AGENTS.md) for developer instructions and [the roadmap](docs/ROADMAP.md) for implementation milestones.
 
@@ -55,9 +57,18 @@ Public activity uses a deliberately selected projection of events. Customer conv
 | [Economy](docs/ECONOMY.md) | Budget, reservations, payments, costs, and exhaustion |
 | [Roadmap](docs/ROADMAP.md) | Build sequence, acceptance criteria, and five-agent work allocation |
 
-## Start building
+## Run the business demonstration
 
-Choose and document a small, maintainable stack, then implement the first runnable milestone. No dependency manifest, build command, or deployment configuration has been established yet.
+Requires Python 3.11+; no runtime dependencies.
+
+```sh
+python -m unittest discover -s tests -v
+python -m widemind demo --directory /tmp/widemind-business-demo
+```
+
+The demo produces a labelled research brief and persisted request-to-delivery history. Run it again against the same directory to verify idempotency. The business service registry also supports other injected services; a writing-service test exercises that extension point.
+
+See [Business setup and integration](docs/BUSINESS.md) for migrations, API contracts, worker setup, recovery, and live-operation prerequisites.
 
 The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
 
@@ -65,4 +76,4 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-Application stack, hosting, domain/path, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+The business module uses Python and SQLite. Hosting, domain/path, model provider, Gmail account, payment processor, production control-plane clients, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.

@@ -80,6 +80,6 @@ A model-generated invoice or a simulated benchmark payout is not customer revenu
 
 ## Foundation scope
 
-This repository currently supplies documentation for building WideMind. The selected stack, providers, accounts, credentials, hosting, and live-run configuration remain implementation work.
+The repository now includes a runnable Python/SQLite business slice and an offline request-to-delivery demonstration; see [BUSINESS.md](BUSINESS.md). The open-ended product vision remains unchanged. Providers, accounts, production economy/tool/runtime clients, credentials, hosting, and live-run configuration remain implementation work. Demonstration fixtures are not evidence of earned money or live capability.
 
 The five Codex builders are development roles. They are not five funded WideMind instances. Start with one runtime identity and one auditable survival run.

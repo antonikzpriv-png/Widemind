@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The foundation currently contains documentation only. Do not invent existing scripts, passing tests, deployment URLs, integrations, or completed milestones.
+The business module now provides a Python/SQLite implementation and explicit offline demonstration. Read [docs/BUSINESS.md](docs/BUSINESS.md) and `widemind/business/contracts.py` before integrating economy, tools, runtime, or website work. Do not invent live integrations, deployment URLs, financial outcomes, or completed milestones.
 
 ## Working approach
 
@@ -57,7 +57,7 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-There are no established build or test commands yet. When scaffolding the application, add real commands and document how to run them.
+Run `python -m unittest discover -s tests -v` and `python -m widemind demo --directory /tmp/widemind-business-demo`. Runtime Python dependencies are standard library only; packaging uses `pyproject.toml`. Keep fixtures restricted to explicit demo/test modes. Run the demonstration twice against the same directory when changing recovery or idempotency.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.
