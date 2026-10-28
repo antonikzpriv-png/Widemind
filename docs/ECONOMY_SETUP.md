@@ -61,6 +61,8 @@ Run creation seeds exactly `5_000_000` micro-USD. Repeating the same request doe
 | `GET /v1/runs/{run_id}/reservations` | Scoped agent, gateway, operator | Spending status and unknown outcomes |
 | `GET /v1/runs/{run_id}/payments` | Scoped agent, gateway, operator | Receipt/payment status |
 | `GET /v1/runs/{run_id}/reconciliations` | Scoped agent, gateway, operator | Durable reconciliation records |
+| `GET /v1/runs/{run_id}/charges` | Scoped agent, gateway, operator | Verified final charges and partial known liabilities |
+| `GET /v1/runs/{run_id}/checkouts` | Scoped agent, gateway, operator | Durable checkout requests, including unknown creation outcomes |
 | `POST /v1/runs/{run_id}/reservations` | Scoped agent, gateway, operator | Atomically reserve credit |
 | `POST /v1/reservations/{id}/start` | Gateway, operator | Record dispatch; duplicate dispatch fails |
 | `POST /v1/reservations/{id}/settle` | Gateway, operator | Post actual usage/charge, including charged failures |

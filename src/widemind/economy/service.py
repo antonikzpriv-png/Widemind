@@ -314,6 +314,20 @@ class EconomyService:
                         'actual_micro_usd': actual_micro_usd, 'overage_micro_usd': max(0, actual_micro_usd-row['amount_micro_usd'])})
             return self._reservation(db, reservation_id)
 
+    def charges(self, run_id):
+        """Verified final charges and known partial liabilities, never estimated costs."""
+        with self._read() as db:
+            self._run(db, run_id)
+            result = []
+            for row in db.execute('SELECT c.* FROM charges c JOIN reservations r USING(reservation_id) WHERE r.run_id=? ORDER BY c.rowid', (run_id,)):
+                item = dict(row)
+                item['usage'] = json.loads(item['usage'])
+                item['final'] = True
+                result.append(item)
+            for row in db.execute("SELECT c.* FROM provisional_charges c JOIN reservations r USING(reservation_id) WHERE r.run_id=? AND r.state!='settled' ORDER BY c.rowid", (run_id,)):
+                result.append({**dict(row), 'final': False, 'outcome': 'unknown'})
+            return result
+
     def _hold(self, db, run_id, hold_id, amount, kind, reason):
         db.execute('INSERT INTO holds VALUES(?,?,?,?,?) ON CONFLICT(run_id,hold_id) DO UPDATE SET amount_micro_usd=excluded.amount_micro_usd,kind=excluded.kind,reason=excluded.reason',
                    (run_id, hold_id, kind, amount, reason))
@@ -550,6 +564,12 @@ class EconomyService:
             db.execute('INSERT INTO checkouts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)', (*key, run_id, job_id, amount_micro_usd, encode(details), digest, None, None, now()))
             self._event(db, run_id, 'economy.checkout_requested', {'request_id': request_id, 'provider': provider, 'account': account, 'job_id': job_id, 'amount_micro_usd': amount_micro_usd})
             return self._checkout(db, *key)
+
+    def checkouts(self, run_id):
+        with self._read() as db:
+            self._run(db, run_id)
+            return [self._checkout(db, row['provider'], row['account'], row['mode'], row['request_id'])
+                    for row in db.execute('SELECT * FROM checkouts WHERE run_id=? ORDER BY rowid', (run_id,))]
 
     def _checkout(self, db, provider, account, mode, request_id):
         row = _row(db.execute('SELECT * FROM checkouts WHERE provider=? AND account=? AND mode=? AND request_id=?', (provider, account, mode, request_id)).fetchone())

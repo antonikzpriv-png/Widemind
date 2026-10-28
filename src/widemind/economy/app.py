@@ -210,6 +210,16 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.reconciliations(run_id)
 
+    @app.get("/v1/runs/{run_id}/charges")
+    def charges(run_id: str, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway", "agent"}, run_id)
+        return economy.charges(run_id)
+
+    @app.get("/v1/runs/{run_id}/checkouts")
+    def checkouts(run_id: str, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway", "agent"}, run_id)
+        return economy.checkouts(run_id)
+
     @app.post("/v1/runs/{run_id}/reservations")
     def reserve(run_id: str, body: ReserveInput, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)

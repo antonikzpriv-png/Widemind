@@ -254,3 +254,35 @@ def test_signed_metric_compensation_never_changes_cash(client, settings):
     balance = app.get("/v1/runs/run-a/balance", headers=operator).json()
     assert balance["posted_micro_usd"] == 5_000_000
     assert balance["metrics"] == {"earned_revenue_micro_usd": 0, "infrastructure_subsidy_micro_usd": 0}
+
+
+def test_charge_inspection_tracks_partial_final_receipt_and_run_scope(client, settings):
+    create_run(client, settings)
+    rid = reserve(client, settings).json()["reservation_id"]
+    client.post(f"/v1/reservations/{rid}/start", headers=headers(settings, "gateway"))
+    body = {"actual_micro_usd": 100_000, "provider": "fixture-provider", "account": "fixture-account",
+            "external_charge_id": "cost-1", "outcome": "unknown", "usage": {"tokens": 1}}
+    assert client.post(f"/v1/reservations/{rid}/settle", headers=headers(settings, "gateway"), json=body).status_code == 200
+    charges = client.get("/v1/runs/run-a/charges", headers=headers(settings, "agent")).json()
+    assert len(charges) == 1 and charges[0]["final"] is False and charges[0]["amount_micro_usd"] == 100_000
+    body.update(actual_micro_usd=150_000, outcome="failed", usage={"tokens": 2})
+    assert client.post(f"/v1/reservations/{rid}/settle", headers=headers(settings, "gateway"), json=body).status_code == 200
+    charges = client.get("/v1/runs/run-a/charges", headers=headers(settings, "agent")).json()
+    assert len(charges) == 1 and charges[0]["final"] is True
+    assert charges[0]["amount_micro_usd"] == 150_000 and charges[0]["usage"] == {"tokens": 2}
+    for endpoint in ("charges", "checkouts"):
+        assert client.get(f"/v1/runs/run-b/{endpoint}", headers=headers(settings, "agent")).status_code == 403
+        assert client.get(f"/v1/runs/run-a/{endpoint}").status_code == 401
+
+
+def test_unknown_checkout_request_is_inspectable_after_restart(settings):
+    from widemind.economy.service import EconomyService
+    ledger = EconomyService(settings.database_path)
+    ledger.create_run("run-a")
+    ledger.record_checkout("run-a", "stripe", "acct_fixture", "test", "pending-request", "job", 1_000_000, {"description": "Fixture checkout"})
+    with TestClient(create_app(settings)) as app:
+        rows = app.get("/v1/runs/run-a/checkouts", headers=headers(settings, "operator")).json()
+        assert len(rows) == 1 and rows[0]["request_id"] == "pending-request"
+        assert rows[0]["status"] == "pending" and rows[0]["payment_id"] is None
+        assert rows[0]["created_at"]
+        assert app.get("/v1/runs/run-a/balance", headers=headers(settings, "agent")).json()["posted_micro_usd"] == 5_000_000
