@@ -267,3 +267,53 @@ def test_atomic_rpc_receipt_admission_failure_rolls_back_charge(setup):
     with service._tx() as db:
         db.execute('DROP TRIGGER fail_receipt')
     assert post(setup, 'settle', {'reservation': reservation, 'receipt': receipt(reservation)}) == {'kind': 'settled'}
+
+
+def test_not_performed_recovery_is_scoped_audited_and_bounded(setup):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    verify = {'reservation': reservation, 'action': action(req), 'dispatch': True}
+    body = {'reservation': reservation, 'evidenceRef': 'provider-definitively-not-performed-1'}
+    assert post(setup, 'not-performed', body)['kind'] == 'unavailable'
+    assert post(setup, 'verify', verify)['kind'] == 'verified'
+    assert post(setup, 'not-performed', body) == {'kind': 'renewed'}
+    assert post(setup, 'not-performed', body) == {'kind': 'renewed'}
+    assert post(setup, 'authorize', req)['reservation'] == reservation
+    assert post(setup, 'verify', verify)['kind'] == 'verified'
+    assert post(setup, 'not-performed', body)['kind'] == 'unavailable'  # Cannot replay old evidence onto attempt 2.
+    assert post(setup, 'not-performed', {**body, 'evidenceRef': 'provider-definitively-not-performed-2'}) == {'kind': 'renewed'}
+    assert post(setup, 'verify', verify)['kind'] == 'verified'
+    final_body = {**body, 'evidenceRef': 'provider-definitively-not-performed-3'}
+    assert post(setup, 'not-performed', final_body) == {'kind': 'closed'}
+    assert post(setup, 'not-performed', final_body) == {'kind': 'closed'}
+    assert post(setup, 'verify', verify)['kind'] == 'unavailable'
+    assert service.balance('run')['reserved_micro_usd'] == 0
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+    from widemind.economy.reporting import audit_integrity
+    assert audit_integrity(service, 'run')['ok']
+    with service._read() as db:
+        assert db.execute('SELECT COUNT(*) FROM runtime_dispatches').fetchone()[0] == 3
+        assert db.execute('SELECT COUNT(*) FROM runtime_rearms').fetchone()[0] == 3
+
+
+@pytest.mark.parametrize('subtotal', ['0', '100000'])
+def test_not_performed_cannot_erase_provisional_usage_even_zero(setup, subtotal):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    assert post(setup, 'verify', {'reservation': reservation, 'action': action(req), 'dispatch': True})['kind'] == 'verified'
+    assert post(setup, 'settle', {'reservation': reservation, 'receipt': receipt(reservation, cost=subtotal, provisional=True)})['kind'] == 'unavailable'
+    assert post(setup, 'not-performed', {'reservation': reservation, 'evidenceRef': 'contradictory-claim'})['kind'] == 'unavailable'
+    assert service.reservation(reservation['reservationId'])['state'] == 'unknown'
+
+
+def test_provider_event_reference_uses_full_foundation_2000_character_contract(setup):
+    seed(setup)
+    reservation = post(setup, 'authorize', request())['reservation']
+    charge = receipt(reservation, event='provider-event-'+'x'*1985)
+    assert len(charge['usage']['externalEventId']) == 2000
+    assert post(setup, 'settle', {'reservation': reservation, 'receipt': charge}) == {'kind': 'settled'}
+    assert post(setup, 'settle', {'reservation': reservation, 'receipt': charge}) == {'kind': 'settled'}

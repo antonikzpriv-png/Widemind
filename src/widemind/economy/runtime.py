@@ -87,6 +87,11 @@ class VerificationRequest(Wire):
     dispatch: StrictBool = False
 
 
+class NotPerformedRequest(Wire):
+    reservation: Reservation
+    evidenceRef: Annotated[StrictStr, Field(min_length=1, max_length=2048)]
+
+
 class NativeAmount(Wire):
     currency: Annotated[StrictStr, Field(min_length=1, max_length=20)]
     minorUnits: Annotated[StrictStr, Field(min_length=1, max_length=128)]
@@ -105,7 +110,7 @@ class Usage(Wire):
     actualCharge: WireMoney
     provider: Id
     accountRef: Id
-    externalEventId: Id
+    externalEventId: Evidence
     billableFailure: StrictBool
     provisional: StrictBool
     evidenceRef: Evidence
@@ -274,9 +279,51 @@ class RuntimeBridge:
         try:
             binding, row = self._bound(request.reservation, request.action)
             if request.dispatch:
-                self.service.start_reservation(binding['reservation_id'])
+                with self.service._tx() as db:
+                    self.service._start_reservation(db, binding['reservation_id'])
             return {'kind': 'verified', 'profile': {'provider': binding['provider'], 'account': binding['account'],
                                                   'mode': 'sandbox' if binding['mode'] == 'test' else 'live'}}
+        except EconomyError as error:
+            return {'kind': 'unavailable', 'reason': error.code}
+
+    def confirm_not_performed(self, request: NotPerformedRequest):
+        try:
+            binding, _ = self._bound(request.reservation)
+            with self.service._tx() as db:
+                row = self.service._reservation(db, binding['reservation_id'])
+                latest = db.execute('SELECT MAX(ordinal) FROM runtime_dispatches WHERE reservation_id=?', (binding['reservation_id'],)).fetchone()[0]
+                if latest is None:
+                    raise EconomyError('not_dispatched', 'No dispatched attempt requires recovery')
+                previous = db.execute('SELECT * FROM runtime_rearms WHERE reservation_id=? AND evidence_ref=?',
+                                      (binding['reservation_id'], request.evidenceRef)).fetchone()
+                charge = db.execute('SELECT * FROM charges WHERE reservation_id=?', (binding['reservation_id'],)).fetchone()
+                if previous:
+                    if previous['dispatch_ordinal'] == latest and row['state'] == 'reserved':
+                        return {'kind': 'renewed'}
+                    if previous['dispatch_ordinal'] == latest and row['state'] == 'settled' and charge and charge['amount_micro_usd'] == 0:
+                        usage = json.loads(charge['usage'])
+                        if usage.get('source') == 'runtime-not-performed' and usage.get('evidenceRef') == request.evidenceRef:
+                            return {'kind': 'closed'}
+                    raise EconomyError('stale_not_performed_evidence', 'This evidence belongs to an earlier dispatch')
+                if charge or db.execute('SELECT 1 FROM provisional_charges WHERE reservation_id=?', (binding['reservation_id'],)).fetchone():
+                    raise EconomyError('known_usage_requires_reconciliation', 'A known charge or subtotal cannot be declared not performed')
+                if row['state'] not in ('running', 'unknown'):
+                    raise EconomyError('authorization_closed', 'Only an unresolved dispatch can be reconciled as not performed')
+                digest = fingerprint([binding['reservation_id'], latest, request.evidenceRef])
+                db.execute('INSERT INTO runtime_rearms VALUES(?,?,?,?,?)',
+                           (binding['reservation_id'], latest, request.evidenceRef, digest, now()))
+                event_data = {'reservation_id': binding['reservation_id'], 'dispatch_ordinal': latest,
+                              'evidence_ref': request.evidenceRef}
+                if latest >= 3:
+                    self.service._settle(db, binding['reservation_id'], 0, binding['provider'], binding['account'],
+                                         'rt:' + binding['reservation_id'],
+                                         usage={'source': 'runtime-not-performed', 'evidenceRef': request.evidenceRef,
+                                                'dispatch_ordinal': latest}, outcome='failed')
+                    self.service._event(db, binding['run_id'], 'economy.runtime_not_performed_closed', event_data)
+                    return {'kind': 'closed'}
+                db.execute("UPDATE reservations SET state='reserved',updated_at=? WHERE reservation_id=?", (now(), binding['reservation_id']))
+                self.service._event(db, binding['run_id'], 'economy.runtime_not_performed', event_data)
+                return {'kind': 'renewed'}
         except EconomyError as error:
             return {'kind': 'unavailable', 'reason': error.code}
 

@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from .config import Settings
 from .service import EconomyError, EconomyService
 from .reconciliation import ReconciliationQueue
-from .runtime import RuntimeBridge, RunRequest, SeedRequest, AuthorizationRequest, SettlementRequest, VerificationRequest
+from .runtime import RuntimeBridge, RunRequest, SeedRequest, AuthorizationRequest, SettlementRequest, VerificationRequest, NotPerformedRequest
 
 MAX_MONEY = 9_000_000_000_000_000
 Money = Annotated[StrictInt, Field(ge=0, le=MAX_MONEY)]
@@ -220,6 +220,11 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
     def runtime_verify(body: VerificationRequest, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway"})
         return runtime_bridge().verify(body)
+
+    @app.post("/v1/runtime/not-performed")
+    def runtime_not_performed(body: NotPerformedRequest, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return runtime_bridge().confirm_not_performed(body)
 
     @app.post("/v1/runtime/settle")
     def runtime_settle(body: SettlementRequest, role: str = Depends(identity)):
