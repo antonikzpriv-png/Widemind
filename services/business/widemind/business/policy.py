@@ -22,6 +22,17 @@ class Policy:
     priority_weight: int = 10
     margin_weight: int = 1
     goal_weights: dict[str, int] = field(default_factory=lambda: {"research-brief": 1})
+    conversation_enabled: bool = True
+    conversation_model_max_micro_usd: int = 100_000
+    conversation_run_budget_micro_usd: int = 1_000_000
+    conversation_max_turns: int = 20
+    conversation_followups: int = 2
+    conversation_followup_seconds: int = 86400
+    conversation_quiet_start_hour: int = 20
+    conversation_quiet_end_hour: int = 8
+    conversation_price_floors: dict[str, int] = field(default_factory=dict)
+    conversation_revision_allowance: int = 0
+    conversation_model_max_output_tokens: int = 2000
 
     def __post_init__(self):
         for key in ("experiment_budget_micro_usd", "max_job_micro_usd", "priority_weight", "margin_weight"):
@@ -44,6 +55,25 @@ class Policy:
             integer(price, "price", 1)
         for weight in self.goal_weights.values():
             integer(weight, "goal weight")
+        if type(self.conversation_enabled) is not bool:
+            raise ValueError("conversation_enabled must be boolean")
+        integer(self.conversation_model_max_micro_usd, "conversation model maximum", 1, 10**9)
+        integer(self.conversation_run_budget_micro_usd, "conversation run budget", 0, 10**12)
+        integer(self.conversation_max_turns, "conversation turns", 1, 100)
+        integer(self.conversation_followups, "conversation followups", 0, 3)
+        integer(self.conversation_followup_seconds, "conversation followup interval", 300, 30 * 86400)
+        integer(self.conversation_quiet_start_hour, "conversation quiet start hour", 0, 23)
+        integer(self.conversation_quiet_end_hour, "conversation quiet end hour", 0, 23)
+        integer(self.conversation_revision_allowance, "conversation revisions", 0, 3)
+        integer(self.conversation_model_max_output_tokens, "conversation output tokens", 128, 8192)
+        if not isinstance(self.conversation_price_floors, dict):
+            raise ValueError("conversation_price_floors must be a mapping")
+        for service, floor in self.conversation_price_floors.items():
+            if service not in self.prices:
+                raise ValueError("conversation floor requires a configured service price")
+            integer(floor, "conversation price floor", 10_000)
+            if floor % 10_000 or floor > self.prices[service]:
+                raise ValueError("conversation price floor must be whole USD cents within the configured price")
 
     def document(self):
         return asdict(self)

@@ -132,7 +132,9 @@ class ToolsClient:
         # Always discard source metadata asserted in webpage/model result data.
         data.pop('_source_references',None)
         references=cls._source_references(receipt)
-        if references is not None:
+        # Structured model output retains its strict JSON-result wrapper. Source
+        # provenance is not an extra interpreted action field or money evidence.
+        if references is not None and 'json' not in data:
             data['_source_references']=references
         return data
 
@@ -147,7 +149,8 @@ class ToolsClient:
             data=receipt.get('result',{})
             # Native gateway receipts wrap adapter output; old/non-research
             # envelopes retain their existing shape when no source proof exists.
-            if ToolsClient._source_references(receipt) is not None and isinstance(data,dict) and isinstance(data.get('data'),dict):
+            if (isinstance(data,dict) and isinstance(data.get('data'),dict)
+                    and (ToolsClient._source_references(receipt) is not None or 'json' in data['data'])):
                 data=data['data']
             state={'succeeded':'succeeded','failed':'failed','cancelled':'failed','unavailable':'failed'}.get(receipt.get('status'),'unknown')
             return Outcome(state,ToolsClient._with_source_references(data,receipt),receipt.get('reason',''))
@@ -175,6 +178,38 @@ class EconomyClient:
         actual_action=identity(run_id,job_id,'create')
         result=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations',{'action_id':actual_action,'amount_micro_usd':maximum_micro_usd,'idempotency_key':action_id,'provider':plan['action'],'account':self.account,'limits':{'max_duration_ms':120000,'max_storage_bytes':1000000}})
         return Outcome('succeeded',{'reservation_id':result['reservation_id']})
+    def reserve_conversation(self,*,run_id,conversation_id,action_id,maximum_micro_usd,max_tokens=2000,tool='ai.generate'):
+        """Reserve an exact conversational tool action without inventing an order.
+
+        The caller supplies the actual durable tool-effect ID, not the separate
+        reservation-effect ID. This uses the selected integrated economy only;
+        provider execution and actual-charge settlement remain gateway-owned.
+        """
+        if tool not in {'ai.generate','gmail.read','gmail.list','gmail.thread','gmail.send'}:
+            raise ValueError('unsupported conversation tool')
+        if type(maximum_micro_usd) is not int or not 0 <= maximum_micro_usd <= 10**12:
+            raise ValueError('invalid conversation spending ceiling')
+        if tool == 'ai.generate' and maximum_micro_usd == 0:
+            raise ValueError('model calls require a positive spending reservation')
+        if tool != 'ai.generate' and maximum_micro_usd != 0:
+            raise ValueError('Gmail transport uses zero direct provider cost')
+        if type(max_tokens) is not int or not 1 <= max_tokens <= 16000:
+            raise ValueError('invalid model output ceiling')
+        for value in (run_id,conversation_id,action_id):
+            if not isinstance(value,str) or not value or len(value)>200 or any(ord(c)<32 for c in value):
+                raise ValueError('invalid conversation action identity')
+        self.check_mode(run_id)
+        limits={'max_duration_ms':120000,'max_storage_bytes':65536}
+        if tool == 'ai.generate':limits['max_tokens']=max_tokens
+        result=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations',{
+            'action_id':action_id,'amount_micro_usd':maximum_micro_usd,
+            'idempotency_key':identity(run_id,conversation_id,'conversation-reservation',action_id),
+            'provider':tool,'account':self.account,'limits':limits})
+        if (not isinstance(result,dict) or not isinstance(result.get('reservation_id'),str)
+                or not result['reservation_id']):
+            return Outcome('unknown',reason='conversation reservation needs authoritative reconciliation')
+        return Outcome('succeeded',{'reservation_id':result['reservation_id']})
+
 
     @staticmethod
     def _work_identifier(value):
@@ -384,6 +419,18 @@ class EconomyClient:
         if not effect:return Outcome('unknown',reason='unknown economy action')
         run,job,action=effect['run_id'],effect['job_id'],effect['action']
         try:
+            if action=='reserve_conversation':
+                request=json.loads(effect['request'])
+                expected=request.get('actual_action_id')
+                tool=request.get('tool','ai.generate')
+                limits={'max_duration_ms':120000,'max_storage_bytes':65536}
+                if tool=='ai.generate':limits['max_tokens']=request.get('max_tokens',2000)
+                found=[r for r in self.http.request(f'/v1/runs/{quote(run,safe="")}/reservations')
+                       if r.get('action_id')==expected and r.get('run_id')==run
+                       and r.get('provider')==tool and r.get('account')==self.account
+                       and r.get('amount_micro_usd')==request.get('maximum_micro_usd') and r.get('limits')==limits]
+                if len(found)==1:return Outcome('succeeded',{'reservation_id':found[0]['reservation_id']})
+
             if action=='reserve_work':
                 self.check_mode(run)
                 request=json.loads(effect['request'])
