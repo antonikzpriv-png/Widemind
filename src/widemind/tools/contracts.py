@@ -5,7 +5,6 @@ Only owner-loaded configuration supplies capabilities, prices and accounts.
 """
 from __future__ import annotations
 
-import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Protocol
@@ -82,7 +81,8 @@ class Transport(Protocol):
     def request(self, method: str, url: str, *, headers: Mapping[str, str] | None = None,
                 body: bytes | None = None, timeout: float = 30,
                 max_bytes: int = 2_000_000,
-                cancel: Callable[[], None] | None = None) -> HTTPResponse: ...
+                cancel: Callable[[], None] | None = None,
+                public_only: bool = False) -> HTTPResponse: ...
 
 
 class Secrets(Protocol):
