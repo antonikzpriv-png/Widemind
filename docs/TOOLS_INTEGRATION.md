@@ -60,3 +60,11 @@ Local compute, filesystem and network costs are disclosed as owner-supplied/unal
 ## Verification
 
 Verified locally: editable isolated Python install; 352 Python tests passed with 11 optional-environment skips and 75 subtests; three Node adapter tests and type checking. Added cases execute actual files/SVG/HTML, reject reservation identity mismatch before effects, recover/replay without duplicate dispatch, enforce authenticated HTTP/private artifacts, and retain provisional paid liability. Provider tests use deterministic transports and controlled local endpoints. No Gmail delivery, actual model charge, payment, live publishing or deployed sandbox is claimed from fixture results.
+
+## Recovery fencing and stop propagation
+
+The journal now hashes the owner-selected adapter configuration, policy, workspace and adapter version when preparing each new action. Pending effects refuse execution/reconciliation under changed account/model/endpoint/workspace configuration; restore the original configuration or use explicit operator review. The fingerprint stores no literal secret values. Previously completed immutable receipts remain readable after configuration changes.
+
+When `WIDEMIND_RUNTIME_DATABASE` is configured, active adapter checks read the matching runtime run through a read-only SQLite connection. A stopped/missing run or unreadable control plane fails closed; pause permits an already-active operation to finish. Explicit `/cancel` and runtime stop both reach supported adapter cancellation, including business-internal tool calls. Observational reconciliation remains available after stop and never labels an accepted external effect undone.
+
+The business RPC response includes `state`/`data` expected by its protocol, while retaining `status`/`result` aliases. Business recovery can send only `{action_id}`; the service reloads the original durable action/reservation instead of requiring a caller to reconstruct execution parameters.

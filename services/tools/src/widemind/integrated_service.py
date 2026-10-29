@@ -95,14 +95,14 @@ class Journal:
         with self.connection() as db:
             row=db.execute('SELECT * FROM operations WHERE id=?',(id,)).fetchone()
             return dict(row) if row else None
-    def prepare(self,action,reservation):
+    def prepare(self,action,reservation,owner_fingerprint):
         fingerprint=hashlib.sha256(canonical({'action':action,'reservation_id':reservation['reservationId']}).encode()).hexdigest()
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE');old=db.execute('SELECT * FROM operations WHERE id=?',(action['actionId'],)).fetchone()
             if old:
                 if old['fingerprint']!=fingerprint:raise ToolError('conflict','Action ID reused with changed execution parameters.')
                 return dict(old),False
-            db.execute('INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,?,?)',(action['actionId'],fingerprint,canonical(action),canonical(reservation),'prepared','{}',None,0,0,time.time()))
+            db.execute('INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,?,?)',(action['actionId'],fingerprint,canonical(action),canonical(reservation),'prepared',canonical({'owner_fingerprint':owner_fingerprint}),None,0,0,time.time()))
         return self.get(action['actionId']),True
     def claim(self,id):
         with self.connection() as db:
@@ -161,7 +161,21 @@ class IntegratedTools:
             if field in limit and (key not in bounds or integer(limit[field])>integer(bounds[key])):raise ToolError('authorization','Execution resource limits exceed authorization.')
         if row.get('state') not in ({'reserved','running','unknown','settled'} if completed else {'reserved','running','unknown'}):raise ToolError('authorization','Reservation no longer permits execution or reconciliation.')
         return row
+    def owner_fingerprint(self,action):
+        name=action['tool']
+        if name.startswith('gmail.') and name in {'gmail.send','gmail.read','gmail.list','gmail.thread'}:name='gmail'
+        value={'tool_config':self.config.get('tools',{}).get(name,{}),'policy':self.config.get('policy',{}),'workspace':str(self.workspace.root),'adapter_version':self.adapters[name].spec.version if name in self.adapters else None}
+        return hashlib.sha256(canonical(value).encode()).hexdigest()
+    def runtime_stopped(self,run_id):
+        path=os.environ.get('WIDEMIND_RUNTIME_DATABASE')
+        if not path:return False
+        try:
+            with sqlite3.connect(Path(path).resolve().as_uri()+'?mode=ro',uri=True,timeout=2) as db:
+                row=db.execute('SELECT desired,profile FROM runtime_runs WHERE id=?',(run_id,)).fetchone()
+            return row is None or row[0]=='stop' or row[1]!='foundation'
+        except (OSError,sqlite3.Error):return True
     def _adapter(self,action):
+        if self.journal.load(action['actionId']).get('owner_fingerprint')!=self.owner_fingerprint(action):raise Unavailable('Owner adapter/account/policy changed; restore the original configuration or reconcile through operator review before retry.')
         name=action['tool'];args=dict(action['input'])
         if name in {'gmail.send','gmail.read','gmail.list','gmail.thread'}:
             args['operation']=name.split('.')[1];name='gmail'
@@ -185,9 +199,9 @@ class IntegratedTools:
         cap=action['limit']['maxOutputBytes'];settings['max_output_bytes']=min(settings.get('max_output_bytes',cap),cap)
         if action['limit'].get('maxTokens') is not None:settings['max_output_tokens']=min(settings.get('max_output_tokens',action['limit']['maxTokens']),action['limit']['maxTokens'])
         return self.adapters[name],args,settings
-    def context(self,action,reservation,settings):
+    def context(self,action,reservation,settings,*,reconciliation=False):
         deadline=time.monotonic()+min(300,integer(action['limit']['maxDurationMs'])/1000)
-        ctx=ToolContext(action_id=action['actionId'],run_id=action['runId'],reservation_id=reservation['reservationId'],config=settings,policy=self.config.get('policy',{}),workspace=self.workspace,secrets=self.secrets,transport=self.transport,state=self.journal,deadline=deadline,authorize=lambda:self.verify(action,reservation),cancelled=lambda:bool(self.journal.get(action['actionId'])['cancelled']),job_id=action.get('jobId'))
+        ctx=ToolContext(action_id=action['actionId'],run_id=action['runId'],reservation_id=reservation['reservationId'],config=settings,policy=self.config.get('policy',{}),workspace=self.workspace,secrets=self.secrets,transport=self.transport,state=self.journal,deadline=deadline,authorize=lambda:self.verify(action,reservation),cancelled=lambda:False if reconciliation else bool(self.journal.get(action['actionId'])['cancelled']) or self.runtime_stopped(action['runId']),job_id=action.get('jobId'))
         ctx.transport=AuthorizedTransport(self.transport,ctx);return ctx
     def receipt(self,action,result,status='succeeded'):
         usage=result.usage
@@ -200,7 +214,7 @@ class IntegratedTools:
         action,reservation,business=self.normalize(payload);old=self.journal.get(action['actionId'])
         completed=bool(old and old['result'] and json.loads(old['result']).get('kind')=='receipt')
         self.verify(action,reservation,completed=completed)
-        row,fresh=self.journal.prepare(action,reservation)
+        row,fresh=self.journal.prepare(action,reservation,self.owner_fingerprint(action))
         if row['result'] is not None:return self._business(json.loads(row['result']),business,reservation)
         if not self.journal.claim(action['actionId']):return {'kind':'unknown','reason':'Action already dispatched; reconcile before retry'}
         try:
@@ -240,7 +254,7 @@ class IntegratedTools:
             if known['kind']=='receipt':return self._business(known,business,reservation)
         if row['status']=='prepared':return {'kind':'not_performed','evidenceRef':'tools-journal:prepared:'+action['actionId']}
         try:
-            adapter,args,settings=self._adapter(action);ctx=self.context(action,reservation,settings);result=adapter.reconcile(args,ctx)
+            adapter,args,settings=self._adapter(action);ctx=self.context(action,reservation,settings,reconciliation=True);result=adapter.reconcile(args,ctx)
             if result.outcome=='completed' and result.result is not None:outcome=self.receipt(action,result.result)
             elif result.outcome=='not_executed':
                 self.journal.save(action['actionId'],status='prepared',result=None)

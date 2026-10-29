@@ -99,3 +99,26 @@ class BusinessProtocolIntegration(unittest.TestCase):
             tools=IntegratedTools(config,econ,secrets=Secrets());a=action();econ.add(a)
             payload={'run_id':a['runId'],'action_id':a['actionId'],'job_id':'job-1','action':'files','arguments':a['input'],'reservation_id':'reservation-1','maximum_micro_usd':0}
             result=tools.execute(payload);self.assertEqual(result['state'],'succeeded');self.assertEqual(result['data']['operation'],'create');self.assertEqual(tools.reconcile({'action_id':a['actionId']}),result);self.assertEqual(len(econ.starts),1)
+
+class RecoveryFencingIntegration(unittest.TestCase):
+    def test_changed_owner_account_configuration_does_not_reconcile_against_new_account(self):
+        class Adapter:
+            spec=ToolSpec('fixture.account','controlled identity','external')
+            def availability(self,c,s):return {'available':True}
+            def quote(self,a,c):return Quote()
+            def execute(self,a,ctx):ctx.mark_dispatched({'request':'accepted'});raise Uncertain('Lost reply')
+            def reconcile(self,a,ctx):raise AssertionError('Must not query a changed owner account')
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);econ=Economy();config={'control_dir':str(root/'control'),'workspace_dir':str(root/'workspace'),'tools':{'fixture.account':{'enabled':True,'expected_account':'first@example.invalid'}},'policy':{'profile':'sandbox','allow_external_effects':True}}
+            tools=IntegratedTools(config,econ,adapters=[Adapter()],secrets=Secrets());a=action('fixture.account');r=econ.add(a);self.assertEqual(tools.execute({'action':a,'reservation':r})['kind'],'unknown')
+            config['tools']['fixture.account']['expected_account']='other@example.invalid';self.assertEqual(tools.reconcile({'action':a,'reservation':r})['kind'],'unknown');self.assertEqual(len(econ.starts),1)
+    def test_operator_stop_cancels_inner_tool_without_releasing_an_uncertain_hold(self):
+        import os,sqlite3
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);runtime=root/'runtime.sqlite';db=sqlite3.connect(runtime);db.execute('CREATE TABLE runtime_runs(id TEXT,desired TEXT,profile TEXT)');db.execute("INSERT INTO runtime_runs VALUES ('run-1','stop','foundation')");db.commit();db.close()
+            econ=Economy();config={'control_dir':str(root/'control'),'workspace_dir':str(root/'workspace'),'tools':{'files':{'enabled':True}},'policy':{'profile':'development','allow_external_effects':False}}
+            tools=IntegratedTools(config,econ,secrets=Secrets());a=action();r=econ.add(a)
+            with patch.dict(os.environ,{'WIDEMIND_RUNTIME_DATABASE':str(runtime)}):
+                result=tools.execute({'action':a,'reservation':r})
+            self.assertEqual(result['kind'],'unknown');self.assertFalse((root/'workspace/note.txt').exists());self.assertEqual(econ.rows['reservation-1']['state'],'running')
