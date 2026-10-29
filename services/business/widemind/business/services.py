@@ -126,7 +126,7 @@ class ResearchBrief:
             summary = text(section.get("text"), "section text", 20000)
             normalized = self._normalized(summary)
             words = normalized.split()
-            if len(words) < 18 or self._filler(summary):
+            if len(words) < 12 or self._filler(summary):
                 raise ValueError("section is filler or lacks meaningful synthesis")
             for previous in summaries:
                 first, second = set(previous.split()), set(words)
