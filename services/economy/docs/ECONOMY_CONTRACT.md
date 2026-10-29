@@ -9,6 +9,7 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 - `create_run(run_id, mode='test')`: atomically seed exactly 5,000,000 once; replay with a different mode conflicts.
 - `balance(run_id)`, `ledger(run_id)`, `reservations(run_id)`, `events(run_id, after=0)`, `payments(run_id)`, `charges(run_id)`, `checkouts(run_id)`, `reconciliations(run_id)`: private read projections.
 - `reserve(run_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits)`: atomic admission; store the bounded adapter limits. Reusing an action/key with different parameters conflicts.
+- `reserve_child(parent_reservation_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits)` and `reservation_children(parent_reservation_id)`: allocate/read ordinary provider reservations from an already dispatched `research.collect` parent. These service-v1 APIs are gateway/operator only; see the research allocation rules below.
 - `start_reservation(reservation_id)`: persist dispatch before an external call; a repeat never authorizes redispatch.
 - `settle(reservation_id, actual_micro_usd, provider, account, external_charge_id, usage=None, outcome='succeeded')`: actual integer cost atomically posts and releases unused reservation; `None` marks unknown and retains the reservation. A failed call with a known charge still posts. Explicit later trusted settlement reconciles unknown. Known overages remain visible even below zero. For a verified known subtotal with an unresolved outcome, submit `outcome=unknown` with the subtotal: it posts that charge and retains the unused original cap. Final reconciliation with the same charge ID supplies the total, posts the difference, and releases the remainder. A pure timeout submits `actual_micro_usd=None` and retains the full cap. A subtotal cannot decrease except through final reconciliation.
 - `cancel_reservation(reservation_id)`: only an undispatched reservation can be released without provider reconciliation.
@@ -17,6 +18,57 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 - `record_subsidy(run_id, amount_micro_usd, reference, idempotency_key)`: noncash infrastructure support, does not increase available credit. Signed metric entries permit compensating corrections.
 - `record_earned_revenue(run_id, amount_micro_usd, job_id, reference, idempotency_key)`: performance metric, does not increase cash. Signed metric entries permit compensating corrections.
 - `correct_entry(run_id, entry_id, amount_micro_usd, reason, idempotency_key)`: operator-only append-only compensating cash correction; noncash metric originals are rejected and use signed metric corrections instead. Active provisional operating charges (including correction chains) must be finalized with the provider total before a separate cash correction.
+
+## Research child allocations (service-v1 schema 6)
+
+This extension belongs only to the integrated PayPal/service-v1 deployment. It
+does not change the separately versioned root Stripe/central-v1 economy or permit
+opening either family's database with the other service. Back up the database
+and stop older service writers before the additive migration. Existing monetary
+rows remain intact. Schema 6 requires its immutable service-v1 ownership marker;
+an unmarked schema-6 database is rejected rather than adopted.
+
+`POST /v1/reservations/{parent_reservation_id}/children` accepts the existing
+reservation input (`action_id`, integer `amount_micro_usd`, `idempotency_key`,
+`provider`, `account`, `limits`) and returns an ordinary reservation row.
+`GET` on the same path returns all bound ordinary child rows, including closed
+ones. Both routes require gateway or operator credentials. No caller can supply
+another run; the service derives the run from the parent. Child account must
+match the parent. Allowed child providers are `ai.generate`, `research.fetch`,
+`browser.read`, `research.search`, and `files`; nested groups/cycles are forbidden.
+
+The parent must be `research.collect`, already running or unknown, and have no
+direct monetary charge. Child creation and its immutable link/event commit
+atomically. Every child's full original quoted cap, even after settlement or
+cancellation, counts toward the parent's original job cap. Allocation never
+reuses a completed child's unused quote. Child resource limits must fit matching
+parent limits when present; `max_output_tokens` also respects parent `max_tokens`.
+Every child still uses normal one-time start and idempotent native settlement.
+Unexpected global negative liability blocks new dispatch/allocation, but a fully
+reserved parent with zero globally available credit can fund its own children.
+An allocation exceeding the remaining job cap returns HTTP 409 with the fixed
+error code `job_budget_exceeded`; callers should stop the job rather than repeat
+that denied child request with a new identity.
+
+For each active reservation, its hold is
+`max(0, original_amount - known_provisional_charge - sum(original_child_caps))`.
+Ordinary children therefore carry their own holds while the parent retains only
+its unallocated remainder. With posted 500, parent cap 100 and child cap 60, total
+reserved remains 100 (parent 40 + child 60). If the child settles at 20, posted
+becomes 480 and only parent 40 remains held. If the child instead reports unknown
+outcome with known subtotal 20, total remaining hold is 80 (40 + 40), so available
+is 400. Monetary examples are all integer micro-USD.
+
+Research parent settlement accepts only zero direct cost or an unknown amount;
+it must not post aggregate child charges again. Final zero settlement may close
+the group while unknown children retain their independent holds. No new child
+or child dispatch is allowed after parent closure, but child reconciliation and
+cancellation of undispatched children remain available. A parent with any child
+cannot be cancelled; finalize at zero with the workflow observations instead.
+The existing `payment_snapshot(..., reservation_id=parent)` adds all child actual
+or known provisional costs to the parent and reports `costs_final` only when the
+parent and every child are settled/cancelled. Closing the parent alone therefore
+cannot turn unresolved research into a zero-cost/profitable job.
 
 ## Payment adapter boundary
 

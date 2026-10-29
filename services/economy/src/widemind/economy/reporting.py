@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import quote
 
-from .service import EconomyError, EconomyService, OPENING_CREDIT, fingerprint, ident
+from .service import EconomyError, EconomyService, OPENING_CREDIT, RESEARCH_CHILD_PROVIDERS, fingerprint, ident
 
 
 CASH_CATEGORIES = (
@@ -77,7 +77,7 @@ def audit_integrity(service: EconomyService, run_id: str, *, max_records: int = 
         connection.execute("PRAGMA query_only=ON")
         connection.execute("BEGIN")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (1, 2, 3, 4, 5):
+        if version not in (1, 2, 3, 4, 5, 6):
             return _report(False, [{"code": "supported_schema", "ok": False, "violations": 1}], {}, version)
         run = connection.execute("SELECT mode FROM runs WHERE run_id=?", (run_id,)).fetchone()
         if run is None:
@@ -117,6 +117,8 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
         "events": "SELECT * FROM events WHERE run_id=?",
         "reconciliations": "SELECT * FROM reconciliations WHERE run_id=?",
     }
+    if version >= 6:
+        queries['research_children'] = "SELECT l.* FROM research_reservation_children l LEFT JOIN reservations p ON p.reservation_id=l.parent_reservation_id LEFT JOIN reservations c ON c.reservation_id=l.child_reservation_id WHERE p.run_id=? OR c.run_id=?"
     rows = {}
     count = 0
     for name, query in queries.items():
@@ -292,6 +294,48 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
     charges = {row["reservation_id"]: row for row in rows["charges"]}
     provisional = {row["reservation_id"]: row for row in rows["provisional_charges"]}
     reservations = {row["reservation_id"]: row for row in rows["reservations"]}
+    allocations = {}
+    links = rows.get('research_children', [])
+    parent_ids = {link['parent_reservation_id'] for link in links}
+    child_ids = {link['child_reservation_id'] for link in links}
+    child_events = {}
+    for event, data in events:
+        if event['type'] == 'economy.research_child_reserved':
+            pair = (data.get('parent_reservation_id'), data.get('child_reservation_id'))
+            if all(isinstance(value, str) for value in pair):
+                child_events.setdefault(pair, []).append(data)
+            else:
+                check('research_child_event', False)
+    check('research_children_topology', not parent_ids.intersection(child_ids) and len(child_ids) == len(links))
+    for link in links:
+        parent, child = reservations.get(link['parent_reservation_id']), reservations.get(link['child_reservation_id'])
+        valid = parent is not None and child is not None
+        check('research_child_binding', valid and parent['run_id'] == child['run_id'] == run_id
+              and parent['account'] == child['account'] and parent['provider'] == 'research.collect'
+              and child['provider'] in RESEARCH_CHILD_PROVIDERS)
+        if not valid:
+            continue
+        allocations[parent['reservation_id']] = allocations.get(parent['reservation_id'], 0) + child['amount_micro_usd']
+        recorded = child_events.get((parent['reservation_id'], child['reservation_id']), [])
+        check('research_child_event', len(recorded) == 1 and recorded[0].get('amount_micro_usd') == child['amount_micro_usd'])
+        try:
+            EconomyService._child_limits(payload(child['limits_json']), payload(parent['limits_json']))
+            limits_valid = True
+        except (EconomyError, TypeError):
+            limits_valid = False
+        check('research_child_limits', limits_valid)
+    check('research_child_event_coverage', set(child_events) == {(link['parent_reservation_id'], link['child_reservation_id']) for link in links})
+    for parent_id, amount in allocations.items():
+        parent = reservations[parent_id]
+        check('research_allocation_cap', amount <= parent['amount_micro_usd'])
+        check('research_parent_direct_cost', parent['provisional_micro_usd'] == 0 and parent['actual_micro_usd'] in (None, 0) and parent['state'] != 'cancelled')
+    if version >= 6:
+        expected_hold = sum(max(0, row['amount_micro_usd'] - row['provisional_micro_usd'] - allocations.get(key, 0))
+                            for key, row in reservations.items() if row['state'] in ('reserved', 'running', 'unknown'))
+        projected_hold = sum(max(0, row[0] - row[1] - row[2]) for row in db.execute("""SELECT r.amount_micro_usd,r.provisional_micro_usd,
+            COALESCE((SELECT SUM(c.amount_micro_usd) FROM research_reservation_children l JOIN reservations c ON c.reservation_id=l.child_reservation_id WHERE l.parent_reservation_id=r.reservation_id),0)
+            FROM reservations r WHERE r.run_id=? AND r.state IN ('reserved','running','unknown')""", (run_id,)))
+        check('reservation_hold_formula', expected_hold == projected_hold)
     for key, reservation in reservations.items():
         check("reservation_event_projection", reservation_events.get(key) == reservation["state"])
         recorded = authorizations.get(key, [])

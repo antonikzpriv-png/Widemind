@@ -63,9 +63,14 @@ def test_actual_cash_cannot_cross_families_and_rejection_never_changes_files(tmp
     before = files(tmp_path)
     with pytest.raises(copies[target].EconomyError) as error:
         copies[target].EconomyService(path)
-    assert error.value.code == 'database_family_mismatch'
+    assert error.value.code == ('future_schema' if source == 1 else 'database_family_mismatch')
     assert files(tmp_path) == before
-    assert copies[source].EconomyService(path).balance('synthetic-run')['available_micro_usd'] == 6_900_000
+    if source == 1 and not marked:
+        with pytest.raises(copies[source].EconomyError) as own_error:
+            copies[source].EconomyService(path)
+        assert own_error.value.code == 'database_family_mismatch'
+    else:
+        assert copies[source].EconomyService(path).balance('synthetic-run')['available_micro_usd'] == 6_900_000
 
 
 @pytest.mark.parametrize('index,family', [(0, 'central-v1'), (1, 'service-v1')])
@@ -73,12 +78,18 @@ def test_new_and_unmarked_owned_v5_restarts_preserve_cash_and_pin_immutable_fami
     path = tmp_path / 'owned.sqlite3'
     service = funded(copies[index], path, 'stripe' if index == 0 else 'paypal')
     before = service.ledger('synthetic-run')
+    if index == 1:
+        # Preserve the legacy unmarked-v5 adoption case. A current service-v6
+        # database must retain its immutable ownership marker instead.
+        with sqlite3.connect(path) as db:
+            db.execute('DROP TABLE research_reservation_children')
+            db.execute('PRAGMA user_version=5')
     remove_marker(path)
     restored = copies[index].EconomyService(path)
     assert restored.ledger('synthetic-run') == before
     assert copies[index].EconomyService(path).balance('synthetic-run')['posted_micro_usd'] == 6_900_000
     with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 5
+        assert db.execute('PRAGMA user_version').fetchone()[0] == (5 if index == 0 else 6)
         assert db.execute('SELECT family FROM economy_database_family').fetchone()[0] == family
         for sql in ["UPDATE economy_database_family SET family='service-v1'", 'DELETE FROM economy_database_family',
                     "INSERT OR REPLACE INTO economy_database_family VALUES(1,'central-v1')",
@@ -102,7 +113,7 @@ def test_common_unmarked_legacy_format_is_explicitly_pinned_without_reseeding(tm
     assert len(chosen.ledger('legacy')) == 1
     with pytest.raises(copies[1-index].EconomyError) as error:
         copies[1-index].EconomyService(path)
-    assert error.value.code == 'database_family_mismatch'
+    assert error.value.code == ('future_schema' if index == 1 else 'database_family_mismatch')
 
 
 @pytest.mark.parametrize('index', [0, 1])
@@ -151,3 +162,14 @@ def test_incomplete_v5_tables_are_not_adopted_or_rewritten(tmp_path, copies, ind
         copies[index].EconomyService(path)
     assert error.value.code == 'database_family_mismatch'
     assert files(tmp_path) == before
+
+
+def test_unmarked_service_v6_is_not_adopted_by_either_family(tmp_path, copies):
+    path = tmp_path / 'unmarked-v6.sqlite3'
+    funded(copies[1], path, 'paypal')
+    remove_marker(path)
+    before = files(tmp_path)
+    for module in copies:
+        with pytest.raises(module.EconomyError):
+            module.EconomyService(path)
+        assert files(tmp_path) == before

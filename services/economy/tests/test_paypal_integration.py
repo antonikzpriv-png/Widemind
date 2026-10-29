@@ -77,7 +77,9 @@ def test_version_four_upgrade_preserves_charged_reservation_foreign_keys(tmp_pat
     path=tmp_path/'v4.sqlite';service=EconomyService(path);service.create_run('run')
     reservation=service.reserve('run','charged',1000,'charged','files','dedicated-tools',{'max_duration_ms':1000})
     service.start_reservation(reservation['reservation_id']);service.settle(reservation['reservation_id'],100,'files','dedicated-tools','charged-event')
-    with sqlite3.connect(path) as db:db.execute('PRAGMA user_version=4')
+    with sqlite3.connect(path) as db:
+        db.execute('DROP TABLE research_reservation_children')
+        db.execute('PRAGMA user_version=4')
     recovered=EconomyService(path)
     assert recovered.balance('run')['posted_micro_usd']==4_999_900
     assert recovered.reservation(reservation['reservation_id'])['state']=='settled'

@@ -20,6 +20,7 @@ from .db_family import check_family, claim_family, preflight
 OPENING_CREDIT = 5_000_000
 MAX_MONEY = 9_000_000_000_000_000
 LIMIT_NAMES = {'max_tokens', 'max_output_tokens', 'max_duration_ms', 'max_storage_bytes', 'max_units'}
+RESEARCH_CHILD_PROVIDERS = frozenset({'ai.generate', 'research.fetch', 'browser.read', 'research.search', 'files'})
 
 
 class EconomyError(Exception):
@@ -100,7 +101,7 @@ class EconomyService:
         with self._initial_connection() as connection:
             connection.execute('PRAGMA busy_timeout=1000')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4, 5):
+            if version not in (0, 1, 2, 3, 4, 5, 6):
                 raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
             connection.execute('PRAGMA journal_mode=WAL')
             connection.execute('PRAGMA foreign_keys=OFF')
@@ -109,10 +110,10 @@ class EconomyService:
                 # Recheck after acquiring the migration lock: another process may
                 # already have upgraded while this connection waited.
                 version = connection.execute('PRAGMA user_version').fetchone()[0]
-                if version not in (0, 1, 2, 3, 4, 5):
+                if version not in (0, 1, 2, 3, 4, 5, 6):
                     raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
                 claim_family(connection, 'service-v1', EconomyError)
-                migrations = ('001_economy.sql', '002_reconciliation_queue.sql', '003_reconciliation_schedule_index.sql', '004_projection_guards.sql', '005_zero_cost_authorization.sql')
+                migrations = ('001_economy.sql', '002_reconciliation_queue.sql', '003_reconciliation_schedule_index.sql', '004_projection_guards.sql', '005_zero_cost_authorization.sql', '006_research_children.sql')
                 for target in range(version + 1, len(migrations) + 1):
                     script = (Path(__file__).parent / 'migrations' / migrations[target-1]).read_text()
                     statement = ''
@@ -216,7 +217,9 @@ class EconomyService:
             if metric in metrics:
                 metrics[metric] += json.loads(row['metadata'])['reported_micro_usd']
         posted = sum(totals.values())
-        reserved = sum(max(0, r[0]-r[1]) for r in db.execute("SELECT amount_micro_usd,provisional_micro_usd FROM reservations WHERE run_id=? AND state IN ('reserved','running','unknown')", (run_id,)))
+        reserved = sum(max(0, r[0]-r[1]-r[2]) for r in db.execute("""SELECT r.amount_micro_usd,r.provisional_micro_usd,
+            COALESCE((SELECT SUM(c.amount_micro_usd) FROM research_reservation_children l JOIN reservations c ON c.reservation_id=l.child_reservation_id WHERE l.parent_reservation_id=r.reservation_id),0)
+            FROM reservations r WHERE r.run_id=? AND r.state IN ('reserved','running','unknown')""", (run_id,)))
         held = sum(r[0] for r in db.execute('SELECT amount_micro_usd FROM holds WHERE run_id=?', (run_id,)))
         available = posted - reserved - held
         return dict(run_id=run_id, mode=run['mode'], posted_micro_usd=posted, reserved_micro_usd=reserved,
@@ -303,11 +306,73 @@ class EconomyService:
                 return self._reservation(db, rid)
             return self._operation(db, run_id, 'reserve', idempotency_key, args, action)
 
+    def reservation_children(self, parent_reservation_id):
+        """Return ordinary reservations bound to one research group, including closed children."""
+        with self._read() as db:
+            parent = self._reservation(db, parent_reservation_id)
+            if parent['provider'] != 'research.collect':
+                raise EconomyError('invalid_research_parent', 'Child allocations require a research.collect parent', 422)
+            return [self._reservation(db, row[0]) for row in db.execute(
+                'SELECT child_reservation_id FROM research_reservation_children WHERE parent_reservation_id=? ORDER BY rowid', (parent_reservation_id,))]
+
+    @staticmethod
+    def _child_limits(limits, parent_limits):
+        if not isinstance(limits, dict) or not limits or set(limits) - LIMIT_NAMES:
+            raise EconomyError('invalid_limits', 'Supply recognized enforceable child provider limits', 422)
+        for key, value in limits.items():
+            money(value, positive=True)
+            cap = parent_limits.get(key)
+            if key == 'max_output_tokens' and 'max_tokens' in parent_limits:
+                cap = min(cap, parent_limits['max_tokens']) if cap is not None else parent_limits['max_tokens']
+            if cap is not None and value > cap:
+                raise EconomyError('child_limit_exceeded', 'Child provider limit exceeds its parent authorization', 422)
+
+    def reserve_child(self, parent_reservation_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits):
+        amount = money(amount_micro_usd)
+        for value in (parent_reservation_id, action_id, provider, account):
+            ident(value)
+        if provider not in RESEARCH_CHILD_PROVIDERS:
+            raise EconomyError('invalid_child_provider', 'Research children require an allowed tool provider', 422)
+        with self._tx() as db:
+            parent = self._reservation(db, parent_reservation_id)
+            self._child_limits(limits, parent['limits'])
+            args = dict(parent_reservation_id=parent_reservation_id, action_id=action_id,
+                        amount_micro_usd=amount, provider=provider, account=account, limits=limits)
+            def action():
+                if (parent['provider'] != 'research.collect' or parent['state'] not in ('running', 'unknown')
+                        or parent['provisional_micro_usd'] != 0 or parent['actual_micro_usd'] not in (None, 0)):
+                    raise EconomyError('invalid_research_parent', 'Parent must be an open, dispatched zero-direct-cost research group')
+                if parent['account'] != account:
+                    raise EconomyError('provider_mismatch', 'Child must use the parent account')
+                if db.execute('SELECT 1 FROM research_reservation_children WHERE child_reservation_id=?', (parent_reservation_id,)).fetchone():
+                    raise EconomyError('nested_research_group', 'Research child groups cannot be nested')
+                if db.execute('SELECT 1 FROM reservations WHERE run_id=? AND action_id=?', (parent['run_id'], action_id)).fetchone():
+                    raise EconomyError('action_exists', 'Action already has a reservation; reconcile before retry')
+                allocated = db.execute('SELECT COALESCE(SUM(c.amount_micro_usd),0) FROM research_reservation_children l JOIN reservations c ON c.reservation_id=l.child_reservation_id WHERE l.parent_reservation_id=?', (parent_reservation_id,)).fetchone()[0]
+                if amount > parent['amount_micro_usd'] - allocated:
+                    raise EconomyError('job_budget_exceeded', 'Child quotes exceed the original research job cap')
+                if self._balance(db, parent['run_id'])['available_micro_usd'] < 0:
+                    raise EconomyError('insufficient_funds', 'New liability invalidated this research authorization')
+                rid, stamp = str(uuid.uuid4()), now()
+                db.execute('INSERT INTO reservations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                           (rid, parent['run_id'], action_id, amount, provider, account, encode(limits), 'reserved', None, 0, stamp, stamp))
+                db.execute('INSERT INTO research_reservation_children VALUES(?,?,?)', (parent_reservation_id, rid, stamp))
+                self._event(db, parent['run_id'], 'economy.reserved', {'reservation_id': rid, **{k: v for k, v in args.items() if k != 'parent_reservation_id'}})
+                self._event(db, parent['run_id'], 'economy.research_child_reserved', {'parent_reservation_id': parent_reservation_id, 'child_reservation_id': rid, 'amount_micro_usd': amount})
+                return self._reservation(db, rid)
+            return self._operation(db, parent['run_id'], 'reserve_child', idempotency_key, args, action)
+
     def start_reservation(self, reservation_id):
         with self._tx() as db:
             row = self._reservation(db, reservation_id)
             if row['state'] != 'reserved':
                 raise EconomyError('duplicate_dispatch', 'Action already dispatched or closed; reconcile before retry')
+            link = db.execute('SELECT parent_reservation_id FROM research_reservation_children WHERE child_reservation_id=?', (reservation_id,)).fetchone()
+            if link:
+                parent = self._reservation(db, link[0])
+                if (parent['state'] not in ('running', 'unknown') or parent['provider'] != 'research.collect'
+                        or (parent['run_id'], parent['account']) != (row['run_id'], row['account'])):
+                    raise EconomyError('closed_research_parent', 'Research child dispatch requires its matching open parent')
             if self._balance(db, row['run_id'])['available_micro_usd'] < 0:
                 raise EconomyError('insufficient_funds', 'New liability invalidated this authorization; reconcile or cancel before dispatch')
             db.execute("UPDATE reservations SET state='running',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
@@ -317,6 +382,8 @@ class EconomyService:
     def cancel_reservation(self, reservation_id):
         with self._tx() as db:
             row = self._reservation(db, reservation_id)
+            if db.execute('SELECT 1 FROM research_reservation_children WHERE parent_reservation_id=?', (reservation_id,)).fetchone():
+                raise EconomyError('research_parent_cancel_forbidden', 'Finalize a research parent at zero direct cost; child liabilities must remain visible')
             if row['state'] == 'cancelled':
                 return row
             if row['state'] != 'reserved':
@@ -350,6 +417,8 @@ class EconomyService:
         if actual_micro_usd is not None:
             money(actual_micro_usd)
         row = self._reservation(db, reservation_id)
+        if row['provider'] == 'research.collect' and actual_micro_usd not in (None, 0):
+            raise EconomyError('research_parent_direct_cost', 'Research orchestration settles only zero direct cost; settle each child provider charge separately', 422)
         if (row['provider'], row['account']) != (provider, account):
             raise EconomyError('provider_mismatch', 'Charge must belong to the reserved provider/account')
         if row['state'] == 'cancelled':
@@ -526,8 +595,11 @@ class EconomyService:
                 reservation=self._reservation(db,reservation_id)
                 if reservation['run_id']!=payment['run_id']:
                     raise EconomyError('provider_mismatch','Reservation belongs to another run')
-                final=reservation['state']=='settled'
-                cost=reservation['actual_micro_usd'] if final else reservation['provisional_micro_usd']
+                members = [reservation]
+                members.extend(self._reservation(db, child[0]) for child in db.execute(
+                    'SELECT child_reservation_id FROM research_reservation_children WHERE parent_reservation_id=? ORDER BY rowid', (reservation_id,)))
+                final=all(member['state'] in ('settled', 'cancelled') for member in members)
+                cost=sum(member['actual_micro_usd'] if member['state']=='settled' else member['provisional_micro_usd'] for member in members)
             revision=db.execute('SELECT COALESCE(MAX(sequence),0) FROM events WHERE run_id=?',(payment['run_id'],)).fetchone()[0]
             return {'run_id':payment['run_id'],'job_id':payment['job_id'],'payment_id':payment_id,'revision':revision,'provider_revision':payment['revision'],'mode':mode,'status':payment['status'],'currency':'USD','receipts_micro_usd':receipts,'refunds_micro_usd':refunds,'fees_micro_usd':fees,'earned_micro_usd':earned,'operating_cost_micro_usd':cost,'costs_final':final,'pending_liability_micro_usd':payment['pending_liability_micro_usd']}
 

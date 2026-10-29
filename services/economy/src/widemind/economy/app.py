@@ -274,6 +274,16 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         authorize(role, {"operator", "gateway"})
         return economy.start_reservation(reservation_id)
 
+    @app.post("/v1/reservations/{parent_reservation_id}/children")
+    def reserve_child(parent_reservation_id: Identifier, body: ReserveInput, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return economy.reserve_child(parent_reservation_id, **body.model_dump())
+
+    @app.get("/v1/reservations/{parent_reservation_id}/children")
+    def reservation_children(parent_reservation_id: Identifier, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return economy.reservation_children(parent_reservation_id)
+
     @app.post("/v1/reservations/{reservation_id}/settle")
     def settle(reservation_id: Identifier, body: SettleInput, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway"})

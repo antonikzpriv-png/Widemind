@@ -4,6 +4,8 @@ Versions 1--4 predate the fork and have a common format. Opening such an
 unmarked database explicitly chooses its owner family, atomically with upgrade.
 Unmarked version 5 must have that family's complete, unambiguous footprint.
 Neither user_version=5 alone nor matching cash tables permits conversion.
+Service-v1 schema 6 additionally requires its existing immutable family marker
+and complete research-child allocation footprint; it is never adopted unmarked.
 """
 from __future__ import annotations
 
@@ -12,6 +14,8 @@ import sqlite3
 TABLE = 'economy_database_family'
 RUNTIME_TABLES = frozenset({'runtime_authorizations', 'runtime_receipts', 'runtime_dispatches', 'runtime_rearms'})
 TRIGGERS = ('economy_family_no_update', 'economy_family_no_delete', 'economy_family_no_replace')
+RESEARCH_TABLE = 'research_reservation_children'
+RESEARCH_TRIGGERS = ('research_children_no_update', 'research_children_no_delete', 'research_children_no_replace', 'research_children_binding')
 BASE_COLUMNS = {
     'runs': {'run_id', 'mode', 'created_at'},
     'ledger': {'entry_id', 'run_id', 'kind', 'category', 'amount_micro_usd', 'reference', 'metadata'},
@@ -42,7 +46,8 @@ CENTRAL_COLUMNS = {
 def check_family(db, family, error, *, require_marker=False, allow_future=False):
     """Read-only verification; callers must invoke before journal/migration writes."""
     version = db.execute('PRAGMA user_version').fetchone()[0]
-    if not allow_future and version not in (0, 1, 2, 3, 4, 5):
+    supported = (0, 1, 2, 3, 4, 5, 6) if family == 'service-v1' else (0, 1, 2, 3, 4, 5)
+    if not allow_future and version not in supported:
         raise error('future_schema', 'Unsupported accounting schema; do not downgrade')
     schema = {row[1]: row[0] for row in db.execute('SELECT type,name FROM sqlite_master')}
     marked = TABLE in schema
@@ -61,13 +66,20 @@ def check_family(db, family, error, *, require_marker=False, allow_future=False)
             reject()
     elif require_marker:
         reject()
+    if RESEARCH_TABLE in schema and (family != 'service-v1' or version < 6):
+        reject()
+    if version == 6:
+        if (family != 'service-v1' or not marked or schema.get(RESEARCH_TABLE) != 'table'
+                or not {'parent_reservation_id', 'child_reservation_id', 'created_at'}.issubset({row[1] for row in db.execute('PRAGMA table_info(' + RESEARCH_TABLE + ')')})
+                or any(schema.get(name) != 'trigger' for name in RESEARCH_TRIGGERS)):
+            reject()
     footprint = RUNTIME_TABLES.intersection(schema)
     complete = footprint == RUNTIME_TABLES and all(schema[name] == 'table' for name in RUNTIME_TABLES)
     if footprint and (family != 'central-v1' or not complete or (version != 5 and not marked)):
         reject()
     if version == 5 and family == 'central-v1' and not complete:
         reject()
-    if version == 5:
+    if version in (5, 6):
         expected = {**BASE_COLUMNS, **(CENTRAL_COLUMNS if family == 'central-v1' else {})}
         for name, columns in expected.items():
             if schema.get(name) != 'table' or not columns.issubset({row[1] for row in db.execute('PRAGMA table_info(' + name + ')')}):
