@@ -1,9 +1,20 @@
 # Tools runtime setup
 
-This slice selects Python 3.11+, Linux/POSIX filesystem controls, SQLite, and
+The integrated package requires Python 3.12+, Linux/POSIX filesystem controls, SQLite, and
 optional Pillow, Playwright, and Docker. It is an operator-driven tools gateway;
 it does not run an autonomous scheduler, website, payments, or a customer queue.
 There is no timer that makes paid model calls while idle.
+
+The SDK is preserved as an owner-operated development tool; it is not registered
+as a Node runtime tool provider. Its local development wallet must not fund
+central runtime actions. When `WIDEMIND_ECONOMY_URL`,
+`WIDEMIND_RUNTIME_AUTH_SECRET`, or the owner policy
+`accounting_authority: "central"` selects central accounting, new paid SDK calls
+stop before preparation or dispatch. An explicit standalone setting cannot
+override inherited central configuration. Free tools, receipt replay and
+observational recovery remain available. A future runtime adapter must use the
+central authorization and settlement contracts in
+[RUNTIME_ECONOMY.md](RUNTIME_ECONOMY.md), without seeding a second wallet.
 
 ## Install and first local deliverable
 
