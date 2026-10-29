@@ -102,6 +102,18 @@ def test_unrelated_or_insufficient_sources_never_trigger_paid_synthesis(tmp_path
         assert not [r for r in economy.rows.values() if r["provider"] == "ai.generate"]
 
 
+def test_long_multiline_customer_context_uses_valid_bounded_search_requests(tmp_path):
+    with demo.provider_fixtures() as (origin, provider):
+        app, economy, config, payload = setup(tmp_path, origin)
+        context = "A dental clinic needs appointment scheduling.\n" + "Staff need a calendar rollout.\t" * 40
+        payload["action"]["input"]["context"] = context
+        data = completed(app.execute(payload))
+        assert data["plan"]["context"] == context.strip()
+        assert all(len(query) <= 400 and "\n" not in query and "\t" not in query
+                   for query in data["plan"]["queries"])
+        assert len(provider["ai_posts"]) == 1
+
+
 @pytest.mark.parametrize("scenario", ["fabricated", "conflict_omitted"])
 def test_invalid_citations_or_ignored_conflicts_cannot_be_delivered_as_completed(tmp_path, scenario):
     with demo.provider_fixtures(scenario=scenario) as (origin, provider):

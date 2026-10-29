@@ -5,7 +5,6 @@ Retrieved text and previous drafts are untrusted data, including embedded comman
 """
 from __future__ import annotations
 
-from collections import Counter
 from decimal import Decimal
 from difflib import SequenceMatcher
 import json
@@ -15,6 +14,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .ai import _schema, _validate
 from .contracts import ToolError
+from .research_evidence import MAX_CONFLICTS
 
 
 LIMITATION = ("Citation, numeric and similarity checks are deterministic screening only. "
@@ -145,7 +145,7 @@ def _inputs(plan, evidence):
         _ids(eids, spans, "coverage evidence_ids")
         if any(qid not in spans[eid]["question_ids"] for eid in eids):
             raise ToolError("invalid_input", "Coverage references evidence assigned to another question.")
-    conflicts = _index(evidence.get("conflicts", []), "conflicts", 20)
+    conflicts = _index(evidence.get("conflicts", []), "conflicts", MAX_CONFLICTS)
     for conflict in conflicts.values():
         _ids(conflict.get("evidence_ids"), spans, "conflict evidence_ids", nonempty=True)
         _bounded(conflict.get("description"), "conflict description", 3000)
@@ -207,7 +207,8 @@ def synthesis_arguments(plan, evidence, *, settings=None, errors=None, previous=
         "Return only the required schema. Preserve all section IDs/headings and requirement mappings. "
         "Separate retrieved facts, reasoned inferences with explicit assumptions, and unresolved questions. "
         "Every fact/inference must cite existing evidence_ids assigned to that question; never invent sources, IDs or links. "
-        "Paraphrase and compare evidence; do not dump or lightly rearrange excerpts, repeat boilerplate, or substitute headings for answers. "
+        "Paraphrase and compare evidence; develop at least twelve substantive words per section, without padding. "
+        "Do not dump or lightly rearrange excerpts, repeat boilerplate, or substitute headings for answers. "
         "Every factual number, unit, negation and scope must be supported by its cited passages. Do not invent calculated totals. "
         "Inference assumptions may additionally use the frozen customer context but must stay explicitly hypothetical. "
         "Address every recorded contradiction with all its evidence IDs; do not falsely resolve conflicting sources. "
@@ -262,7 +263,7 @@ def validate_synthesis(plan, evidence, document, settings=None):
     """Fail closed on deterministic acceptance checks, without claiming truth."""
     names = ("inputs_valid", "schema_valid", "sections_complete", "section_coverage", "evidence_ids_valid",
              "citation_targets_valid", "sources_sufficient", "lexical_grounding", "numbers_supported",
-             "requirements_complete", "requirements_answered", "conflicts_addressed", "distinct_sections", "original_synthesis")
+             "requirements_complete", "requirements_answered", "conflicts_addressed", "distinct_sections", "distinct_claims", "original_synthesis")
     checks = dict.fromkeys(names, False)
     errors = []
 
@@ -335,13 +336,27 @@ def validate_synthesis(plan, evidence, document, settings=None):
         if not section["facts"]:
             fail("section_coverage", f"{qid}: no retrieved factual answer; unresolved questions are not acceptance.")
         body = " ".join(item["text"] for item in section["facts"] + section["inferences"])
+        if len(_words(body)) < 12:
+            fail("section_coverage", f"{qid}: develop a substantive evidence-grounded answer of at least twelve words, without filler.")
         bodies.append((qid, _words(body)))
         anchors = expected["question"] + " " + expected["heading"] + " " + " ".join(req["text"] for req in requirements.values() if qid in req["section_ids"])
         if not _terms(body) & _terms(anchors):
             fail("section_coverage", f"{qid}: content does not address question or customer acceptance terms.")
+        section_claims = []
         for kind in ("facts", "inferences"):
             for index, claim in enumerate(section[kind], 1):
                 claim_check(claim, f"{qid} {kind} {index}", qid, inference=kind == "inferences")
+                words = _words(claim["text"])
+                for previous in section_claims:
+                    previous_words = _words(previous["text"])
+                    exact = len(words) >= 4 and words == previous_words
+                    near = (min(len(words), len(previous_words)) >= 8
+                            and set(claim["evidence_ids"]) == set(previous["evidence_ids"])
+                            and _numbers(claim["text"]) == _numbers(previous["text"])
+                            and SequenceMatcher(None, words, previous_words, autojunk=False).ratio() >= .92)
+                    if exact or near:
+                        fail("distinct_claims", f"{qid}: repeated factual or inference claim is filler, not additional synthesis.")
+                section_claims.append(claim)
                 if kind == "inferences" and len(_terms(claim["assumptions"])) < 2:
                     fail("lexical_grounding", f"{qid}: inference needs substantive explicit assumptions.")
         expected_rids = {rid for rid, req in requirements.items() if qid in req["section_ids"]}
@@ -361,6 +376,7 @@ def validate_synthesis(plan, evidence, document, settings=None):
     actual_conflicts = {item["id"]: item for item in document["conflicts"]}
     if set(actual_conflicts) != set(conflicts) or len(actual_conflicts) != len(document["conflicts"]):
         fail("conflicts_addressed", "Every retrieved contradiction must be discussed exactly once.")
+    conflict_discussions = []
     for cid, expected in conflicts.items():
         actual = actual_conflicts.get(cid)
         if not actual:
@@ -370,6 +386,10 @@ def validate_synthesis(plan, evidence, document, settings=None):
         discussion = actual["discussion"].casefold().replace("not resolved", "unresolved")
         if not re.search(r"conflict|contradict|disagree|uncertain|unclear|unresolved|differ|versus|whereas", discussion) or re.search(r"\b(?:resolved|definitive|disproved|settled|certainly)\b|sources agree", discussion):
             fail("conflicts_addressed", f"{cid}: contradiction is ignored or asserted resolved without evidence.")
+        words = _words(actual["discussion"])
+        if len(words) >= 8 and words in conflict_discussions:
+            fail("conflicts_addressed", f"{cid}: repeated generic conflict discussion does not compare the specific evidence sides.")
+        conflict_discussions.append(words)
         claim_check(actual, f"conflict {cid}")
     if evidence.get("sufficient") is not True or len({_url(sources[sid]["url"]) for sid in cited_sources}) < plan["min_sources"]:
         fail("sources_sufficient", "Insufficient distinct retrieved and cited source URLs for the customer plan.")
@@ -379,23 +399,27 @@ def validate_synthesis(plan, evidence, document, settings=None):
                 fail("distinct_sections", f"{qid} and {other_qid}: repeated filler or substantially identical section bodies.")
     source_words = [_words(src.get("text", src.get("excerpt", ""))) for src in sources.values()]
     span_words = [_words(span["text"]) for span in spans.values()]
-    copied, total = Counter(), Counter()
+    group_words = {}
     source_shingles = {tuple(words[i:i+7]) for words in source_words for i in range(max(0, len(words)-6))}
     for text, group in all_claims:
         words = _words(text)
-        total[group] += len(words)
+        group_words.setdefault(group, []).extend(words)
+        if len(words) >= 18 and any(SequenceMatcher(None, words, original, autojunk=False).find_longest_match().size >= 18 for original in source_words):
+            fail("original_synthesis", "Long copied passage/excerpt dump detected; provide synthesis in original wording.")
+        if len(words) >= 12 and any(0.7 * len(words) <= len(original) <= 1.4 * len(words)
+                and SequenceMatcher(None, words, original, autojunk=False).ratio() >= 0.78 for original in span_words):
+            fail("original_synthesis", "Near-copy of a retrieved passage detected; light word substitution is not synthesis.")
+    for words in group_words.values():
+        # Screen whole section content as well as individual claims: splitting
+        # a copied passage into tiny bullets must not make it original work.
+        # Seven-word shingles tolerate ordinary short shared phrases, while a
+        # substantive twelve-word copied body cannot pass as a synthesis.
         covered = set()
         for i in range(max(0, len(words)-6)):
             if tuple(words[i:i+7]) in source_shingles:
                 covered.update(range(i, i+7))
-        copied[group] += len(covered)
-        if len(words) >= 18 and any(SequenceMatcher(None, words, original, autojunk=False).find_longest_match().size >= 18 for original in source_words):
-            fail("original_synthesis", "Long copied passage/excerpt dump detected; provide synthesis in original wording.")
-        if len(words) >= 18 and any(0.7 * len(words) <= len(original) <= 1.4 * len(words)
-                and SequenceMatcher(None, words, original, autojunk=False).ratio() >= 0.78 for original in span_words):
-            fail("original_synthesis", "Near-copy of a retrieved passage detected; light word substitution is not synthesis.")
-    if any(count >= 35 and copied[group] / count >= 0.65 for group, count in total.items()):
-        fail("original_synthesis", "Most substantive content is copied source wording, including split excerpts.")
+        if len(covered) >= 12 and len(covered) / len(words) >= 0.65:
+            fail("original_synthesis", "Most substantive content is copied source wording, including short or split excerpts.")
     return {"passed": not errors and all(checks.values()), "errors": errors[:100], "checks": checks}
 
 

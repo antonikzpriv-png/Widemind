@@ -30,6 +30,7 @@ _ALIASES = {word: group.split()[0] for group in _GROUPS for word in group.split(
 _NUMBERS = re.compile(r"(?<!\w)(?:[$€£]\s*)?\d+(?:[,.]\d+)*(?:\s*(?:%|percent|million|billion|thousand|USD|EUR|GBP))?", re.I)
 _NEGATIVE = re.compile(r"\b(?:no|not|never|cannot|unavailable|prohibited|forbidden|unsupported|disallow(?:ed|s)?)\b|\bcan['’]t\b", re.I)
 _POSITIVE = re.compile(r"\b(?:available|allowed|permitted|supported|supports|enabled|eligible|can|does|is|are)\b", re.I)
+MAX_CONFLICTS = 24
 
 
 def _error(message):
@@ -125,7 +126,13 @@ def make_plan(arguments, settings):
             requirements.append({"id": f"r{index}", "text": instruction, "section_ids": [section["id"]]})
     queries = []
     for section in sections:
-        query = " ".join(filter(None, [topic, section["heading"], context]))[:1000]
+        # Search accepts at most 400 printable characters. Keep room for the
+        # section and customer context even when the topic reaches its limit;
+        # multiline intake text must not become invalid HTTP search input.
+        def fragment(value, maximum):
+            return " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", value).split())[:maximum]
+        query = " ".join(filter(None, [fragment(topic, 200), fragment(section["heading"], 100),
+                                       fragment(context, 98)]))
         if query not in queries:
             queries.append(query)
     return {"version": 1, "topic": topic, "context": context, "as_of": as_of,
@@ -243,7 +250,7 @@ def _conflicts(spans):
                 kind = "numerical values" if numerical else "polarity"
                 conflicts.append({"id": f"C{len(conflicts) + 1}", "evidence_ids": [first["id"], second["id"]],
                                   "description": f"Potential {kind} discrepancy in similarly scoped claims; compare dates, units and qualifications before drawing a conclusion."})
-                if len(conflicts) >= 24:
+                if len(conflicts) >= MAX_CONFLICTS:
                     return conflicts
     return conflicts
 
@@ -368,7 +375,7 @@ def evaluate_sources(plan, fetched, settings):
     conflicts = _conflicts(spans)
     eligible_ids = {span["source_id"] for span in spans if any(span["id"] in values for values in coverage.values())}
     if len(eligible_ids) < checked["min_sources"]:
-        issues.append(f"Insufficient independent relevant current sources: {len(eligible_ids)} of {checked['min_sources']} required.")
+        issues.append(f"Insufficient distinct relevant current sources: {len(eligible_ids)} of {checked['min_sources']} required.")
     missing = [key for key, value in coverage.items() if not value]
     if missing:
         issues.append("No eligible evidence covers customer questions: " + ", ".join(missing) + ".")

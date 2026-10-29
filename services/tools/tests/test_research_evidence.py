@@ -54,6 +54,17 @@ def test_customer_specific_frozen_plan_is_deterministic_and_preserves_scope():
     json.dumps(first, allow_nan=False)
 
 
+def test_search_queries_fit_adapter_bounds_for_long_multiline_customer_scope():
+    arguments = request(topic="Dublin school solar canopy " * 18,
+                        context="Kilkenny board:\n" + "site-specific solar canopy needs\t" * 40)
+    plan = make_plan(arguments, {})
+    assert plan["context"] == arguments["context"].strip()
+    for section, query in zip(plan["sections"], plan["queries"]):
+        assert 1 <= len(query) <= 400
+        assert section["heading"] in query and "Kilkenny" in query
+        assert all(ord(character) >= 32 and ord(character) != 127 for character in query)
+
+
 @pytest.mark.parametrize("changes", [
     {"topic": ""}, {"topic": 5}, {"sections": []}, {"sections": ["a"] * 9},
     {"sections": ["x" * 101]}, {"min_sources": True}, {"min_sources": 0},

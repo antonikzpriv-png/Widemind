@@ -6,6 +6,7 @@ import pytest
 
 from widemind.tools.ai import AIAdapter, _schema, _validate
 from widemind.tools.contracts import ToolError
+from widemind.tools.research_evidence import MAX_CONFLICTS, evaluate_sources, make_plan
 from widemind.tools.research_synthesis import (
     LIMITATION, render_document, synthesis_arguments, validate_synthesis,
 )
@@ -142,6 +143,84 @@ def test_excerpt_dump_and_split_excerpts_fail(sample):
     assert not result["passed"] and not result["checks"]["original_synthesis"]
 
 
+@pytest.mark.parametrize("split_words, near_copy", [(None, False), (4, False), (None, True)])
+def test_short_whole_near_or_tiny_split_excerpt_dump_cannot_pass_as_synthesis(split_words, near_copy):
+    plan = make_plan({"topic": "dental appointment software", "sections": ["Pricing"], "min_sources": 2}, {})
+    passages = [
+        "Dental appointment software pricing costs $25 each month for clinics needing patient reminders and scheduling.",
+        "Dental appointment software pricing provides calendar support and email confirmations as standard features for clinic subscribers.",
+    ]
+    evidence = evaluate_sources(plan, [{"url": f"https://supplier-{index}.example/pricing", "text": passage}
+                                       for index, passage in enumerate(passages)], {})
+    assert evidence["sufficient"] and not evidence["conflicts"]
+    facts = []
+    rewritten = [
+        "Dental appointment software pricing charges $25 each month for practices needing patient reminders and booking.",
+        "Dental appointment software pricing includes calendar support and email notifications as standard features for dental subscribers.",
+    ]
+    for source_index, span in enumerate(evidence["spans"]):
+        text = rewritten[source_index] if near_copy else span["text"]
+        words = text.split()
+        chunks = [text] if split_words is None else [" ".join(words[index:index + split_words])
+                    for index in range(0, len(words), split_words)]
+        facts.extend({"text": chunk, "evidence_ids": [span["id"]]} for chunk in chunks)
+    document = {"sections": [{"id": "q1", "heading": "Pricing", "facts": facts, "inferences": [],
+                  "unresolved_questions": [], "requirement_ids": ["r1"]}], "conflicts": [],
+                "requirements": [{"id": "r1", "status": "answered", "section_ids": ["q1"]}]}
+    result = validate_synthesis(plan, evidence, document)
+    assert not result["passed"] and not result["checks"]["original_synthesis"]
+    if split_words is None:
+        assert all(value for key, value in result["checks"].items() if key != "original_synthesis"), result["errors"]
+
+
+def test_ordinary_tiny_shared_phrases_do_not_make_paraphrase_an_excerpt_dump(sample):
+    plan, evidence, document = sample
+    document["sections"][0]["facts"][0]["text"] = (
+        "Maple offers booking exports for clinic administrators; CSV files allow Cedar clinic to review its appointments."
+    )
+    result = validate_synthesis(plan, evidence, document)
+    assert result["passed"], result["errors"]
+
+
+def test_maximum_emitted_conflict_set_is_accepted_by_synthesis_schema_and_screening():
+    plan = make_plan({"topic": "dental appointment software", "sections": ["Pricing"], "min_sources": 2}, {})
+    evidence = evaluate_sources(plan, [
+        {"url": f"https://supplier-{index}.example/pricing",
+         "text": f"Dental appointment software pricing costs ${index + 20} monthly for clinic scheduling and patient reminders."}
+        for index in range(12)
+    ], {})
+    assert evidence["sufficient"] and len(evidence["conflicts"]) == MAX_CONFLICTS
+    arguments = synthesis_arguments(plan, evidence)
+    assert arguments["schema"]["properties"]["conflicts"]["maxItems"] == MAX_CONFLICTS
+    document = {"sections": [{"id": "q1", "heading": "Pricing", "facts": [{
+                    "text": "Clinic scheduling for dental appointment software has differing monthly pricing across the retrieved supplier pages.",
+                    "evidence_ids": ["E1", "E2"]}], "inferences": [], "unresolved_questions": [], "requirement_ids": ["r1"]}],
+                "conflicts": [{"id": conflict["id"], "discussion":
+                    "Reported dental appointment software pricing is "
+                    + " versus ".join("$" + str(int(eid[1:]) + 19) for eid in conflict["evidence_ids"])
+                    + " monthly for clinic scheduling; this difference remains unresolved.",
+                    "evidence_ids": conflict["evidence_ids"]} for conflict in evidence["conflicts"]],
+                "requirements": [{"id": "r1", "status": "answered", "section_ids": ["q1"]}]}
+    _validate(document, arguments["schema"])
+    result = validate_synthesis(plan, evidence, document)
+    assert result["passed"], result["errors"]
+
+
+@pytest.mark.parametrize("near_copy", [False, True])
+def test_repeating_a_claim_inside_one_section_is_not_additional_synthesis(sample, near_copy):
+    plan, evidence, document = sample
+    if near_copy:
+        original = "Maple offers booking exports for clinic administrators; CSV files allow Cedar clinic to review its appointments."
+        document["sections"][0]["facts"][0]["text"] = original
+        duplicate = copy.deepcopy(document["sections"][0]["facts"][0])
+        duplicate["text"] = original.replace("appointments", "bookings")
+    else:
+        duplicate = copy.deepcopy(document["sections"][0]["facts"][0])
+    document["sections"][0]["facts"].append(duplicate)
+    result = validate_synthesis(plan, evidence, document)
+    assert not result["passed"] and not result["checks"]["distinct_claims"]
+
+
 @pytest.mark.parametrize("mutation", ["missing_requirement", "unresolved", "missing_section", "incorrect_mapping", "no_reciprocal_requirement"])
 def test_missing_or_unanswered_customer_acceptance_rejected(sample, mutation):
     plan, evidence, document = sample
@@ -176,6 +255,21 @@ def test_real_conflicting_evidence_requires_both_sides_and_explicit_uncertainty(
     assert result["passed"], result["errors"]
     rendered = render_document(plan, evidence, document, result)
     assert "[^S3]" in rendered and "https://birch.example/notice" in rendered and "unresolved" in rendered
+
+
+def test_repeating_generic_discussion_across_conflicts_is_filler(sample):
+    plan, evidence, document = with_conflict(sample)
+    text = "Birch's Dublin onboarding service closes at 15:00 UTC on weekdays."
+    evidence["sources"].append({"id": "S4", "url": "https://birch.example/another-notice", "title": "Another Birch notice", "text": text})
+    evidence["spans"].append({"id": "E6", "source_id": "S4", "text": text, "start": 0, "end": len(text), "question_ids": ["q2"]})
+    evidence["coverage"]["q2"].append("E6")
+    evidence["conflicts"].append({"id": "C2", "description": "Another reported onboarding cutoff.", "evidence_ids": ["E4", "E6"]})
+    generic = "Birch's weekday onboarding cutoff in Dublin is uncertain because its service pages differ; the timing remains unresolved."
+    document["conflicts"][0]["discussion"] = generic
+    document["conflicts"].append({"id": "C2", "discussion": generic, "evidence_ids": ["E4", "E6"]})
+    result = validate_synthesis(plan, evidence, document)
+    assert not result["passed"] and not result["checks"]["conflicts_addressed"]
+    assert any("repeated generic conflict" in error for error in result["errors"])
 
 
 @pytest.mark.parametrize("mutation", ["ignored", "one_side", "invented_resolution", "duplicate"])
