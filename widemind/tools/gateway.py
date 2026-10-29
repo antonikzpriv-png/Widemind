@@ -202,11 +202,11 @@ class LiveTools:
                     before_dispatch()
                     self.db.execute("UPDATE tool_actions SET context=? WHERE action_id=?",
                         (encode({"mail_stage": "dispatching", "version": 1}), action_id))
-                result = self.gmail.send(action_id, arguments, before_dispatch=mail_dispatch_guard)
+                result = self.gmail.send(action_id, arguments, before_dispatch=mail_dispatch_guard, before_network=before_dispatch)
                 outcome = Outcome(result["state"], result.get("data", {}), result.get("reason", ""))
                 return self._save(action_id, outcome)
             if action == "gmail.read":
-                result = self.gmail.read(arguments)
+                result = self.gmail.read(arguments, before_dispatch=before_dispatch)
                 result["delivery_updates"] = self._acknowledge_messages(result.get("messages", []))
                 return self._save(action_id, Outcome("succeeded", result))
             authorization = self.economy.begin_execution(run_id=run_id, job_id=job_id, reservation_id=reservation_id,
@@ -293,7 +293,9 @@ class LiveTools:
                 result = self.gmail.reconcile_send(action_id)
                 return self._save(action_id, Outcome(result["state"], result.get("data", {}), result.get("reason", "")))
             if row["action"] == "gmail.read":
-                result = self.gmail.read(request["arguments"])
+                generation = self._generation(row["run_id"])
+                result = self.gmail.read(request["arguments"],
+                    before_dispatch=lambda: self._allow(row["run_id"], "gmail.read", generation))
                 result["delivery_updates"] = self._acknowledge_messages(result.get("messages", []))
                 return self._save(action_id, Outcome("succeeded", result))
             context = json.loads(row["context"] or "{}")
@@ -301,7 +303,10 @@ class LiveTools:
                 # Dispatch is structurally after the committed context write. Its
                 # absence proves this gateway did not send an inference request.
                 return self._recover_before_dispatch(row, request)
-            result = self.research.reconcile(action_id, {"_sources": context["sources"], "_scope": context["scope"]})
+            if "pricing" not in context:
+                return Outcome("unknown", reason="original research pricing unavailable; retain liability for reviewed reconciliation")
+            result = self.research.reconcile(action_id, {"_sources": context["sources"], "_scope": context["scope"],
+                                                       "_pricing": context["pricing"]})
             return self._finish_research(action_id, result)
         except (TransportError, ValueError, KeyError, TypeError, AttributeError):
             return Outcome("unknown", reason="provider reconciliation unavailable")

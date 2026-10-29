@@ -4,14 +4,12 @@ from html.parser import HTMLParser
 import ipaddress
 import json
 import socket
-import queue
-import threading
 import time
 import urllib.parse
 
 from widemind.business.policy import integer
 from widemind.business.services import ResearchBrief, single_line, text, web_url
-from .http import HTTPS, TransportError
+from .http import HTTPS, TransportError, resolve_bounded
 
 
 @dataclass(frozen=True)
@@ -82,33 +80,6 @@ class _EvidenceHTML(HTMLParser):
             self.words.append(data)
 
 
-_DNS_SLOTS = threading.BoundedSemaphore(4)
-
-
-def _resolve_bounded(resolver, host, timeout):
-    # libc DNS resolution does not honor socket timeouts. A bounded number of
-    # daemon lookups ensures an unresponsive resolver cannot hang request work or
-    # create an unbounded thread pool. Timeout leaves this attempt unexecuted.
-    if timeout <= 0 or not _DNS_SLOTS.acquire(blocking=False):
-        raise ValueError("source DNS capacity/deadline exhausted")
-    result = queue.Queue(maxsize=1)
-    def lookup():
-        try:
-            result.put((True, resolver(host, 443, type=socket.SOCK_STREAM)))
-        except Exception:
-            result.put((False, None))
-        finally:
-            _DNS_SLOTS.release()
-    threading.Thread(target=lookup, daemon=True).start()
-    try:
-        success, value = result.get(timeout=timeout)
-    except queue.Empty as exc:
-        raise ValueError("source DNS deadline exceeded") from exc
-    if not success:
-        raise ValueError("source DNS lookup unavailable")
-    return value
-
-
 def public_source(url, *, resolver=socket.getaddrinfo, allowed_hosts=(), timeout=5):
     url = web_url(url)
     parsed = urllib.parse.urlsplit(url)
@@ -118,10 +89,10 @@ def public_source(url, *, resolver=socket.getaddrinfo, allowed_hosts=(), timeout
     if allowed_hosts and host not in {h.lower() for h in allowed_hosts}:
         raise ValueError("source host is outside configured allowlist")
     try:
-        addresses = {entry[4][0] for entry in _resolve_bounded(resolver, host, timeout)}
+        addresses = {entry[4][0] for entry in resolve_bounded(resolver, host, 443, timeout)}
         if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
             raise ValueError("source must resolve only to public addresses")
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TransportError) as exc:
         raise ValueError("source destination could not be verified") from exc
     return url
 
@@ -135,13 +106,24 @@ class OpenAIResearch:
         self.resolver = resolver
 
     def cost(self, input_tokens, output_tokens, cached_input_tokens=0):
+        return self._cost(input_tokens, output_tokens, cached_input_tokens, self.pricing())
+
+    def pricing(self):
+        return {"input": self.config.input_micro_usd_per_million_tokens,
+                "output": self.config.output_micro_usd_per_million_tokens,
+                "cached_input": self.config.cached_input_micro_usd_per_million_tokens}
+
+    @staticmethod
+    def _cost(input_tokens, output_tokens, cached_input_tokens, pricing):
         integer(input_tokens, "input tokens")
         integer(output_tokens, "output tokens")
         integer(cached_input_tokens, "cached input tokens", 0, input_tokens)
-        input_numerator = ((input_tokens - cached_input_tokens) * self.config.input_micro_usd_per_million_tokens +
-                           cached_input_tokens * self.config.cached_input_micro_usd_per_million_tokens)
+        ordinary = integer(pricing["input"], "original input price", 1)
+        output = integer(pricing["output"], "original output price", 1)
+        cached = integer(pricing["cached_input"], "original cached input price", 0, ordinary)
+        input_numerator = ((input_tokens - cached_input_tokens) * ordinary + cached_input_tokens * cached)
         return ((input_numerator + 999999) // 1000000 +
-                (output_tokens * self.config.output_micro_usd_per_million_tokens + 999999) // 1000000)
+                (output_tokens * output + 999999) // 1000000)
 
     def validate_scope(self, arguments):
         scope = {"topic": arguments.get("topic"), "sections": arguments.get("sections"),
@@ -174,7 +156,7 @@ class OpenAIResearch:
             if remaining <= 0:
                 raise ValueError("whole source-collection deadline exceeded")
             response = self.transport.request("GET", url, headers={"User-Agent": "WideMindResearch/1.0", "Accept": "text/html,text/plain,application/json"},
-                timeout=min(remaining, 15), maximum_bytes=131072)
+                timeout=min(remaining, 15), maximum_bytes=131072, before_dispatch=before_dispatch, public_only=True)
             if time.monotonic() > deadline:
                 raise ValueError("whole source-collection deadline exceeded")
             if response.status != 200:
@@ -226,7 +208,7 @@ class OpenAIResearch:
 
     def prepare(self, action_id, arguments, maximum, *, before_dispatch=None):
         payload, sources, scope = self._request(action_id, arguments, maximum, before_dispatch=before_dispatch)
-        return {"payload": payload, "sources": sources, "scope": scope}
+        return {"payload": payload, "sources": sources, "scope": scope, "pricing": self.pricing()}
 
     def run(self, action_id, arguments, maximum, *, prepared=None, before_dispatch=None):
         try:
@@ -241,7 +223,7 @@ class OpenAIResearch:
             response = self.transport.request("POST", self.API,
                 headers={"Authorization": "Bearer " + self.config.api_key, "Content-Type": "application/json",
                          "Idempotency-Key": action_id}, body=json.dumps(payload).encode(), timeout=self.config.timeout_seconds,
-                maximum_bytes=524288)
+                maximum_bytes=524288, before_dispatch=before_dispatch)
         except ValueError:
             return ProviderResult("failed", actual_micro_usd=0, reference="not-dispatched:" + action_id,
                                   reason="runtime or capability changed before OpenAI dispatch")
@@ -255,8 +237,8 @@ class OpenAIResearch:
                 if "usage" in error_data:
                     reference = single_line(error_data.get("id") or response.headers.get("x-request-id"), "provider error reference", 300)
                     usage = error_data["usage"]
-                    actual = self.cost(usage["prompt_tokens"], usage["completion_tokens"],
-                                       usage.get("prompt_tokens_details", {}).get("cached_tokens", 0))
+                    actual = self._cost(usage["prompt_tokens"], usage["completion_tokens"],
+                                       usage.get("prompt_tokens_details", {}).get("cached_tokens", 0), prepared["pricing"])
                     return ProviderResult("failed", actual_micro_usd=actual, reference=reference,
                                           reason="provider error included billable usage evidence")
             except (ValueError, TypeError, KeyError, AttributeError):
@@ -267,15 +249,15 @@ class OpenAIResearch:
         if response.status != 200:
             return ProviderResult("unknown", reason="OpenAI response does not establish a usage outcome")
         try:
-            return self._completion(response.json(), sources, scope)
+            return self._completion(response.json(), sources, scope, prepared["pricing"])
         except (ValueError, TypeError, KeyError, IndexError):
             return ProviderResult("unknown", reason="OpenAI response or usage evidence malformed")
 
-    def _completion(self, completion, sources, scope):
+    def _completion(self, completion, sources, scope, pricing):
         reference = single_line(completion.get("id"), "completion reference", 300)
         usage = completion["usage"]
         cached = usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
-        actual = self.cost(usage["prompt_tokens"], usage["completion_tokens"], cached)
+        actual = self._cost(usage["prompt_tokens"], usage["completion_tokens"], cached, pricing)
         try:
             choice = completion["choices"][0]
             if choice.get("finish_reason") != "stop":
@@ -304,6 +286,6 @@ class OpenAIResearch:
             # persists the exact evidence bundle and passes it back in arguments.
             scope = arguments["_scope"]
             sources = arguments["_sources"]
-            return self._completion(matches[0], sources, scope)
+            return self._completion(matches[0], sources, scope, arguments["_pricing"])
         except (TransportError, ValueError, TypeError, KeyError, IndexError):
             return ProviderResult("unknown", reason="completion evidence unavailable")

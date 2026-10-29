@@ -66,6 +66,54 @@ def _body_text(payload):
     return "\n".join(pieces)
 
 
+def _aligned_dmarc(header, domain):
+    """Read actual result clauses, never result-like text in CFWS or strings.
+
+    Authentication-Results permits nested comments and quoted property values.
+    Neither is authority to introduce a method/result or a header.from property.
+    Ambiguous, malformed, or multiple DMARC results fail closed.
+    """
+    if not isinstance(header, str) or len(header) > 65536:
+        return False
+    visible, depth, quoted, escaped = [], 0, False, False
+    for char in header:
+        if escaped:
+            escaped = False
+            continue
+        if (depth or quoted) and char == "\\":
+            escaped = True
+        elif depth:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+        elif quoted:
+            if char == '"':
+                quoted = False
+        elif char == "(":
+            visible.append(" ")
+            depth = 1
+        elif char == '"':
+            # A marker prevents removed strings from joining visible tokens.
+            visible.append('""')
+            quoted = True
+        elif char == ")" or ord(char) < 32 and char not in "\r\n\t":
+            return False
+        else:
+            visible.append(char)
+    if depth or quoted or escaped:
+        return False
+    clauses = "".join(visible).lower().split(";")
+    if clauses[0].strip() != "mx.google.com":
+        return False
+    dmarc = [clause.strip() for clause in clauses[1:]
+             if re.match(r"\s*dmarc(?:[\s=/]|$)", clause)]
+    if len(dmarc) != 1 or not re.match(r"dmarc(?:/\d+)?\s*=\s*pass(?:\s|$)", dmarc[0]):
+        return False
+    aligned = re.findall(r"(?:^|\s)header\.from\s*=\s*([a-z0-9.-]+)(?=\s|$)", dmarc[0])
+    return len(aligned) == 1 and aligned[0] == domain
+
+
 def normalize_message(message):
     payload = message.get("payload", {})
     headers = payload.get("headers", [])
@@ -83,12 +131,7 @@ def normalize_message(message):
     # Gmail's top Authentication-Results header must attest aligned DMARC. Do
     # not accept a lower injected lookalike, SPF-only success, or bare From.
     auth = values("authentication-results")
-    verified = False
-    if auth and isinstance(auth[0], str) and auth[0].lstrip().lower().startswith("mx.google.com;"):
-        domain = sender.rsplit("@", 1)[1]
-        passed = re.search(r"(?:^|[;\s])dmarc=pass(?:[;\s(]|$)", auth[0], re.I)
-        aligned = re.search(r"\bheader\.from=([a-z0-9.-]+)(?:[;\s]|$)", auth[0], re.I)
-        verified = bool(passed and aligned and aligned.group(1).lower() == domain)
+    verified = bool(auth and _aligned_dmarc(auth[0], sender.rsplit("@", 1)[1]))
     body = _body_text(payload)
     try:
         command = json.loads(body)
@@ -118,12 +161,14 @@ class GmailClient:
             raise TransportError("Gmail whole-operation deadline exceeded")
         return remaining
 
-    def _headers(self, deadline):
+    def _headers(self, deadline, before_dispatch=None):
         if self._access_token is None or self._expires_at <= self.clock():
+            if before_dispatch:
+                before_dispatch()
             body = urllib.parse.urlencode({"grant_type": "refresh_token", "client_id": self.config.client_id,
                 "client_secret": self.config.client_secret, "refresh_token": self.config.refresh_token}).encode()
             response = self.transport.request("POST", self.TOKEN, headers={"Content-Type": "application/x-www-form-urlencoded"},
-                body=body, timeout=self._remaining(deadline), maximum_bytes=65536)
+                body=body, timeout=self._remaining(deadline), maximum_bytes=65536, before_dispatch=before_dispatch)
             if response.status != 200:
                 raise ValueError("Gmail OAuth unavailable; inspect dedicated-account setup")
             data = response.json()
@@ -136,22 +181,26 @@ class GmailClient:
             self._identity_checked = False
         return {"Authorization": "Bearer " + self._access_token, "Content-Type": "application/json"}
 
-    def _request(self, method, path, body=None, *, ensure_identity=True, before_dispatch=None, deadline=None):
+    def _request(self, method, path, body=None, *, ensure_identity=True, before_dispatch=None, before_network=None, deadline=None):
         deadline = self.clock() + self.config.timeout_seconds if deadline is None else deadline
-        headers = self._headers(deadline)
+        headers = self._headers(deadline, before_network)
         if ensure_identity and not self._identity_checked:
+            if before_network:
+                before_network()
             response = self.transport.request("GET", self.API + "/profile", headers=headers,
-                timeout=self._remaining(deadline), maximum_bytes=65536)
+                timeout=self._remaining(deadline), maximum_bytes=65536, before_dispatch=before_network)
             if response.status != 200 or address(response.json().get("emailAddress")) != address(self.config.email_address):
                 raise ValueError("OAuth account does not match WideMind's dedicated Gmail identity")
             self._identity_checked = True
-        if before_dispatch:
-            before_dispatch()
+        guard = before_dispatch or before_network
+        if guard:
+            guard()
         response = self.transport.request(method, self.API + path, headers=headers,
-            body=json.dumps(body).encode() if body is not None else None, timeout=self._remaining(deadline), maximum_bytes=524288)
+            body=json.dumps(body).encode() if body is not None else None, timeout=self._remaining(deadline), maximum_bytes=524288,
+            before_dispatch=guard)
         return response
 
-    def send(self, action_id, arguments, *, before_dispatch=None):
+    def send(self, action_id, arguments, *, before_dispatch=None, before_network=None):
         recipient = address(arguments.get("to"))
         subject = single_line(arguments.get("subject"), "subject", 300)
         body = text(arguments.get("body"), "mail body", 100000)
@@ -173,7 +222,7 @@ class GmailClient:
             kind, subtype = artifact["media_type"].split("/", 1)
             message.add_attachment(artifact["content"].encode(), maintype=kind, subtype=subtype, filename=artifact["filename"])
         raw = base64.urlsafe_b64encode(message.as_bytes()).decode().rstrip("=")
-        response = self._request("POST", "/messages/send", {"raw": raw}, before_dispatch=before_dispatch)
+        response = self._request("POST", "/messages/send", {"raw": raw}, before_dispatch=before_dispatch, before_network=before_network)
         if response.status in {400, 401, 403, 404, 413, 429}:
             return {"state": "failed", "reason": "Gmail rejected the send request"}
         if response.status != 200:
@@ -196,13 +245,13 @@ class GmailClient:
             "thread_id": single_line(message.get("threadId"), "sent thread ID", 300),
             "delivery_state": "accepted", "rfc_message_id": rfc_message_id(action_id)}}
 
-    def read(self, arguments):
+    def read(self, arguments, *, before_dispatch=None):
         deadline = self.clock() + self.config.timeout_seconds
         cursor = arguments.get("cursor")
         params = {"maxResults": 10, "q": "in:inbox"}
         if cursor:
             params["pageToken"] = single_line(cursor, "Gmail page cursor", 1000)
-        response = self._request("GET", "/messages?" + urllib.parse.urlencode(params), deadline=deadline)
+        response = self._request("GET", "/messages?" + urllib.parse.urlencode(params), deadline=deadline, before_network=before_dispatch)
         if response.status != 200:
             raise ValueError("Gmail inbox unavailable")
         data = response.json()
@@ -212,7 +261,8 @@ class GmailClient:
         messages = []
         for item in items:
             message_id = single_line(item.get("id"), "message ID", 300)
-            full = self._request("GET", "/messages/" + urllib.parse.quote(message_id, safe="") + "?format=full", deadline=deadline)
+            full = self._request("GET", "/messages/" + urllib.parse.quote(message_id, safe="") + "?format=full",
+                                 deadline=deadline, before_network=before_dispatch)
             if full.status != 200:
                 raise ValueError("Gmail message lookup unavailable")
             try:
