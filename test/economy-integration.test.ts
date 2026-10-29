@@ -16,7 +16,9 @@ import {
 import { money } from "../src/contracts/index.ts";
 const python =
   process.env.WIDEMIND_ECONOMY_PYTHON ??
-  resolve("services/economy/.venv/bin/python");
+  (existsSync(resolve(".venvs/economy/bin/python"))
+    ? resolve(".venvs/economy/bin/python")
+    : resolve("services/economy/.venv/bin/python"));
 test("economy adapter configuration and exact monetary input fail closed", () => {
   assert.equal(createEconomyClient({}), null);
   assert.throws(() =>

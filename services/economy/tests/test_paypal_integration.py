@@ -42,7 +42,7 @@ def test_paypal_checkout_capture_replay_refund_and_public_projection(tmp_path):
     balance=service.balance('run');assert balance['posted_micro_usd']==14_500_000;assert balance['held_micro_usd']==9_500_000;assert balance['available_micro_usd']==5_000_000
     service.release_payment_hold('paypal','MERCHANT','test','ORDER_1','fulfilled-1');assert service.balance('run')['available_micro_usd']==14_500_000
     refund=provider.create_refund('ORDER_1','refund-1',2_000_000);assert refund['refund_id']=='REFUND_1';assert service.balance('run')['posted_micro_usd']==12_500_000
-    provider.create_refund('ORDER_1','refund-1',2_000_000);assert service.balance('run')['posted_micro_usd']==12_500_000;assert fixture.keys[-1]==fixture.keys[-2]
+    provider.create_refund('ORDER_1','refund-1',2_000_000);assert service.balance('run')['posted_micro_usd']==12_500_000;assert len(fixture.keys)==2;assert service.balance('run')['held_micro_usd']==0
     snapshot=service.payment_snapshot('paypal','MERCHANT','test','ORDER_1');assert snapshot['refunds_micro_usd']==2_000_000;assert snapshot['receipts_micro_usd']==10_000_000
 
 def test_verified_paypal_webhook_durable_worker_uses_provider_reads(tmp_path):
@@ -70,3 +70,15 @@ def test_zero_cost_authorization_records_identity_and_rejects_duplicate_dispatch
     service.start_reservation(reservation['reservation_id'])
     with pytest.raises(EconomyError,match='dispatched'):service.start_reservation(reservation['reservation_id'])
     service.settle(reservation['reservation_id'],0,'files','dedicated-tools','free-charge');assert service.balance('run')['posted_micro_usd']==5_000_000
+
+def test_version_four_upgrade_preserves_charged_reservation_foreign_keys(tmp_path):
+    import sqlite3
+    from widemind.economy.reporting import audit_integrity
+    path=tmp_path/'v4.sqlite';service=EconomyService(path);service.create_run('run')
+    reservation=service.reserve('run','charged',1000,'charged','files','dedicated-tools',{'max_duration_ms':1000})
+    service.start_reservation(reservation['reservation_id']);service.settle(reservation['reservation_id'],100,'files','dedicated-tools','charged-event')
+    with sqlite3.connect(path) as db:db.execute('PRAGMA user_version=4')
+    recovered=EconomyService(path)
+    assert recovered.balance('run')['posted_micro_usd']==4_999_900
+    assert recovered.reservation(reservation['reservation_id'])['state']=='settled'
+    assert audit_integrity(recovered,'run')['ok'] is True

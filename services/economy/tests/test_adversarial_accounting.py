@@ -274,7 +274,7 @@ def test_duplicate_webhook_and_different_events_for_same_money_are_both_idempote
 def test_same_transaction_id_in_different_provider_accounts_is_distinct(service):
     for account in ("customer-account-a", "customer-account-b"):
         _register(service, account=account)
-        _apply(service, 
+        _apply(service,
             _snapshot(_transaction("same-id", 1_000_000), account=account),
             event_id="same-event-id",
             event_digest="same-digest",

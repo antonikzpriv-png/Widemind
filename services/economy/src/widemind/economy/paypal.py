@@ -162,12 +162,27 @@ class PayPalPayments:
         if len(captures)!=1:raise EconomyError('refund_reconciliation_required','Refund requires one unambiguous capture',409)
         capture_id=_id(captures[0].get('id'));key=self._key('refund',payment_id,ident(request_id))
         with self.service._tx() as db:
-            claim=self.service._operation(db,payment['run_id'],'paypal.refund.request',request_id,[payment_id,amount_micro_usd],lambda:{'payment_id':payment_id,'amount_micro_usd':amount_micro_usd,'created_at':now()})
-            self.service._hold(db,payment['run_id'],'refund-request:'+key,amount_micro_usd,'refund','PayPal refund pending provider reconciliation')
-        if self.clock()-datetime.fromisoformat(claim['created_at'].replace('Z','+00:00')).timestamp()>5*3600:raise EconomyError('refund_reconciliation_required','Uncertain refund exceeded safe provider retry window',409)
-        result=self._request('POST',f'/v2/payments/captures/{capture_id}/refund',body={'amount':amount},key=key)
-        refund_id=_id(result.get('id'));known=self._request('GET',f'/v2/payments/refunds/{refund_id}')
-        if known.get('id')!=refund_id or _amount(known.get('amount'))!=amount_micro_usd:raise EconomyError('invalid_provider_record','PayPal refund identity or amount mismatch',502)
+            def claim_request():
+                self.service._hold(db,payment['run_id'],'refund-request:'+key,amount_micro_usd,'refund','PayPal refund pending provider reconciliation')
+                return {'payment_id':payment_id,'amount_micro_usd':amount_micro_usd,'created_at':now()}
+            claim=self.service._operation(db,payment['run_id'],'paypal.refund.request',request_id,[payment_id,amount_micro_usd],claim_request)
+        with self.service._read() as db:
+            stored=db.execute("SELECT result FROM operations WHERE run_id=? AND scope='paypal.refund.result' AND idempotency_key=?",(payment['run_id'],request_id)).fetchone()
+        if stored:
+            refund_id=_id(json.loads(stored['result'])['refund_id'])
+        else:
+            if self.clock()-datetime.fromisoformat(claim['created_at'].replace('Z','+00:00')).timestamp()>5*3600:raise EconomyError('refund_reconciliation_required','Uncertain refund exceeded safe provider retry window',409)
+            result=self._request('POST',f'/v2/payments/captures/{capture_id}/refund',body={'amount':amount},key=key)
+            refund_id=_id(result.get('id'))
+        known=self._request('GET',f'/v2/payments/refunds/{refund_id}')
+        expected_path=f'/v2/payments/captures/{capture_id}'
+        parent_links=[urlsplit(link.get('href','')) for link in known.get('links',[]) if link.get('rel')=='up']
+        if known.get('id')!=refund_id or _amount(known.get('amount'))!=amount_micro_usd or not any(link.path==expected_path and link.hostname==urlsplit(self.base).hostname for link in parent_links):raise EconomyError('invalid_provider_record','PayPal refund identity, capture or amount mismatch',502)
+        with self.service._tx() as db:
+            def confirm_result():
+                self.service._event(db,payment['run_id'],'economy.refund_confirmed',{'payment_id':payment_id,'refund_id':refund_id,'request_id':request_id})
+                return {'refund_id':refund_id}
+            self.service._operation(db,payment['run_id'],'paypal.refund.result',request_id,[payment_id,amount_micro_usd,refund_id],confirm_result)
         self.reconcile(payment_id)
         if known.get('status') in ('COMPLETED','CANCELLED','FAILED'):
             self.service.set_hold(payment['run_id'],'refund-request:'+key,0,'refund','Refund resolved from authenticated provider read','refund-resolved:'+key)

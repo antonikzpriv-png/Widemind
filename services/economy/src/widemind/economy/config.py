@@ -98,7 +98,7 @@ class Settings:
         from .stripe import StripePayments
         return StripePayments(service, api_key=self.stripe_api_key, account=self.stripe_account,
                               mode=self.stripe_mode, webhook_secret=self.stripe_webhook_secret,
-                              success_url=self.checkout_success_url, cancel_url=self.checkout_cancel_url,test_api_base=self.paypal_api_base,allow_test_endpoint=self.paypal_allow_test_endpoint)
+                              success_url=self.checkout_success_url, cancel_url=self.checkout_cancel_url)
 
     @property
     def payments_enabled(self):

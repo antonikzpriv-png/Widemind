@@ -112,9 +112,26 @@ export function createEconomyClient(
       redirect: "error",
       signal: AbortSignal.timeout(60000),
     });
-    const text = await response.text();
-    if (Buffer.byteLength(text) > 2_097_152)
-      throw new Error("Economy response exceeded bound");
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    if (response.body) {
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 2_097_152) {
+            await reader.cancel();
+            throw new Error("Economy response exceeded bound");
+          }
+          chunks.push(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const text = Buffer.concat(chunks).toString("utf8");
     const parsed = JSON.parse(text);
     if (!response.ok)
       throw new EconomyApiError(
