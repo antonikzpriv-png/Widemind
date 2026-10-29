@@ -300,18 +300,24 @@ class RuntimeBridge:
                 previous = db.execute('SELECT * FROM runtime_rearms WHERE reservation_id=? AND evidence_ref=?',
                                       (binding['reservation_id'], request.evidenceRef)).fetchone()
                 charge = db.execute('SELECT * FROM charges WHERE reservation_id=?', (binding['reservation_id'],)).fetchone()
-                if previous:
-                    if previous['dispatch_ordinal'] == latest and row['state'] == 'reserved':
-                        if not profile_current:
-                            raise EconomyError('profile_changed', 'A retired tool profile cannot renew execution')
-                        return {'kind': 'renewed'}
-                    if previous['dispatch_ordinal'] == latest and row['state'] == 'settled' and charge and charge['amount_micro_usd'] == 0:
-                        usage = json.loads(charge['usage'])
-                        if usage.get('source') == 'runtime-not-performed' and usage.get('evidenceRef') == request.evidenceRef:
-                            return {'kind': 'closed'}
-                    raise EconomyError('stale_not_performed_evidence', 'This evidence belongs to an earlier dispatch')
+                latest_rearm = db.execute('SELECT * FROM runtime_rearms WHERE reservation_id=? AND dispatch_ordinal=?',
+                                          (binding['reservation_id'], latest)).fetchone()
+                if latest_rearm and row['state'] == 'settled' and charge and charge['amount_micro_usd'] == 0:
+                    usage = json.loads(charge['usage'])
+                    if usage.get('source') == 'runtime-not-performed' and usage.get('evidenceRef') == latest_rearm['evidence_ref']:
+                        return {'kind': 'closed'}
                 if charge or db.execute('SELECT 1 FROM provisional_charges WHERE reservation_id=?', (binding['reservation_id'],)).fetchone():
                     raise EconomyError('known_usage_requires_reconciliation', 'A known charge or subtotal cannot be declared not performed')
+                if latest_rearm and row['state'] == 'reserved':
+                    if not profile_current:
+                        raise EconomyError('profile_changed', 'A retired tool profile cannot renew execution')
+                    # A prior confirmation already renewed this exact dispatch.
+                    # Its HTTP response may have been lost and a fresh lookup can
+                    # have a new evidence reference. Acknowledge existing state;
+                    # do not reset a counter or create another authorization.
+                    return {'kind': 'renewed'}
+                if previous:
+                    raise EconomyError('stale_not_performed_evidence', 'This evidence belongs to an earlier dispatch')
                 if row['state'] not in ('running', 'unknown'):
                     raise EconomyError('authorization_closed', 'Only an unresolved dispatch can be reconciled as not performed')
                 digest = fingerprint([binding['reservation_id'], latest, request.evidenceRef])

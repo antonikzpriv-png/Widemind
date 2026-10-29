@@ -426,3 +426,42 @@ def test_fresh_final_observation_preserves_evidence_without_reposting_charge(set
         assert post(setup, 'settle', {'reservation': reservation, 'receipt': changed})['kind'] == 'unavailable'
     assert service.balance('run') == balance
     assert service.reservation(reservation['reservationId'])['state'] == 'settled'
+
+
+def test_lost_renewal_response_with_fresh_observation_acknowledges_existing_permission(setup):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    proof = {'reservation': reservation, 'action': action(req), 'dispatch': True}
+    assert post(setup, 'verify', proof)['kind'] == 'verified'
+    # The backend commits this renewal, but the caller loses its response.
+    assert post(setup, 'not-performed', {'reservation': reservation, 'evidenceRef': 'definitive-read-1'}) == {'kind': 'renewed'}
+    with service._read() as db:
+        before_dispatches = db.execute('SELECT COUNT(*) FROM runtime_dispatches').fetchone()[0]
+        before_rearms = db.execute('SELECT COUNT(*) FROM runtime_rearms').fetchone()[0]
+    assert post(setup, 'not-performed', {'reservation': reservation, 'evidenceRef': 'fresh-definitive-read-2'}) == {'kind': 'renewed'}
+    assert post(setup, 'authorize', req)['reservation'] == reservation
+    with service._read() as db:
+        assert db.execute('SELECT COUNT(*) FROM runtime_dispatches').fetchone()[0] == before_dispatches
+        assert db.execute('SELECT COUNT(*) FROM runtime_rearms').fetchone()[0] == before_rearms
+    assert post(setup, 'verify', proof)['kind'] == 'verified'
+    # The old proof cannot reset the newer running attempt.
+    assert post(setup, 'not-performed', {'reservation': reservation, 'evidenceRef': 'definitive-read-1'})['kind'] == 'unavailable'
+    assert service.reservation(reservation['reservationId'])['state'] == 'running'
+
+
+def test_fresh_definitive_observation_acknowledges_already_closed_zero_outcome(setup):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    proof = {'reservation': reservation, 'action': action(req), 'dispatch': True}
+    for ordinal in range(1, 4):
+        assert post(setup, 'verify', proof)['kind'] == 'verified'
+        result = post(setup, 'not-performed', {'reservation': reservation, 'evidenceRef': f'definitive-read-{ordinal}'})
+        assert result == {'kind': 'closed' if ordinal == 3 else 'renewed'}
+    before = service.balance('run')
+    assert post(setup, 'not-performed', {'reservation': reservation, 'evidenceRef': 'fresh-closed-observation'}) == {'kind': 'closed'}
+    assert service.balance('run') == before
+    assert post(setup, 'verify', proof)['kind'] == 'unavailable'
