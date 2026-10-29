@@ -96,6 +96,10 @@ class Settings:
         profile_json = os.environ.get("WIDEMIND_RUNTIME_TOOL_PROFILES", "{}")
         if len(profile_json.encode()) > 65536:
             raise ValueError("Runtime tool profile configuration exceeds 64 KiB")
+        # Optional blank fields in the shared .env template mean unconfigured,
+        # just like an absent variable; nonempty malformed JSON still fails.
+        if not profile_json.strip():
+            profile_json = "{}"
         try:
             profiles = json.loads(profile_json)
         except (ValueError, RecursionError):
