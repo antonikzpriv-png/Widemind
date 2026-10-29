@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import threading
 import time
 from types import SimpleNamespace
 
@@ -172,3 +173,23 @@ def test_cancel_kills_real_worker_process_and_releases_browser_slot(tmp_path, fi
     assert processes and processes[0].poll() is not None and hits == []
     assert module._SLOT.acquire(blocking=False)
     module._SLOT.release()
+
+
+def test_independent_memory_supervisor_kills_child_without_parent_polling(tmp_path, fixture_site, monkeypatch):
+    import widemind.tools.browser as module
+
+    origin, _ = fixture_site
+    ctx, _ = context(tmp_path, origin)
+    session = _Session({"url": origin + "/page"}, ctx)
+    process = module.subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+    stop = threading.Event()
+    monkeypatch.setattr(module, "_group_rss", lambda pid: 3_000_000_000)
+    supervisor = threading.Thread(target=session._supervise, args=(process, stop))
+    try:
+        supervisor.start()
+        process.wait(timeout=2)
+        assert session._watch_error.code == "resource_limit"
+    finally:
+        stop.set()
+        module._kill_group(process)
+        supervisor.join(timeout=1)

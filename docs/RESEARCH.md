@@ -105,10 +105,11 @@ remain usable. A trusted `browser_executable` may select a compatible installed
 Chromium. No fallback disables its sandbox.
 
 One browser runs per gateway process. The parent checks authorization,
-cancellation, deadline, pipe-size and process-group RSS while supervising it,
-and kills the isolated process group on exit or error. Chromium gets a bounded
+cancellation, deadline and pipe size; an independent supervisor samples
+process-group RSS and deadline even while the parent waits for HTTP. The parent
+kills the isolated process group on exit or error. Chromium gets a bounded
 JavaScript heap and renderer count; the child also limits CPU, open files, core
-dumps and file size. RSS is sampled while the parent is active, so a sudden
+dumps and file size. RSS is sampled every 50 ms, so a sudden
 allocation can overshoot before termination. Deploy the gateway in a dedicated
 OS/container sandbox with an aggregate memory/process limit for a hard kernel
 ceiling and protection against a compromised browser. No in-process adapter

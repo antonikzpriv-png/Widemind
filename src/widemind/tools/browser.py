@@ -76,7 +76,7 @@ def _group_rss(pid: int) -> int:
                 fields = contents[contents.rfind(")") + 2:].split()
                 if int(fields[2]) == pid:
                     total += int(fields[21]) * os.sysconf("SC_PAGE_SIZE")
-            except (OSError, ValueError, IndexError):
+            except (OSError, ValueError, UnicodeError, IndexError):
                 continue
     except OSError:
         raise Unavailable("Browser process memory accounting requires Linux /proc.") from None
@@ -111,9 +111,13 @@ class _Session:
         self.main_reference: dict | None = None
         self.main_seen = False
         self.peak_rss = 0
+        self._watch_error: ToolError | None = None
+        self._process: subprocess.Popen | None = None
         self.end = min(ctx.deadline, time.monotonic() + self.browser_limits["runtime_seconds"])
 
     def check(self, process: subprocess.Popen | None = None) -> None:
+        if self._watch_error is not None:
+            raise self._watch_error
         self.ctx.check()
         if time.monotonic() >= self.end:
             raise ToolError("timeout", "Browser exceeded its bounded rendering time.")
@@ -121,6 +125,23 @@ class _Session:
             self.peak_rss = max(self.peak_rss, _group_rss(process.pid))
             if self.peak_rss > self.browser_limits["memory_mb"] * 1_048_576:
                 raise ToolError("resource_limit", "Browser process group exceeded its memory allowance.")
+
+    def _supervise(self, process: subprocess.Popen, stop: threading.Event) -> None:
+        # This remains active while the main thread is blocked in HTTP. A page
+        # can keep allocating in another renderer while a resource is loading.
+        while not stop.wait(.05):
+            try:
+                observed = _group_rss(process.pid)
+                self.peak_rss = max(self.peak_rss, observed)
+                if observed > self.browser_limits["memory_mb"] * 1_048_576:
+                    self._watch_error = ToolError("resource_limit", "Browser process group exceeded its memory allowance.")
+                elif time.monotonic() >= self.end:
+                    self._watch_error = ToolError("timeout", "Browser exceeded its bounded rendering time.")
+            except ToolError as exc:
+                self._watch_error = exc
+            if self._watch_error is not None:
+                _kill_group(process)
+                return
 
     def response(self, request: Mapping[str, Any]) -> dict:
         self.check()
@@ -153,7 +174,8 @@ class _Session:
         response = self.ctx.transport.request(
             "GET", url, headers={"user-agent": "WideMind-Research/1.0", "accept-encoding": "identity"},
             timeout=min(self.ctx.remaining(10), max(.001, self.end - time.monotonic())),
-            max_bytes=min(self.limits.response_bytes, available), cancel=self.ctx.check, public_only=True,
+            max_bytes=min(self.limits.response_bytes, available),
+            cancel=lambda: self.check(self._process), public_only=True,
         )
         self.check()
         self.transferred += len(response.body)
@@ -218,7 +240,11 @@ class _Session:
                 cwd=directory, env=_worker_env(directory, runtime), start_new_session=True,
                 bufsize=0,
             )
+            self._process = process
+            stop = threading.Event()
+            supervisor = threading.Thread(target=self._supervise, args=(process, stop), daemon=True)
             try:
+                supervisor.start()
                 os.set_blocking(process.stdin.fileno(), False)
                 os.set_blocking(process.stdout.fileno(), False)
                 self._send(process, {"url": self.initial_url, "text_chars": self.limits.text_chars,
@@ -258,7 +284,10 @@ class _Session:
                             else:
                                 raise ToolError("browser_failed", "Browser worker returned an unknown message.")
             finally:
+                stop.set()
                 _kill_group(process)
+                if supervisor.ident is not None:
+                    supervisor.join(timeout=.25)
                 process.stdin.close()
                 process.stdout.close()
 
