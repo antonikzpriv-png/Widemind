@@ -43,7 +43,15 @@ class ResearchBrief:
         minimum = integer(scope.get("min_sources", 2), "minimum sources", 1, 10)
         if allowance < 1:
             raise ValueError("research requires a positive maximum cost")
-        return Plan("research.collect", {"topic": topic, "sections": headings, "min_sources": minimum}, allowance)
+        arguments = {"topic": topic, "sections": headings, "min_sources": minimum}
+        if "source_urls" in scope:
+            urls = scope["source_urls"]
+            if not isinstance(urls, list) or not 1 <= len(urls) <= 10:
+                raise ValueError("source_urls must contain 1–10 URLs")
+            arguments["source_urls"] = [web_url(url) for url in urls]
+            if len(set(arguments["source_urls"])) != len(urls):
+                raise ValueError("source URLs must be unique")
+        return Plan("research.collect", arguments, allowance)
 
     def deliverable(self, scope, result):
         # A gateway result supplies sourced statements; business does not invent research.

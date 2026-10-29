@@ -17,3 +17,5 @@ include = ["widemind*"]
 
 [tool.setuptools.package-data]
 "widemind.business" = ["migrations/*.sql"]
+
+"widemind.web" = ["static/*.html", "static/*.js", "static/*.css", "static/*.svg"]

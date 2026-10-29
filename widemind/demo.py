@@ -38,6 +38,14 @@ class DemoAdapters:
     def state(self, run_id):
         return self.get("state")
 
+    def change_state(self, *, run_id, state, action_id, evidence_reference):
+        if state not in {"active", "paused", "stopped"}:
+            return Outcome("failed", reason="invalid demo control state")
+        def result():
+            self.set("state", state)
+            return Outcome("succeeded", {"state": state, "mode": self.mode})
+        return self._once(action_id, "runtime.change_state", result)
+
     def available(self, action):
         return action in {"gmail.read", "gmail.send", "research.collect", "writing.create"} and action not in self.disabled
 

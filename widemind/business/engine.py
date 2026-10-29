@@ -37,6 +37,26 @@ class Business:
             # operator policy saved after our initial read.
             store.db.execute("INSERT OR IGNORE INTO settings VALUES (?,?)", (run_id, encode(self.policy.document())))
 
+    def close(self):
+        """Close request/worker-owned connections once, including shared demo adapters."""
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
+        seen = set()
+        first_error = None
+        for resource in (self.store, self.tools, self.economy, self.runtime):
+            if id(resource) in seen:
+                continue
+            seen.add(id(resource))
+            close = getattr(resource, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    first_error = first_error or exc
+        if first_error:
+            raise first_error
+
     def configure(self, policy):
         self.policy = policy
         self.store.db.execute("INSERT INTO settings VALUES (?,?) ON CONFLICT(run_id) DO UPDATE SET document=excluded.document",
@@ -192,19 +212,40 @@ class Business:
     def _opted_out(self, customer_id):
         return bool(self.store.one("SELECT opted_out FROM customers WHERE id=? AND run_id=?", (customer_id, self.run_id))["opted_out"])
 
-    def _effect(self, entity, step, provider, action, arguments, invoke, *, reconciliation=False):
+    def control_runtime(self, *, state, evidence_reference, request_id):
+        if state not in {"active", "paused", "stopped"}:
+            raise ValueError("unsupported operator runtime state")
+        evidence_reference = text(evidence_reference, "control evidence", 1000)
+        request_id = text(request_id, "control request_id", 100)
+        operation = getattr(self.runtime, "change_state", None)
+        if not callable(operation):
+            raise ValueError("runtime controls are not configured")
+        return self._effect("runtime:" + request_id, "control", "runtime", "change_state",
+            {"state": state, "evidence_reference": evidence_reference},
+            lambda aid: operation(run_id=self.run_id, state=state, action_id=aid, evidence_reference=evidence_reference), control=True)
+
+    def _effect_client(self, provider):
+        if provider == "economy":
+            return self.economy
+        if provider == "tools":
+            return self.tools
+        if provider == "runtime":
+            return self.runtime
+        raise ValueError("unknown effect provider")
+
+    def _effect(self, entity, step, provider, action, arguments, invoke, *, reconciliation=False, control=False):
         action_id = identity(self.run_id, entity, step)
         request = encode(arguments)
         logical_id = action_id
         existing = self.store.one("SELECT * FROM effects WHERE logical_id=? ORDER BY attempt DESC LIMIT 1", (logical_id,))
         if existing:
             action_id = existing["id"]
-        client = self.economy if provider == "economy" else self.tools
+        client = self._effect_client(provider)
         if existing:
             if existing["request"] != request or existing["action"] != action:
                 raise ValueError("effect identity reused with changed request")
             if existing["state"] == "planned":
-                if reconciliation or not self._active():
+                if reconciliation or (not control and not self._active()):
                     raise Deferred("runtime does not permit retry")
                 claimed = self.store.db.execute("UPDATE effects SET state='running' WHERE id=? AND state='planned'", (action_id,))
                 if claimed.rowcount != 1:
@@ -219,7 +260,7 @@ class Business:
                 # A prior process may have died before, during, or after the call.
                 outcome = client.reconcile(action_id=action_id)
         else:
-            if reconciliation or not self._active():
+            if reconciliation or (not control and not self._active()):
                 raise Deferred("runtime does not permit new work")
             self.store.db.execute("""INSERT INTO effects
                 (id,run_id,job_id,provider,action,request,state,created_at,logical_id,attempt)
@@ -270,7 +311,7 @@ class Business:
                                 action=action, arguments=arguments, reservation_id=reservation,
                                 maximum_micro_usd=maximum))
 
-    def _email(self, entity, step, customer_id, subject, body, *, artifact=None):
+    def _email(self, entity, step, customer_id, subject, body, *, artifact=None, require_confirmation=False):
         if self._opted_out(customer_id):
             raise Deferred("customer opted out; operator must arrange delivery")
         email = self.store.one("SELECT email FROM customers WHERE id=?", (customer_id,))["email"]
@@ -278,9 +319,10 @@ class Business:
         if artifact:
             arguments["attachment"] = artifact
         result = self._tool(entity, step, "gmail.send", arguments)
-        # Gmail API acceptance is not customer delivery. Require a gateway-confirmed
-        # transport outcome and a durable provider reference, otherwise reconcile.
-        if result.get("delivery_state") != "confirmed" or not isinstance(result.get("message_id"), str) or not result["message_id"]:
+        # Transactional notices can progress after transport acceptance. Final
+        # deliverables still require verified receipt; acceptance never earns revenue.
+        permitted = {"confirmed"} if require_confirmation else {"accepted", "confirmed"}
+        if result.get("delivery_state") not in permitted or not isinstance(result.get("message_id"), str) or not result["message_id"]:
             raise Deferred("mail accepted or uncertain; delivery not confirmed")
         self._record_mail(entity, step, customer_id, result)
         return result["message_id"]
@@ -514,7 +556,7 @@ class Business:
             if self.services.get(order["service"]) is None or self.services[order["service"]].capability not in self.policy.capabilities:
                 raise Deferred("delivery capability disabled")
             reference = self._email(order_id, "delivery", order["customer_id"], "WideMind private delivery",
-                encode({"order_id": order_id, "scope": json.loads(order["scope"]), "delivery_due_at_utc_epoch": order["delivery_due_at"]}), artifact=artifact)
+                encode({"order_id": order_id, "scope": json.loads(order["scope"]), "delivery_due_at_utc_epoch": order["delivery_due_at"]}), artifact=artifact, require_confirmation=True)
             self._status(order, "delivered", delivery_reference=reference)
         elif order["status"] == "payment_hold":
             raise Deferred("payment hold requires operator resolution; never automatically retry")
@@ -555,6 +597,23 @@ class Business:
         messages = batch.get("messages")
         if not isinstance(messages, list) or len(messages) > 100:
             raise ValueError("invalid Gmail batch")
+        updates = batch.get("delivery_updates", [])
+        if not isinstance(updates, list) or len(updates) > 100:
+            raise ValueError("invalid Gmail delivery update batch")
+        for update in updates:
+            if not isinstance(update, dict):
+                continue
+            action_id, entity = update.get("action_id"), update.get("job_id")
+            effect = self.store.one("SELECT * FROM effects WHERE id=? AND run_id=? AND job_id=? AND action='gmail.send'",
+                                    (action_id, self.run_id, entity))
+            if not effect:
+                continue
+            self._reconcile(action_id)
+            refreshed = self.store.one("SELECT * FROM effects WHERE id=?", (action_id,))
+            outcome = self._validated_outcome(Outcome(refreshed["state"], json.loads(refreshed["result"] or "{}")), "gmail.send")
+            if outcome.state == "succeeded" and outcome.data.get("delivery_state") == "confirmed":
+                kind = "advance" if self.store.one("SELECT id FROM orders WHERE id=? AND run_id=?", (entity, self.run_id)) else "offer"
+                self._enqueue(kind, entity, "receipt:" + action_id)
         for index, message in enumerate(messages):
             try:
                 self._gmail_message(message)
@@ -694,7 +753,7 @@ class Business:
             verified = self._validated_outcome(Outcome("succeeded", previous), "gmail.send")
             if verified.state == "succeeded" and previous.get("delivery_state") == "confirmed":
                 return
-        client = self.economy if effect["provider"] == "economy" else self.tools
+        client = self._effect_client(effect["provider"])
         result = self._validated_outcome(client.reconcile(action_id=action_id), effect["action"])
         # A transport 'succeeded' response can initially only mean mail accepted.
         # Reconciliation can replace it with confirmed delivery/bounce evidence.
