@@ -53,7 +53,10 @@ class SettleInput(Input):
     provider: Identifier
     account: Identifier
     external_charge_id: Identifier
-    usage: Annotated[dict[Identifier, StrictInt | StrictStr], Field(max_length=64)] | None = None
+    # Diagnostic shape must not reject an otherwise authoritative bill before
+    # settlement. The authenticated, body-bounded core preserves bounded JSON
+    # objects and records an omission marker for unusable optional reports.
+    usage: Any = None
     outcome: Literal["succeeded", "failed", "unknown"] = "succeeded"
 
 

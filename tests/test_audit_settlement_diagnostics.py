@@ -60,6 +60,25 @@ def test_core_known_bill_survives_invalid_optional_usage(tmp_path, usage):
     assert service.charges('run')[0]['usage']['usage_omitted'] is True
 
 
+@pytest.mark.parametrize('usage', [{'nested': {'units': 1}}, ['optional-report'],
+                                  {f'unit_{i}': i for i in range(65)}])
+def test_http_optional_report_shape_cannot_reject_a_known_failed_bill(tmp_path, usage):
+    settings = Settings(str(tmp_path/'economy.sqlite3'), 'operator-'+'o'*48,
+                        'gateway-'+'g'*48, 'agent-'+'a'*48, 'run')
+    app = create_app(settings)
+    rid = reserved(app.state.economy)
+    with TestClient(app) as client:
+        response = client.post(f'/v1/reservations/{rid}/settle',
+                               headers={'Authorization': 'Bearer '+settings.gateway_token},
+                               json={'actual_micro_usd': 6_000_000, 'provider': 'fixture', 'account': 'sandbox',
+                                     'external_charge_id': 'charge', 'usage': usage, 'outcome': 'failed'})
+        assert response.status_code == 200, response.text
+    assert app.state.economy.balance('run')['available_micro_usd'] == -1_000_000
+    assert app.state.economy.reservation(rid)['state'] == 'settled'
+    assert app.state.economy.charges('run')[0]['amount_micro_usd'] == 6_000_000
+    assert audit_integrity(app.state.economy, 'run')['ok'] is True
+
+
 def test_existing_larger_receipt_still_replays_without_rewriting_history(tmp_path):
     service = EconomyService(tmp_path/'economy.sqlite3')
     rid = reserved(service)
