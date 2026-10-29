@@ -30,6 +30,8 @@ Or launch services, web and worker together after setup/migration with `npm run 
 
 Customer interface: `/commerce`. Available services come from actual configured capabilities. Customers describe work, receive a private token-scoped request link, review/accept a quote, pay through the configured provider, and retrieve only their own delivery. Access tokens use URL fragments and POST bodies, not query strings or public logs. Quotes and receipts do not create money by themselves.
 
+The integrated PayPal business service also supports [natural customer conversations](CUSTOMER_CONVERSATIONS.md): budget-authorized message interpretation, durable thread context, versioned quotes, private portal acceptance and operator intervention controls. Gmail is optional and requires its dedicated account/recipient setup; the Stripe brief workflow stays separate.
+
 ## Payment provider choice
 
 **PayPal Business is the selected new checkout provider.** Existing Stripe implementation/configuration is preserved for compatibility with the separately developed economy module; the active provider is explicit (`WIDEMIND_PAYMENT_PROVIDER=paypal` by default). Do not silently route new checkout through another account/provider.
