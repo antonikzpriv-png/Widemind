@@ -71,6 +71,8 @@ async function api(path, { method = 'GET', body, authenticated = true } = {}) {
 }
 
 async function publicPage() {
+  $('#close-dialog').addEventListener('click', () => $('#detail-dialog').close());
+  $('#detail-dialog').addEventListener('close', () => { state.dialogEpoch += 1; replace($('#dialog-content')); });
   try {
     const data = await api('/api/v1/public', { authenticated: false });
     const status = $('#public-run-state'); status.textContent = human(data.run_state); status.dataset.state = data.run_state || 'unavailable';
@@ -80,7 +82,7 @@ async function publicPage() {
     const offers = list(data.offerings);
     replace($('#offerings'), ...(offers.length ? offers.map((offer, index) => {
       const contact = typeof data.contact_email === 'string' && /^[^\s<>@,;\x00-\x1f]+@[^\s<>@,;]+\.[^\s<>@,;]+$/.test(data.contact_email) ? data.contact_email : null;
-      const request = contact ? node('a', { class: 'button small', href: `mailto:${encodeURIComponent(contact)}?subject=${encodeURIComponent(`WideMind request: ${offer.name}`)}`, text: 'Discuss a request →' }) : node('span', { class: 'faint', text: 'Contact not connected' });
+      const request = contact ? button('Discuss a request →', () => publicRequestDialog(offer, contact), 'small') : node('span', { class: 'faint', text: 'Contact not connected' });
       return node('article', { class: 'offering' }, [node('div', { class: 'offering-num', text: `${String(index + 1).padStart(2, '0')} / ${human(offer.name)}` }), node('h3', { text: human(offer.name) }), node('p', { text: offer.description || 'A scoped service delivered through the configured workflow.' }), node('div', { class: 'offering-bottom' }, [node('span', { class: 'price' }, [money(offer.price_micro_usd), node('small', { text: 'scoped offer' })]), request])]);
     }) : [empty('No services are currently enabled. Available work will appear here when configured.')]));
     renderPublicActivity($('#public-activity'), data.activity);
@@ -92,6 +94,41 @@ async function publicPage() {
     $('#public-error').hidden = false; $('#public-error').textContent = error.message;
   }
 }
+function publicRequestDialog(offer, contact) {
+  const content = openDialog('Prepare an email request', 'Send from your own email account');
+  const research = offer.name === 'research-brief';
+  const form = node('form');
+  const fields = [field('Topic or job title', input('topic', '', { required: true, maxlength: '500' }), null, true)];
+  if (research) fields.push(field('Brief sections', textarea('sections', 'Overview\nRisks', { rows: 3, required: true }), 'One section per line; up to eight.', true), field('Minimum sources', input('min_sources', '2', { type: 'number', min: '1', max: '10', step: '1', required: true })), field('Optional source URLs', textarea('source_urls', '', { rows: 3, placeholder: 'https://…' }), 'One HTTPS URL per line; up to ten.', true));
+  else fields.push(field('Requested scope · JSON', textarea('custom_scope', '{}', { rows: 5, required: true }), 'Describe the scope accepted by this configured service.', true));
+  const result = node('div');
+  form.append(node('p', { class: 'financial-note', text: 'This creates a structured email draft addressed to WideMind’s configured inbox. Send it from your own email account. A request is not an accepted quote, payment, or delivery commitment.' }), node('div', { class: 'form-grid section-space' }, fields), node('div', { class: 'form-actions' }, [button('Cancel', () => $('#detail-dialog').close()), node('button', { type: 'submit', class: 'button primary', text: 'Prepare email draft' })]), result);
+  form.addEventListener('submit', event => {
+    event.preventDefault(); replace(result);
+    try {
+      let scope;
+      if (research) {
+        const sections = textLines(form.elements.sections.value), sources = textLines(form.elements.source_urls.value);
+        if (!sections.length || sections.length > 8 || new Set(sections).size !== sections.length || sections.some(value => value.length > 100)) throw new Error('Use one to eight unique section headings of up to 100 characters.');
+        if (sources.length > 10) throw new Error('Use at most ten source URLs.');
+        for (const value of sources) { const parsed = new URL(value); if (parsed.protocol !== 'https:' || parsed.username || parsed.password || /[\s\x00-\x1f\x7f]/.test(value)) throw new Error('Source URLs must be valid HTTPS addresses without credentials.'); }
+        const minimum = integerValue(form, 'min_sources', 1); if (minimum > 10) throw new Error('Use at most ten minimum sources.');
+        scope = { topic: form.elements.topic.value.trim(), sections, min_sources: minimum, ...(sources.length ? { source_urls: sources } : {}) };
+      } else {
+        scope = JSON.parse(form.elements.custom_scope.value);
+        if (!scope || typeof scope !== 'object' || Array.isArray(scope)) throw new Error('Requested scope must be a JSON object.');
+        scope = { topic: form.elements.topic.value.trim(), ...scope };
+      }
+      const body = JSON.stringify({ type: 'request', service: offer.name, scope }, null, 2);
+      const href = `mailto:${encodeURIComponent(contact)}?subject=${encodeURIComponent(`WideMind request: ${offer.name}`)}&body=${encodeURIComponent(body)}`;
+      result.append(node('h3', { class: 'subheading', text: 'Your request draft' }), code(body), node('p', { class: 'form-note', text: `Recipient: ${contact}. Opening a draft does not send it. Keep the JSON body intact so the inbox can understand the requested scope.` }));
+      if (href.length <= 18000) result.append(node('div', { class: 'form-actions' }, [node('a', { class: 'button primary', href, text: 'Open email draft →' })]));
+      else result.append(dialogNotice('This request is too long for a reliable email link. Copy the JSON above into an email to the displayed recipient.'));
+    } catch (error) { result.append(dialogNotice(error.message, 'error')); }
+  });
+  content.append(form);
+}
+
 function renderPublicActivity(target, activities) {
   const records = list(activities);
   replace(target, ...(records.length ? records.map(item => node('div', { class: 'activity-row' }, [node('span', {}, [node('i', { class: 'event-dot', 'aria-hidden': 'true' }), `${human(item.kind)} · ${human(item.service)}`]), node('time', { text: when(item.at_utc_epoch) })])) : [empty('No public completion events have been published yet.')]));

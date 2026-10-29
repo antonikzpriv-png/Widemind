@@ -113,7 +113,16 @@ def main():
         page.get_by_text("Explicit fixture service", exact=True).wait_for()
         check(page.locator('#public-mode').is_visible(), "public fixture warning visible")
         check(page.locator('#public-metrics').inner_text().count('Unavailable') == 1, "missing credit is unavailable, not zero")
-        check(page.locator('a[href^="mailto:"]').count() == 1, "contact request uses dedicated email")
+        page.get_by_role('button', name='Discuss a request', exact=False).click()
+        page.locator('input[name="topic"]').fill('Explicit customer request fixture')
+        page.get_by_role('button', name='Prepare email draft', exact=True).click()
+        draft = page.locator('a[href^="mailto:"]')
+        check(draft.count() == 1, "contact request uses dedicated email")
+        from urllib.parse import parse_qs
+        command = json.loads(parse_qs(urlsplit(draft.get_attribute('href')).query)['body'][0])
+        check(command['type'] == 'request' and command['service'] == 'research-brief', 'public draft matches Gmail command contract')
+        check(command['scope']['topic'] == 'Explicit customer request fixture', 'public draft preserves requested scope')
+        page.locator('#close-dialog').click()
         for width in [1440, 1024, 390, 320]:
             page.set_viewport_size({"width": width, "height": 950})
             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"public no horizontal overflow at {width}")
