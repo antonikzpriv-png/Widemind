@@ -1,3 +1,4 @@
+import { callDependency } from "../runtime/dependencies.ts";
 import type { Services } from "../modules/registry.ts";
 import type {
   FinancialSummary,
@@ -42,15 +43,33 @@ function financialProjection(
 export async function publicProjection(
   store: Store,
   services: Services,
+  dependencyMs = 5000,
 ): Promise<PublicWebsiteData> {
   const runs = store.runs();
   const latest = runs[0];
-  const content = await services.website.publicContent();
+  const content = await callDependency(
+    "website.publicContent",
+    () => services.website.publicContent(),
+    dependencyMs,
+  ).catch(() => ({
+    offerings: [],
+    activity: [],
+    availability: {
+      available: false as const,
+      reason: "Website content dependency unavailable",
+    },
+  }));
   return {
     version: 1,
     runs: runs.map(publicRun),
     financial: financialProjection(
-      latest ? await services.economy.summary(latest.id) : null,
+      latest
+        ? await callDependency(
+            "economy.publicSummary",
+            () => services.economy.summary(latest.id),
+            dependencyMs,
+          ).catch(() => null)
+        : null,
     ),
     offerings: content.offerings.map((item) => ({
       id: item.id,
@@ -65,9 +84,14 @@ export async function publicProjection(
     availability: content.availability,
   };
 }
-export function privateProjection(store: Store, services: Services) {
+export function privateProjection(
+  store: Store,
+  services: Services,
+  profile: "foundation" | "demo" = "foundation",
+) {
   return {
     version: 1,
+    runtime: store.runtimeStatus(profile),
     modules: Object.fromEntries(
       (["economy", "tools", "business", "website"] as const).map((id) => [
         id,
@@ -79,6 +103,14 @@ export function privateProjection(store: Store, services: Services) {
       desired: run.desired,
       reason: run.reason,
       lastError: run.last_error,
+      pendingEvents: store.pendingEvents(run.id),
+      pendingEventCount: Number(
+        store.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM runtime_inbox WHERE run_id=? AND consumed_at IS NULL",
+          )
+          .get(run.id)?.n ?? 0,
+      ),
       actions: store.actions(run.id).map((row) => ({
         id: row.id,
         state: row.state,

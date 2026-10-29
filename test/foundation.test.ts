@@ -92,3 +92,15 @@ test("configuration fails closed for unknown profiles and insecure public bindin
   assert.equal("operatorPasswordHash" in config, false);
   assert.equal(secrets.operatorPasswordHash, "private-fixture");
 });
+
+test("secure-cookie deployment rejects a non-HTTPS public origin", () => {
+  assert.throws(
+    () =>
+      loadConfig({
+        WIDEMIND_HOST: "0.0.0.0",
+        WIDEMIND_SECURE_COOKIES: "true",
+        WIDEMIND_PUBLIC_ORIGIN: "http://example.test",
+      }),
+    /HTTPS public origin/,
+  );
+});

@@ -4,6 +4,11 @@ import { Store } from "./store.ts";
 import { AgentRuntime } from "./engine.ts";
 const app = await bootstrap();
 const runtime = new AgentRuntime(new Store(app.db), app.services, app.config);
+const presenceTtl = Math.max(15000, app.config.leaseMs);
+const seen = () =>
+  runtime.store.workerSeen(runtime.owner, app.config.profile, presenceTtl);
+seen();
+const presence = setInterval(seen, 5000);
 let shutdown = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, () => {
@@ -18,5 +23,7 @@ try {
     if (!(await runtime.tick())) await delay(500);
   }
 } finally {
+  clearInterval(presence);
+  runtime.store.workerStopped(runtime.owner);
   app.db.close();
 }

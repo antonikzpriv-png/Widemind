@@ -60,7 +60,9 @@ npm run worker                         # compiled persistent worker, separate te
 
 `npm test` uses source TypeScript directly with Node 24 type stripping; only erasable TypeScript syntax is permitted. `npm run typecheck` checks source and tests. `npm run build` creates `dist/` and rewrites relative `.ts` imports to `.js`. Startup applies the same versioned migrations as `npm run migrate`; run the explicit migration command before upgrades for an early failure and audit trail. Migrations never seed money.
 
-`GET /healthz` confirms the web process responds. It is not a worker liveness or provider-readiness claim. Operator shows module availability, durable state, next wake time, actions and intervention history. A stopped/paused worker run keeps unresolved effects recoverable.
+`GET /healthz` confirms only the web process. The authenticated `GET /api/operator/runtime`, Operator's Worker health panel, and `npm run status` report live worker heartbeats, due/leased jobs, unresolved actions and pending inbox events. The CLI exits 0 with a fresh worker and 2 without one. A heartbeat is an observation, not provider readiness or proof of productive work; a killed process can remain fresh until its TTL (at least 15 seconds) expires. Graceful shutdown marks it stopped immediately. Public APIs do not expose these private diagnostics.
+
+`WIDEMIND_DEPENDENCY_MS` bounds asynchronous free module calls (default 5000 ms). Timed-out selection/control/reconciliation calls no longer pin the entire worker; recovery is scheduled. It cannot interrupt synchronous blocking module code or recall provider effects. Tool transport rejection after dispatch remains unresolved and is reconciled before retry. HTTP module timeouts return 503; public content/finance reads degrade to unavailable/null rather than invented values.
 
 ## Persistent deployment
 
@@ -90,3 +92,11 @@ Resume is an explicit recorded intervention, including reactivation of stopped/f
 Implemented: local persistent scheduling, typed registration, migrations, durable runs/actions/outbox/results, leases/fencing, bounded attempts, recovery, operator sessions/CSRF, public/private projections, baseline run screens, zero-cost local demo.
 
 Unavailable: funded ledger/opening grant, verified customer payments, revenue/refunds, actual opportunity strategy, Gmail/accounts, models, browsing, graphics, code sandbox, publishing, customer purchase/private delivery routes, live hosting. Those require the corresponding modules and external credentials. No provider credentials are needed for the foundation tests/demo. No recurring paid planning occurs while idle. Development and hosting costs are not billed by this foundation and must be disclosed/allocated by the economy module before a real survival pilot.
+
+## Durable incoming events
+
+Operator can use a run's **Deliver an operator event** form, or authenticated `POST /api/operator/runs/<uuid>/events` with `{eventId,kind,payload}`. Reuse the event ID when retrying. A first delivery returns 202, an identical retry 200, and reuse with a conflicting run/kind/payload 409. The route records the source/account as operator; body claims cannot impersonate a verified payment provider. Event payloads are private task data, never budget or configuration authority.
+
+Eligible running work wakes independently of an open webpage. Paused/stopped/failed runs retain incoming events until explicitly resumed. Business modules inspect the oldest 100 pending events in a snapshot and explicitly acknowledge IDs; consumption commits with the work plan or waiting decision. Unseen backlog batches continue without busy polling. The demo acknowledges events locally without additional tool execution or paid planning.
+
+Upgrade note: schema migration 2 adds the inbox, worker presence and unique lease tokens while preserving version-1 runs/actions/receipts. Stop the web and worker services before upgrading, back up the database correctly, run `npm run migrate`, then start both at the same revision. Do not run mixed runtime revisions against the same database. Applied migration 1 is unchanged.

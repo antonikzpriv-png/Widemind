@@ -14,6 +14,8 @@ export interface Money {
   micros: Micros;
 }
 export function money(micros: string | bigint): Money {
+  if (typeof micros !== "string" && typeof micros !== "bigint")
+    throw new Error("Money requires a decimal string or bigint");
   const value = String(micros);
   if (!/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > 9223372036854775807n)
     throw new Error(
@@ -178,17 +180,28 @@ export interface ActionView {
   state: ActionState;
   receipt: ToolReceipt | null;
 }
+export interface RuntimeEvent {
+  eventId: ID;
+  source: string;
+  accountRef: string;
+  externalEventId: string;
+  kind: string;
+  payload: Json;
+  receivedAt: string;
+}
 export interface BusinessSnapshot {
   runId: ID;
   now: string;
   financial: FinancialSummary | null;
   actions: ActionView[];
   capabilities: ReturnType<Tools["capabilities"]>;
+  events: RuntimeEvent[];
 }
-export type WorkSelection =
+export type WorkSelection = (
   | { kind: "work"; candidate: Candidate }
   | { kind: "wait"; reason: string; wakeAt?: string }
-  | { kind: "unavailable"; reason: string };
+  | { kind: "unavailable"; reason: string }
+) & { acknowledgeEventIds?: ID[] };
 export interface Business {
   health(): Availability;
   /** Pure, free local selection. Paid planning is itself a proposed tool action. */
@@ -228,6 +241,8 @@ export interface RuntimeConfig {
   secureCookies: boolean;
   leaseMs: number;
   idleMs: number;
+  /** Free module calls must not pin a worker indefinitely. */
+  dependencyMs?: number;
 }
 export interface ServerSecrets {
   operatorPasswordHash: string | null;
@@ -243,6 +258,8 @@ export interface ModuleRoute {
   access: "public" | "operator";
   handle(request: {
     body: Json;
+    /** Exact bytes for signature verification on public ingress routes only. */
+    rawBody?: Uint8Array;
     query: Record<string, string>;
     headers: Record<string, string>;
     operator: boolean;

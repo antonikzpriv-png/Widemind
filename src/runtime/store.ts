@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   ActionState,
@@ -6,8 +6,11 @@ import type {
   PublicRun,
   RunState,
   ToolAction,
+  Json,
+  RuntimeEvent,
 } from "../contracts/index.ts";
 import { transaction } from "../db/database.ts";
+export class EventConflict extends Error {}
 export interface RunRow {
   id: string;
   profile: "foundation" | "demo";
@@ -38,6 +41,7 @@ export interface Lease {
   owner: string;
   fence: number;
   until: number;
+  token: string;
 }
 export class Store {
   readonly db: DatabaseSync;
@@ -132,27 +136,41 @@ export class Store {
         .get(now, now);
       if (!row) return null;
       const fence = Number(row.fence) + 1;
+      const token = randomUUID();
       this.db
         .prepare(
-          "UPDATE runtime_jobs SET lease_owner=?,lease_until=?,fence=? WHERE run_id=?",
+          "UPDATE runtime_jobs SET lease_owner=?,lease_until=?,fence=?,lease_token=? WHERE run_id=?",
         )
-        .run(owner, now + leaseMs, fence, String(row.run_id));
-      return { runId: String(row.run_id), owner, fence, until: now + leaseMs };
+        .run(owner, now + leaseMs, fence, token, String(row.run_id));
+      return {
+        runId: String(row.run_id),
+        owner,
+        fence,
+        token,
+        until: now + leaseMs,
+      };
     });
   }
   owned(lease: Lease, now = Date.now()) {
     return !!this.db
       .prepare(
-        "SELECT 1 FROM runtime_jobs WHERE run_id=? AND lease_owner=? AND fence=? AND lease_until>?",
+        "SELECT 1 FROM runtime_jobs WHERE run_id=? AND lease_owner=? AND fence=? AND lease_token=? AND lease_until>?",
       )
-      .get(lease.runId, lease.owner, lease.fence, now);
+      .get(lease.runId, lease.owner, lease.fence, lease.token, now);
   }
   renew(lease: Lease, now: number, leaseMs: number) {
     const changed = this.db
       .prepare(
-        "UPDATE runtime_jobs SET lease_until=? WHERE run_id=? AND lease_owner=? AND fence=? AND lease_until>?",
+        "UPDATE runtime_jobs SET lease_until=? WHERE run_id=? AND lease_owner=? AND fence=? AND lease_token=? AND lease_until>?",
       )
-      .run(now + leaseMs, lease.runId, lease.owner, lease.fence, now).changes;
+      .run(
+        now + leaseMs,
+        lease.runId,
+        lease.owner,
+        lease.fence,
+        lease.token,
+        now,
+      ).changes;
     return Number(changed) === 1;
   }
   fenced<T>(lease: Lease, fn: () => T): T {
@@ -167,17 +185,20 @@ export class Store {
     reason: string,
     wakeAt: number | null,
     revision: number,
+    acknowledge: string[] = [],
   ) {
     this.fenced(lease, () => {
       // A concurrent operator control wins over this tick's stale state.
       const run = this.run(lease.runId)!;
       if (run.revision !== revision) wakeAt = Date.now();
-      else
+      else {
+        this.acknowledge(lease.runId, acknowledge);
         this.db
           .prepare(
             "UPDATE runtime_runs SET state=?,reason=?,updated_at=?,next_wake_at=? WHERE id=?",
           )
           .run(state, reason.slice(0, 2000), Date.now(), wakeAt, lease.runId);
+      }
       if (wakeAt === null)
         this.db
           .prepare("DELETE FROM runtime_jobs WHERE run_id=?")
@@ -185,17 +206,22 @@ export class Store {
       else
         this.db
           .prepare(
-            "UPDATE runtime_jobs SET available_at=?,lease_owner=NULL,lease_until=NULL WHERE run_id=?",
+            "UPDATE runtime_jobs SET available_at=?,lease_owner=NULL,lease_until=NULL,lease_token=NULL WHERE run_id=?",
           )
           .run(wakeAt, lease.runId);
     });
   }
-  plan(lease: Lease, action: ToolAction) {
+  plan(lease: Lease, action: ToolAction, acknowledge: string[] = []) {
     return this.fenced(lease, () => {
       const existing = this.db
         .prepare("SELECT * FROM runtime_actions WHERE run_id=? AND work_key=?")
         .get(action.runId, action.workKey) as unknown as ActionRow | undefined;
-      if (existing) return existing;
+      if (existing) {
+        if (!["completed", "failed"].includes(existing.state))
+          this.acknowledge(action.runId, acknowledge);
+        return existing;
+      }
+      this.acknowledge(action.runId, acknowledge);
       const now = Date.now();
       this.db
         .prepare(
@@ -217,6 +243,170 @@ export class Store {
         (row) => row.id === action.actionId,
       )!;
     });
+  }
+  pendingEvents(runId: string, limit = 100): RuntimeEvent[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM runtime_inbox WHERE run_id=? AND consumed_at IS NULL ORDER BY received_at,id LIMIT ?",
+      )
+      .all(runId, limit)
+      .map((row) => ({
+        eventId: String(row.id),
+        source: String(row.source),
+        accountRef: String(row.account_ref),
+        externalEventId: String(row.external_event_id),
+        kind: String(row.kind),
+        payload: JSON.parse(String(row.payload_json)),
+        receivedAt: new Date(Number(row.received_at)).toISOString(),
+      }));
+  }
+  private acknowledge(runId: string, ids: string[]) {
+    for (const id of ids)
+      this.db
+        .prepare(
+          "UPDATE runtime_inbox SET consumed_at=? WHERE id=? AND run_id=? AND consumed_at IS NULL",
+        )
+        .run(Date.now(), id, runId);
+  }
+  deliverEvent(
+    runId: string,
+    event: {
+      source: string;
+      accountRef: string;
+      externalEventId: string;
+      kind: string;
+      payload: Json;
+    },
+    now = Date.now(),
+  ) {
+    for (const value of [
+      event.source,
+      event.accountRef,
+      event.externalEventId,
+      event.kind,
+    ])
+      if (
+        typeof value !== "string" ||
+        !value.length ||
+        Buffer.byteLength(value) > 200
+      )
+        throw new Error("Invalid event identifier");
+    // Canonicalize object keys for idempotency independent of JSON field order.
+    const canonical = (value: Json): Json =>
+      Array.isArray(value)
+        ? value.map(canonical)
+        : value && typeof value === "object"
+          ? Object.fromEntries(
+              Object.keys(value)
+                .sort()
+                .map((key) => [key, canonical(value[key]!)]),
+            )
+          : value;
+    const payload = JSON.stringify(canonical(event.payload));
+    if (!payload || Buffer.byteLength(payload) > 65536)
+      throw new Error("Invalid event payload");
+    const digest = createHash("sha256")
+      .update(
+        JSON.stringify({
+          runId,
+          kind: event.kind,
+          payload: JSON.parse(payload),
+        }),
+      )
+      .digest("hex");
+    return transaction(this.db, () => {
+      const run = this.run(runId);
+      if (!run) throw new Error("Unknown run");
+      const existing = this.db
+        .prepare(
+          "SELECT id,digest FROM runtime_inbox WHERE source=? AND account_ref=? AND external_event_id=?",
+        )
+        .get(event.source, event.accountRef, event.externalEventId);
+      if (existing) {
+        if (existing.digest !== digest)
+          throw new EventConflict(
+            "Event identity conflicts with prior delivery",
+          );
+        return { eventId: String(existing.id), duplicate: true };
+      }
+      const id = randomUUID();
+      this.db
+        .prepare("INSERT INTO runtime_inbox VALUES (?,?,?,?,?,?,?,?,?,NULL)")
+        .run(
+          id,
+          runId,
+          event.source,
+          event.accountRef,
+          event.externalEventId,
+          event.kind,
+          payload,
+          digest,
+          now,
+        );
+      this.event(runId, "inbox.received", id, now);
+      if (run.desired === "run" && run.state !== "failed") {
+        this.db
+          .prepare(
+            "UPDATE runtime_runs SET state=CASE WHEN state='exhausted' THEN state ELSE 'active' END,next_wake_at=?,updated_at=?,revision=revision+1 WHERE id=?",
+          )
+          .run(now, now, runId);
+        this.db
+          .prepare(
+            "INSERT INTO runtime_jobs(run_id,available_at) VALUES (?,?) ON CONFLICT(run_id) DO UPDATE SET available_at=excluded.available_at",
+          )
+          .run(runId, now);
+      }
+      return { eventId: id, duplicate: false };
+    });
+  }
+  workerSeen(id: string, profile: string, ttlMs: number, now = Date.now()) {
+    this.db
+      .prepare(
+        "INSERT INTO runtime_workers VALUES (?,?,?,?,?,NULL) ON CONFLICT(id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at,expires_at=excluded.expires_at,stopped_at=NULL",
+      )
+      .run(id, profile, now, now, now + ttlMs);
+  }
+  workerStopped(id: string, now = Date.now()) {
+    this.db
+      .prepare(
+        "UPDATE runtime_workers SET stopped_at=?,expires_at=? WHERE id=?",
+      )
+      .run(now, now, id);
+  }
+  runtimeStatus(profile: string, now = Date.now()) {
+    const live = this.db
+      .prepare(
+        "SELECT COUNT(*) AS count,MAX(heartbeat_at) AS last FROM runtime_workers WHERE profile=? AND expires_at>? AND stopped_at IS NULL",
+      )
+      .get(profile, now)!;
+    const count = (sql: string, ...params: (string | number)[]) =>
+      Number(this.db.prepare(sql).get(...params)?.count ?? 0);
+    return {
+      available: Number(live.count) > 0,
+      observedAt: new Date(now).toISOString(),
+      liveWorkers: Number(live.count),
+      lastHeartbeatAt:
+        live.last === null ? null : new Date(Number(live.last)).toISOString(),
+      dueJobs: count(
+        "SELECT COUNT(*) AS count FROM runtime_jobs j JOIN runtime_runs r ON r.id=j.run_id WHERE r.profile=? AND j.available_at<=? AND (j.lease_until IS NULL OR j.lease_until<=?)",
+        profile,
+        now,
+        now,
+      ),
+      leasedJobs: count(
+        "SELECT COUNT(*) AS count FROM runtime_jobs j JOIN runtime_runs r ON r.id=j.run_id WHERE r.profile=? AND j.lease_until>?",
+        profile,
+        now,
+      ),
+      unresolvedActions: count(
+        "SELECT COUNT(*) AS count FROM runtime_actions a JOIN runtime_runs r ON r.id=a.run_id WHERE r.profile=? AND a.state='unresolved'",
+        profile,
+      ),
+      pendingEvents: count(
+        "SELECT COUNT(*) AS count FROM runtime_inbox i JOIN runtime_runs r ON r.id=i.run_id WHERE r.profile=? AND i.consumed_at IS NULL",
+        profile,
+      ),
+    };
   }
 }
 export function publicRun(run: RunRow): PublicRun {

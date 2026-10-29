@@ -28,6 +28,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): {
   )
     throw new Error("PUBLIC_ORIGIN must be an exact HTTP origin");
   const secureCookies = env.WIDEMIND_SECURE_COOKIES === "true";
+  if (secureCookies && origin.protocol !== "https:")
+    throw new Error("Secure cookies require an HTTPS public origin");
   if (origin.protocol === "https:" && !secureCookies)
     throw new Error("HTTPS requires secure cookies");
   if (!["127.0.0.1", "localhost", "::1"].includes(host) && !secureCookies)
@@ -43,6 +45,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): {
       profile,
       secureCookies,
       leaseMs: integer(env.WIDEMIND_LEASE_MS, 30000, 3000, 3600000),
+      dependencyMs: integer(env.WIDEMIND_DEPENDENCY_MS, 5000, 10, 60000),
       idleMs: integer(env.WIDEMIND_IDLE_MS, 60000, 1000, 86400000),
     },
     secrets: {

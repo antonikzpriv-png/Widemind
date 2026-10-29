@@ -110,6 +110,26 @@ try {
     );
   });
   assert.equal(status.runs[0].actions[0].attempts, 1);
+  assert.equal(status.runtime.available, true);
+  const eventPath = `/api/operator/runs/${runId}/events`;
+  const inbound = {
+    eventId: "smoke-event",
+    kind: "operator.note",
+    payload: { text: "local event" },
+  };
+  assert.equal((await post(eventPath, inbound, headers)).status, 202);
+  assert.equal((await post(eventPath, inbound, headers)).status, 200);
+  await waitFor(async () => {
+    const state = await (
+      await fetch(origin + "/api/operator/status", {
+        headers: { Cookie: cookie },
+      })
+    ).json();
+    return (
+      state.runs[0].pendingEvents.length === 0 &&
+      state.runs[0].state === "waiting"
+    );
+  });
   const data = await (await fetch(origin + "/api/public")).json();
   assert.equal(data.financial, null);
   assert.equal(data.runs[0].profile, "demo");
@@ -134,6 +154,8 @@ try {
       authenticatedControls: true,
       durableAction: true,
       financialSummary: null,
+      workerLiveness: true,
+      durableEventWakeup: true,
     }),
   );
 } catch (error) {

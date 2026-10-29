@@ -20,7 +20,8 @@
     "format": "prettier --write src test scripts *.json",
     "format:check": "prettier --check src test scripts *.json",
     "smoke": "node scripts/smoke.mjs",
-    "browser:smoke": "node scripts/browser-smoke.mjs"
+    "browser:smoke": "node scripts/browser-smoke.mjs",
+    "status": "node --env-file-if-exists=.env src/runtime/status-main.ts"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

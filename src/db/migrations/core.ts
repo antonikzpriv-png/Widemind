@@ -41,4 +41,22 @@ CREATE INDEX runtime_actions_run ON runtime_actions(run_id,created_at);
 CREATE INDEX runtime_events_run ON runtime_events(run_id,id);
 `,
   },
+  {
+    version: 2,
+    sql: `
+ALTER TABLE runtime_jobs ADD COLUMN lease_token TEXT;
+CREATE TABLE runtime_workers (
+ id TEXT PRIMARY KEY, profile TEXT NOT NULL, started_at INTEGER NOT NULL,
+ heartbeat_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, stopped_at INTEGER
+);
+CREATE TABLE runtime_inbox (
+ id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ source TEXT NOT NULL, account_ref TEXT NOT NULL, external_event_id TEXT NOT NULL,
+ kind TEXT NOT NULL, payload_json TEXT NOT NULL, digest TEXT NOT NULL,
+ received_at INTEGER NOT NULL, consumed_at INTEGER,
+ UNIQUE(source,account_ref,external_event_id)
+);
+CREATE INDEX runtime_inbox_pending ON runtime_inbox(run_id,consumed_at,received_at);
+`,
+  },
 ];

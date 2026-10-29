@@ -170,6 +170,19 @@ try {
     await evaluate("document.documentElement.scrollWidth<=innerWidth"),
     true,
   );
+  assert.equal(
+    await evaluate(
+      "document.querySelector('[aria-label=\"Worker health\"]').innerText.includes('Worker: unavailable')",
+    ),
+    true,
+  );
+  await click('details:has(form[action$="/events"]) > summary');
+  await click('form[action$="/events"] button');
+  await waitFor(() =>
+    evaluate(
+      "document.querySelector('details:has(form[action$=\"/events\"]) summary').textContent.includes('(1 pending)')",
+    ),
+  );
   await shot("operator-phone");
   await click('form[action$="/resume"] button');
   await waitFor(() =>
@@ -191,6 +204,8 @@ try {
     profile: "demo",
     desktopAndPhone: true,
     realFormLoginCreateResumePause: true,
+    operatorEventForm: true,
+    workerHealth: true,
     pageErrors: errors,
   };
   await writeFile(

@@ -1,3 +1,4 @@
+import { callDependency, DependencyTimeout } from "./dependencies.ts";
 import { randomUUID } from "node:crypto";
 import type {
   Candidate,
@@ -22,7 +23,7 @@ function validateCandidate(value: Candidate) {
   )
     throw new Error("Invalid business candidate");
   validateLimit(value.limit);
-  if (JSON.stringify(value.input).length > 65536)
+  if (Buffer.byteLength(JSON.stringify(value.input)) > 65536)
     throw new Error("Action input exceeds limit");
 }
 function validateLimit(limit: Candidate["limit"]) {
@@ -80,11 +81,18 @@ function validateReceipt(receipt: ToolReceipt, action: ToolAction) {
     typeof receipt.usage.provisional !== "boolean"
   )
     throw new Error("Receipt lacks accounting flags");
-  if (JSON.stringify(receipt).length > action.limit.maxOutputBytes + 8192)
+  if (
+    Buffer.byteLength(JSON.stringify(receipt)) >
+    action.limit.maxOutputBytes + 8192
+  )
     throw new Error("Tool exceeded bounded receipt size; reconcile usage");
 }
 export class AgentRuntime {
   readonly owner = randomUUID();
+  private ticking = false;
+  private dependency<T>(stage: string, call: () => Promise<T>) {
+    return callDependency(stage, call, this.config.dependencyMs ?? 5000);
+  }
   private activeController: AbortController | null = null;
   cancelActive() {
     this.activeController?.abort();
@@ -98,6 +106,15 @@ export class AgentRuntime {
     this.config = config;
   }
   async tick(): Promise<boolean> {
+    if (this.ticking) return false;
+    this.ticking = true;
+    try {
+      return await this.tickOwned();
+    } finally {
+      this.ticking = false;
+    }
+  }
+  private async tickOwned(): Promise<boolean> {
     const lease = this.store.acquire(
       this.owner,
       Date.now(),
@@ -123,8 +140,17 @@ export class AgentRuntime {
       },
       Math.max(100, Math.floor(this.config.leaseMs / 3)),
     );
+    let acknowledge: string[] = [];
+    let hasMoreEvents = false;
     const finish = (state: RunState, reason: string, wake: number | null) =>
-      this.store.finish(lease, state, reason, wake, run.revision);
+      this.store.finish(
+        lease,
+        state,
+        reason,
+        hasMoreEvents && acknowledge.length > 0 ? Date.now() : wake,
+        run.revision,
+        acknowledge,
+      );
     const retry = () => Date.now() + this.config.idleMs;
     try {
       if (run.profile !== this.config.profile) {
@@ -170,7 +196,9 @@ export class AgentRuntime {
         );
         return true;
       }
-      const financial = await this.services.economy.summary(run.id);
+      const financial = await this.dependency("economy.summary", () =>
+        this.services.economy.summary(run.id),
+      );
       if (
         run.state === "exhausted" &&
         (!financial || BigInt(financial.spendableMicros) <= 0n)
@@ -182,24 +210,40 @@ export class AgentRuntime {
         );
         return true;
       }
-      const selected = await this.services.business.selectWork({
-        runId: run.id,
-        now: new Date().toISOString(),
-        financial,
-        actions: this.store.views(run.id),
-        capabilities: this.services.tools.capabilities(),
-      });
+      const pendingEvents = this.store.pendingEvents(run.id, 101);
+      hasMoreEvents = pendingEvents.length > 100;
+      const events = pendingEvents.slice(0, 100);
+      const selected = await this.dependency("business.select", () =>
+        this.services.business.selectWork({
+          runId: run.id,
+          now: new Date().toISOString(),
+          financial,
+          actions: this.store.views(run.id),
+          capabilities: this.services.tools.capabilities(),
+          events,
+        }),
+      );
+      acknowledge = selected.acknowledgeEventIds ?? [];
+      if (
+        !Array.isArray(acknowledge) ||
+        acknowledge.some((id) => !events.some((event) => event.eventId === id))
+      )
+        throw new Error(
+          "Cannot acknowledge an event outside the inspected snapshot",
+        );
       if (selected.kind !== "work") {
-        const wake =
+        let wake =
           selected.kind === "wait" && selected.wakeAt
             ? Date.parse(selected.wakeAt)
             : selected.kind === "unavailable"
               ? retry()
               : null;
-        if (wake !== null && (!Number.isFinite(wake) || wake < Date.now()))
+        if (wake !== null && !Number.isFinite(wake))
           throw new Error(
             "Business wakeup must be a valid future UTC timestamp",
           );
+        if (wake !== null && wake <= Date.now())
+          wake = Date.now() + Math.min(1000, this.config.idleMs);
         finish("waiting", selected.reason, wake);
         return true;
       }
@@ -222,7 +266,7 @@ export class AgentRuntime {
         actionId: randomUUID(),
         runId: run.id,
       };
-      const row = this.store.plan(lease, action);
+      const row = this.store.plan(lease, action, acknowledge);
       if (["completed", "failed"].includes(row.state)) {
         finish(
           "waiting",
@@ -243,7 +287,9 @@ export class AgentRuntime {
           : "Awaiting authorization, dependency or reconciliation",
         result === "done" ? Date.now() : retry(),
       );
-    } catch {
+    } catch (error) {
+      acknowledge = [];
+      const timedOut = error instanceof DependencyTimeout;
       if (!leaseLost && this.store.owned(lease)) {
         this.store.fenced(lease, () => {
           this.store.db
@@ -257,17 +303,28 @@ export class AgentRuntime {
             )
             .run(Date.now(), run.id);
           this.store.db
-            .prepare(
-              "UPDATE runtime_runs SET last_error='runtime.operation_failed' WHERE id=?",
-            )
-            .run(run.id);
+            .prepare("UPDATE runtime_runs SET last_error=? WHERE id=?")
+            .run(
+              timedOut
+                ? "runtime.dependency_timeout"
+                : "runtime.operation_failed",
+              run.id,
+            );
           this.store.event(
             run.id,
-            "runtime.failed",
-            "Runtime operation failed; private action history retained",
+            timedOut ? "runtime.dependency_timeout" : "runtime.failed",
+            timedOut
+              ? `Free dependency timed out: ${error.stage}`
+              : "Runtime operation failed; private action history retained",
           );
         });
-        finish("failed", "Runtime failure; operator may resume recovery", null);
+        finish(
+          timedOut ? "waiting" : "failed",
+          timedOut
+            ? "Dependency timed out; retry scheduled without repeating external effects"
+            : "Runtime failure; operator may resume recovery",
+          timedOut ? retry() : null,
+        );
       }
     } finally {
       clearInterval(heartbeat);
@@ -301,12 +358,14 @@ export class AgentRuntime {
         .capabilities()
         .find((item) => item.id === action.tool);
       if (!capability?.availability.available) return "waiting";
-      const authorization = await this.services.economy.authorize({
-        runId: action.runId,
-        actionId: action.actionId,
-        tool: action.tool,
-        limit: action.limit,
-      });
+      const authorization = await this.dependency("economy.authorize", () =>
+        this.services.economy.authorize({
+          runId: action.runId,
+          actionId: action.actionId,
+          tool: action.tool,
+          limit: action.limit,
+        }),
+      );
       if (authorization.kind !== "authorized") {
         this.store.fenced(lease, () =>
           this.store.db
@@ -334,9 +393,8 @@ export class AgentRuntime {
     }
     validateReservation(reservation, action);
     if (!receipt && (row.state === "running" || row.state === "unresolved")) {
-      const reconciled = await this.services.tools.reconcile(
-        action,
-        reservation,
+      const reconciled = await this.dependency("tools.reconcile", () =>
+        this.services.tools.reconcile(action, reservation!),
       );
       if (reconciled.kind === "receipt") receipt = reconciled.receipt;
       else if (reconciled.kind === "not_performed") {
@@ -377,12 +435,14 @@ export class AgentRuntime {
       )
         return "waiting";
       if (!justAuthorized) {
-        const renewed = await this.services.economy.authorize({
-          runId: action.runId,
-          actionId: action.actionId,
-          tool: action.tool,
-          limit: action.limit,
-        });
+        const renewed = await this.dependency("economy.authorize", () =>
+          this.services.economy.authorize({
+            runId: action.runId,
+            actionId: action.actionId,
+            tool: action.tool,
+            limit: action.limit,
+          }),
+        );
         if (renewed.kind !== "authorized")
           return renewed.kind === "insufficient" ? "exhausted" : "waiting";
         validateReservation(renewed.reservation, action);
@@ -421,7 +481,15 @@ export class AgentRuntime {
       // Gateways must honor AbortSignal and enforce provider limits. Abandoning
       // this wait is uncertain, never proof that a provider did no work.
       const result = await Promise.race([
-        this.services.tools.execute(action, reservation, combined),
+        Promise.resolve()
+          .then(() =>
+            this.services.tools.execute(action, reservation!, combined),
+          )
+          .catch(() => ({
+            kind: "unknown" as const,
+            reason:
+              "Tool transport failed after dispatch; reconcile before retry",
+          })),
         new Promise<{ kind: "unknown"; reason: string }>((resolve) => {
           if (combined.aborted)
             resolve({
@@ -456,7 +524,9 @@ export class AgentRuntime {
         )
         .run(JSON.stringify(receipt), Date.now(), action.actionId),
     );
-    const settlement = await this.services.economy.settle(reservation, receipt);
+    const settlement = await this.dependency("economy.settle", () =>
+      this.services.economy.settle(reservation!, receipt!),
+    );
     if (settlement.kind !== "settled") {
       this.unresolved(lease, action.actionId, settlement.reason);
       return "waiting";

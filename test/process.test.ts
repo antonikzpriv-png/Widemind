@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { webServer } from "../src/web/server.ts";
@@ -67,6 +67,19 @@ test("worker outlives the website, survives process restart, and competing worke
       () => logs.split("worker started").length === 3,
       () => logs,
     );
+    assert.equal(f.store.runtimeStatus("demo").liveWorkers, 2);
+    const status = () =>
+      spawnSync(process.execPath, ["src/runtime/status-main.ts"], {
+        env: {
+          ...process.env,
+          WIDEMIND_DATABASE: f.config.database,
+          WIDEMIND_PROFILE: "demo",
+        },
+        encoding: "utf8",
+      });
+    const connected = status();
+    assert.equal(connected.status, 0);
+    assert.equal(JSON.parse(connected.stdout).liveWorkers, 2);
     await new Promise<void>((resolve, reject) =>
       web.close((error) => (error ? reject(error) : resolve())),
     );
@@ -81,6 +94,8 @@ test("worker outlives the website, survives process restart, and competing worke
     assert.equal(f.store.actions(id)[0]?.attempts, 1);
     assert.equal(f.store.actions(id)[0]?.state, "completed");
     await Promise.all(children.map(stop));
+    assert.equal(f.store.runtimeStatus("demo").available, false);
+    assert.equal(status().status, 2);
     const before = f.store.actions(id)[0]?.id;
     logs = "";
     launch();

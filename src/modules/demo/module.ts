@@ -38,11 +38,17 @@ export const definition: ModuleDefinition = {
         snapshot.actions.length
           ? {
               kind: "wait",
+              acknowledgeEventIds: snapshot.events.map(
+                (event) => event.eventId,
+              ),
               reason:
                 "Local demonstration finished; no automatic paid planning",
             }
           : {
               kind: "work",
+              acknowledgeEventIds: snapshot.events.map(
+                (event) => event.eventId,
+              ),
               candidate: {
                 workKey: "local-foundation-check-v1",
                 tool: "demo.write-note",

@@ -8,7 +8,7 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
-The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, and typed module contracts.
+The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
 Live economy, business strategy, Gmail, models, payment processing, publishing, and customer commerce are **not implemented**. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent the $5 opening grant or customer revenue.
 
@@ -19,6 +19,7 @@ npm run migrate
 npm run check
 npm run dev          # terminal 1: http://127.0.0.1:3000
 npm run worker:dev   # terminal 2: persistent worker
+npm run status       # private worker/queue status; exit 2 if no worker is fresh
 ```
 
 Configure the operator password hash before creating or controlling runs. See [setup and deployment](docs/FOUNDATION.md) for exact authentication, demo, production, and environment instructions, and [integration contracts](docs/INTERFACES.md) for module registration and migrations. Start with [AGENTS.md](AGENTS.md) for contributor instructions.
