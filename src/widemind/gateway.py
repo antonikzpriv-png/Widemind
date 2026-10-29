@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 import uuid
 from contextlib import contextmanager
@@ -116,6 +117,17 @@ class Gateway:
             raise ToolError("unknown_tool", "Unknown tool; use status to inspect the installed adapters.")
         return self.adapters[name]
 
+    def _central_accounting_selected(self):
+        """A standalone development wallet cannot replace the runtime authority.
+
+        Owner configuration may opt into the central boundary, but it cannot
+        override an inherited central service/signing configuration. No request
+        input, secret value, or provider response selects accounting authority.
+        """
+        return bool(os.environ.get("WIDEMIND_ECONOMY_URL") or
+                    os.environ.get("WIDEMIND_RUNTIME_AUTH_SECRET") or
+                    self.config.get("policy", {}).get("accounting_authority") == "central")
+
     def execute(self, tool, arguments, *, run_id, action_id=None, job_id=None):
         adapter = self._adapter(tool)
         if not isinstance(arguments, dict):
@@ -147,6 +159,15 @@ class Gateway:
                 quote = adapter.quote(arguments,config)
             except ToolError as exc:
                 quote, error = Quote(), exc
+        if quote.paid and self._central_accounting_selected():
+            terminal = {"succeeded", "failed", "unavailable", "cancelled"}
+            if old is None or old["status"] not in terminal:
+                # Refuse before local wallet admission, claiming, or dispatch.
+                # Existing terminal replays still pass prepare's input identity
+                # check below; observational recovery remains in reconcile().
+                raise ToolError("central_economy_required",
+                                "Standalone paid execution is disabled while central runtime accounting is configured. "
+                                "Use a registered central-authorized tool adapter; recover existing standalone actions with reconcile.")
         row, fresh = self.store.prepare(action_id=action_id,run_id=run_id,job_id=job_id,tool=tool,
                                         version=old["version"] if old else adapter.spec.version,
                                         arguments=arguments,config=config,policy=policy,quote=quote)
