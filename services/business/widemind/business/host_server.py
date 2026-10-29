@@ -124,6 +124,9 @@ class Host:
             if path=='/v1/conversations':return {'conversations':business.conversation_list()}
             if path=='/v1/conversation':return {'conversation':business.conversation_view(payload['conversationId'])}
             if path=='/v1/recovery':
+            if path=='/v1/conversation-resolve':
+                business.conversation_resolve(conversation_id=payload['conversationId'], evidence_reference=payload['evidenceReference'])
+                return {'resolved':True,'requiresFreshAssessment':True}
                 effect=business.store.one('SELECT * FROM effects WHERE id=? AND run_id=?',(payload['actionId'],run))
                 if not effect:raise ValueError('unknown effect')
                 mode=payload.get('mode','reconcile');reference=payload.get('evidenceReference') or 'operator:'+secrets.token_hex(16)

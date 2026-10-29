@@ -377,6 +377,24 @@ export const definition: ModuleDefinition = {
             conversationId: identifier(query.conversationId),
           }),
         ),
+        route("conversation-resolve", "operator", "POST", async (body) => {
+          const runId = run(body.runId);
+          if (
+            typeof body.evidenceReference !== "string" ||
+            !body.evidenceReference.trim() ||
+            body.evidenceReference.length > 1000
+          )
+            throw new Error(
+              "A bounded operator evidence reference is required",
+            );
+          const result = await client.request("/v1/conversation-resolve", {
+            runId,
+            conversationId: identifier(body.conversationId),
+            evidenceReference: body.evidenceReference,
+          });
+          wake(runId);
+          return result;
+        }),
         route("policy", "operator", "POST", async (body) => {
           const runId = run(body.runId);
           const result = await client.request("/v1/policy", {

@@ -170,6 +170,41 @@ class ConversationPortalTests(unittest.TestCase):
         self.assertEqual(own['orders'][0]['orderId'], order_id)
         self.assertEqual(own['quotes'][0]['digest'], proposal['digest'])
 
+    def test_operator_resolution_records_evidence_but_does_not_accept_old_terms(self):
+        created = self.request()
+        proposal = self.proposal(created['conversationId'])
+        business = self.host.business('run-1')
+        try:
+            business.store.db.execute("UPDATE customer_threads SET operator_hold=1,status='needs_operator',intervention='Complaint requires review' WHERE id=?", (created['conversationId'],))
+            business.store.db.execute("UPDATE conversation_proposals SET status='needs_review' WHERE quote_id=?", (proposal['quoteId'],))
+        finally:
+            business.store.close()
+        with self.assertRaises(ValueError):
+            self.host.handle('/v1/conversation-resolve', {'runId':'run-1',
+                'conversationId':created['conversationId'],'evidenceReference':' '})
+        resolution = {'runId':'run-1','conversationId':created['conversationId'],
+                      'evidenceReference':'operator-reviewed-complaint-1'}
+        result = self.host.handle('/v1/conversation-resolve', resolution)
+        self.assertEqual(result, {'resolved':True,'requiresFreshAssessment':True})
+        own = self.customer()
+        self.assertEqual(own['conversation']['status'], 'collecting')
+        self.assertEqual(own['orders'], [])
+        revision = own['conversation']['revision']
+        self.assertEqual(self.host.handle('/v1/conversation-resolve', resolution), result)
+        self.assertEqual(self.customer()['conversation']['revision'], revision, 'evidence replay cannot repeatedly clear a new hold')
+        business = self.host.business('run-1')
+        try:
+            business.store.db.execute("UPDATE customer_threads SET operator_hold=1,status='needs_operator',intervention='New complaint requires a new review' WHERE id=?", (created['conversationId'],))
+        finally:
+            business.store.close()
+        self.host.handle('/v1/conversation-resolve', resolution)
+        self.assertEqual(self.customer()['conversation']['status'], 'needs_operator', 'old resolution evidence cannot release a later hold')
+        with self.assertRaises(ValueError):
+            self.host.handle('/v1/accept', {'runId':'run-1','token':'x'*43,
+                'conversationId':created['conversationId'],'quoteId':proposal['quoteId'],
+                'version':proposal['version'],'digest':proposal['digest']})
+        self.assertEqual(self.providers.payments, [])
+
     def test_gmail_portal_access_is_private_single_issue_and_revocable(self):
         business = self.host.business('run-1')
         token = 'g'*43

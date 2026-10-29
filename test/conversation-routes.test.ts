@@ -59,7 +59,9 @@ test("conversation ingress is token-scoped, privately observable and wake-idempo
                 }
               : request.url === "/v1/opt-out"
                 ? { optedOut: true }
-                : { orderId: "order-fixture" };
+                : request.url === "/v1/conversation-resolve"
+                  ? { resolved: true, requiresFreshAssessment: true }
+                  : { orderId: "order-fixture" };
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify(result));
   });
@@ -105,6 +107,19 @@ test("conversation ingress is token-scoped, privately observable and wake-idempo
       });
     const listPath = "/api/modules/business/conversations?runId=" + runId;
     assert.equal((await fetch(origin + listPath)).status, 401);
+    assert.equal(calls.length, 0);
+    assert.equal(
+      (
+        await post("/api/modules/business/conversation-resolve", {
+          token: "x".repeat(43),
+          operator: true,
+          conversationId: "conversation-x",
+          evidenceReference: "customer-claim",
+        })
+      ).status,
+      401,
+      "a customer token and claimed operator flag cannot release intervention",
+    );
     assert.equal(calls.length, 0);
     assert.equal(
       (
@@ -175,6 +190,7 @@ test("conversation ingress is token-scoped, privately observable and wake-idempo
     });
     assert.equal(login.status, 200);
     const cookie = login.headers.get("set-cookie")!.split(";")[0]!;
+    const { csrf } = (await login.json()) as { csrf: string };
     const privateList = await fetch(origin + listPath, {
       headers: { Cookie: cookie },
     });
@@ -188,6 +204,51 @@ test("conversation ingress is token-scoped, privately observable and wake-idempo
     );
     assert.equal(privateDetail.status, 200);
     assert.match(await privateDetail.text(), /private-customer-canary/);
+    const resolution = {
+      runId,
+      conversationId: "conversation-x",
+      evidenceReference: "operator-review-1",
+    };
+    const beforeResolution = calls.length;
+    assert.equal(
+      (
+        await post("/api/modules/business/conversation-resolve", resolution, {
+          Cookie: cookie,
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      calls.length,
+      beforeResolution,
+      "a valid session still requires CSRF",
+    );
+    assert.equal(
+      (
+        await post(
+          "/api/modules/business/conversation-resolve",
+          { ...resolution, evidenceReference: " " },
+          { Cookie: cookie, "X-CSRF-Token": csrf },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      calls.length,
+      beforeResolution,
+      "a missing evidence reference cannot clear a hold",
+    );
+    const resolved = await post(
+      "/api/modules/business/conversation-resolve",
+      resolution,
+      { Cookie: cookie, "X-CSRF-Token": csrf },
+    );
+    assert.equal(resolved.status, 200);
+    assert.equal((await resolved.json()).requiresFreshAssessment, true);
+    assert.deepEqual(calls.at(-1), {
+      path: "/v1/conversation-resolve",
+      body: resolution,
+    });
     assert.doesNotMatch(
       await (await fetch(origin + "/api/public")).text(),
       /private-customer-canary|stable-1|spending rules/,
