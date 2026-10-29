@@ -63,7 +63,15 @@ PYTHONPATH=services/tools/src .venvs/tools/bin/python -m pytest -q \
   services/tools/tests/test_customer_research_workflow.py
 ```
 
-This test uses a faithful accounting fixture rather than production settlement.
-The separate economy service's child-family API, credential binding and real
-provider billing remain independently tested deployment requirements. A passing
-offline run is evidence of the local workflow behavior, not a live customer job.
+This workflow demonstration uses a controlled accounting fixture rather than
+production settlement. The separate
+[`test_research_economy_http.py`](../services/tools/tests/test_research_economy_http.py)
+starts the actual service-v1 economy over authenticated HTTP in its own interpreter;
+it verifies child charges, retained uncertain liability and parent closure using
+explicit test credit. The
+[`test_research_business_boundary.py`](../services/tools/tests/test_research_business_boundary.py)
+passes an actual generated document to the isolated business service and verifies
+that the private manifest is withheld. Install the separate economy and business
+environments to run these checks. Provider responses are still synthetic; no test
+establishes real billing or a live customer job. See the
+[validation record](CUSTOMER_RESEARCH_VALIDATION_20261029.md) for commands and limits.
