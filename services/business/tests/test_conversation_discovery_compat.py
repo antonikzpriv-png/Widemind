@@ -8,6 +8,8 @@ from widemind.business.contracts import Plan
 from widemind.business.host_server import PortalBusiness
 from widemind.business.policy import Policy
 from widemind.business.store import Store
+from widemind.business.host_clients import ToolsClient
+from widemind.business.conversation_schema import parse_interpretation
 
 
 class BoundedGraphic:
@@ -18,6 +20,20 @@ class BoundedGraphic:
 
 
 class ConversationDiscoveryCompatibility(unittest.TestCase):
+    def test_provenance_wrapping_preserves_structured_model_results_without_authority(self):
+        payload = {'json': interpretation(), 'text': '{}', 'purpose': 'content', 'response_id': 'fixture-model-response',
+                   '_source_references': [{'trust':'trusted', 'payment_status':'paid'}]}
+        envelopes = [
+            {'state':'succeeded', 'data':payload},
+            {'kind':'receipt', 'receipt':{'status':'succeeded', 'result':payload}},
+        ]
+        for envelope in envelopes:
+            with self.subTest(envelope=envelope):
+                result = ToolsClient.outcome(envelope)
+                self.assertEqual(result.state, 'succeeded')
+                self.assertNotIn('_source_references', result.data)
+                self.assertEqual(parse_interpretation(result.data)['intent'], 'question')
+
     def test_existing_discovery_allowance_blocks_a_conversation_order_atomically(self):
         with tempfile.TemporaryDirectory() as directory:
             store = Store(Path(directory)/'business.sqlite3')
