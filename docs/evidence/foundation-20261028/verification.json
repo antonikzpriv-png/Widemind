@@ -1,0 +1,83 @@
+{
+  "sourceCommit": "e8f9cc3a6dc300d3c9c9cdf889e537a28577d5c9",
+  "date": "2026-10-28",
+  "scope": "Local foundation only; no external accounts, funds, customers or payments",
+  "versions": {
+    "node": "24.19.0",
+    "npm": "11.9.0",
+    "typescript": "5.9.3"
+  },
+  "commands": {
+    "npm ci --cache /tmp/widemind-npm-cache": "passed",
+    "npm run check": {
+      "passed": true,
+      "tests": 26,
+      "failures": 0,
+      "includes": [
+        "format:check",
+        "typecheck",
+        "test",
+        "build"
+      ]
+    },
+    "npm run migrate": "passed inside isolated production smoke",
+    "npm run smoke": {
+      "passed": true,
+      "compiledWeb": true,
+      "compiledWorker": true,
+      "authenticatedControls": true,
+      "durableAction": true,
+      "financialSummary": null
+    },
+    "npm run browser:smoke": {
+      "passed": true,
+      "profile": "demo",
+      "desktopAndPhone": true,
+      "realFormLoginCreateResumePause": true,
+      "pageErrors": []
+    },
+    "npm run dev": "startup verified",
+    "npm run worker:dev": "startup verified",
+    "npm start": "startup verified",
+    "npm run worker": "startup verified",
+    "npm run operator:hash": "verified with disposable input; no credential retained"
+  },
+  "sourceSha256": {
+    "package-lock.json": "71fd5bf8456790363846d14fd016e21252609070eac67f647b96f1d5bdef4fbd",
+    "package.json": "d56ec540ab37b44abbe3981129734fc8d30b9111346443369b64c7d0af73f7d3",
+    "scripts/browser-smoke.mjs": "2a0f5030defe88cf6c94f7e015e27e61e5b820b42ab380e14823f6fb5587b3c3",
+    "scripts/smoke.mjs": "cecf9d6b1fc6d571ca70043ba4e2bcf60365b9942dbcc74db16d89346445d73d",
+    "src/auth/hash-main.ts": "d279061d5adb0af4ac9f5a2b2650218f49a12f918f66c887a79194b38d19a267",
+    "src/auth/password.ts": "3de7a5f73f06843d256764dbf974f182090f58245e849e207fb5c3c336de860a",
+    "src/auth/sessions.ts": "bab738f84bc961a8412cd177d4fc83e404c75694be58bcdac37ecbad342c9160",
+    "src/bootstrap.ts": "318685a43332eb52c80c38a569116d6c0fee3ee0ebab79b80daa8e4c38d98f30",
+    "src/config.ts": "32ff8e0201fb1d01aff4d940fcab3c0ae0d2030080fa0ce0fcd7f559365d8ead",
+    "src/contracts/index.ts": "e879cf3b0fb2cb96946684c238947bfcbac7e31876e1369a0ca604224ef12030",
+    "src/db/database.ts": "f8235444b1326dca317cd5409475e66bbf460a4a7169e034ce950a365cda87a8",
+    "src/db/migrate-main.ts": "fe54127d95e936cc46dafce959be22c66851f10e0149b1d0006f228db76c8518",
+    "src/db/migrate.ts": "9da1b2dd9e0292191554e20b6e6c5f31b53f8440681f4cfe4bc1484d994636ef",
+    "src/db/migrations/core.ts": "5e91cb4fab62c7319940a0fb3f039c936ef3799908fc5d7e883bd4a5024e3aea",
+    "src/modules/demo/module.ts": "4f2efd1a5b580a7a4ca7a699f6a4d15c11847de2900f4c7112403b0efa830350",
+    "src/modules/registry.ts": "a0b574c4c703d65d6e8a2e0cb479a10ade172e9352e5f0cfb5a2feb983eb6ffc",
+    "src/runtime/engine.ts": "d84e961e3e2408d05333cfdde125fdd21c438611a6e50dcb035d70fa07471280",
+    "src/runtime/main.ts": "80f917c3c513c3c0022e41424153c6a4cf967997d294c69ca4a802b84d284dfd",
+    "src/runtime/store.ts": "86e71821b9db029fa98df7038b5924f541313be9f62207afe00cd58715904594",
+    "src/web/main.ts": "82e038c2b721594b353ca4adc0ff03ce6653f0c96154ba97e6521bb0192bd633",
+    "src/web/pages.ts": "30f109b01b7374b72f52f4880c50919f6a8e5ed6f8f3a8d0a89352a3a49352ee",
+    "src/web/projections.ts": "a19d354ffd3334e3d7184ee0af540ce6bb39419334814751c9ebe896352cb828",
+    "src/web/server.ts": "852e079a9348882d6b7dd78c1f77e3a9f983fe94f8e458267f4c1dec025620db",
+    "test/foundation.test.ts": "d401423891206a3397edfed667001aab46a94650c323ead232c0d5db484520d8",
+    "test/helpers.ts": "6930cf63bde9689c42d2e873eaa409ab0b883f85da91cd2bb63c9b840836bf4b",
+    "test/process.test.ts": "5e2de48053df92794b24f34572cdc8c641dcbce6d2161a1d7d999ddb81482e11",
+    "test/runtime.test.ts": "28eb18a82390f91638d11883fc3c8ccace03f278c602ed696624c4d885a2c0c5",
+    "test/web.test.ts": "03817f5a78039d5b0a55e032b30e92c4ef4c43e35fcf16ded12ec25408614891",
+    "tsconfig.json": "84a56a2d457780bcc89e13208e6e722de6176640b4c465ce28707752e6e4b476",
+    "tsconfig.test.json": "adc66a53eaa991b16fc1ff9af77862ff6d687d403c2506c8d3f78756f8b0fab3"
+  },
+  "limitations": [
+    "No live ledger, opening grant, customer revenue, Gmail, models, payments, browsing, publishing or sandboxed code execution",
+    "Provider adapters must enforce actual authorization, spend limits and external idempotency",
+    "SQLite deployment is one host with persistent local storage",
+    "Systemd examples and GitHub CI configuration supplied; not deployed or remotely certified"
+  ]
+}

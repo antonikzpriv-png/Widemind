@@ -6,7 +6,7 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below are a proposed implementation contract. No ledger or payment integration exists yet.
+The rules below govern the typed economy interface now consumed by the persistent runtime. The foundation implements reservation/settlement wiring and explicit unavailable behavior, not the funded ledger or payment integration. No opening credit or customer revenue is invented. See [INTERFACES.md](INTERFACES.md).
 
 ## Units
 

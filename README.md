@@ -8,9 +8,21 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
-This repository contains the project foundation and implementation plan. The runtime, website, Gmail integration, tools, and payments are **planned, not implemented**.
+The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
-Start with [AGENTS.md](AGENTS.md) for developer instructions and [the roadmap](docs/ROADMAP.md) for implementation milestones.
+Live economy, business strategy, Gmail, models, payment processing, publishing, and customer commerce are **not implemented**. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent the $5 opening grant or customer revenue.
+
+```sh
+npm ci
+cp .env.example .env
+npm run migrate
+npm run check
+npm run dev          # terminal 1: http://127.0.0.1:3000
+npm run worker:dev   # terminal 2: persistent worker
+npm run status       # private worker/queue status; exit 2 if no worker is fresh
+```
+
+Configure the operator password hash before creating or controlling runs. See [setup and deployment](docs/FOUNDATION.md) for exact authentication, demo, production, and environment instructions, and [integration contracts](docs/INTERFACES.md) for module registration and migrations. Start with [AGENTS.md](AGENTS.md) for contributor instructions.
 
 ## What WideMind should be able to do
 
@@ -55,9 +67,11 @@ Public activity uses a deliberately selected projection of events. Customer conv
 | [Economy](docs/ECONOMY.md) | Budget, reservations, payments, costs, and exhaustion |
 | [Roadmap](docs/ROADMAP.md) | Build sequence, acceptance criteria, and five-agent work allocation |
 
+See the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
+
 ## Start building
 
-Choose and document a small, maintainable stack, then implement the first runnable milestone. No dependency manifest, build command, or deployment configuration has been established yet.
+The initial stack is Node.js 24, TypeScript, and SQLite, with separate web and worker commands in this repository. Install, migration, development, build, test, and worker commands are implemented and documented in [FOUNDATION.md](docs/FOUNDATION.md).
 
 The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
 
@@ -65,4 +79,4 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-Application stack, hosting, domain/path, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+The application stack and local storage are selected. Hosting, domain, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.

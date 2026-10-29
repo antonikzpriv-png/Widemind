@@ -43,3 +43,8 @@ htmlcov/
 # Operating system files
 .DS_Store
 Thumbs.db
+
+# Selected SQLite foundation state
+var/
+*.sqlite-shm
+*.sqlite-wal

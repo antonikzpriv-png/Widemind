@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The foundation currently contains documentation only. Do not invent existing scripts, passing tests, deployment URLs, integrations, or completed milestones.
+The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. Live business/economy/provider capabilities remain unavailable; do not invent integrations, balances, deployment URLs, or completed live milestones.
 
 ## Working approach
 
@@ -57,7 +57,7 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-There are no established build or test commands yet. When scaffolding the application, add real commands and document how to run them.
+Use npm ci, npm run migrate, npm run check, npm run dev and npm run worker:dev. Node 24.x is required. Production commands are npm run build, npm start and npm run worker. See docs/FOUNDATION.md.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.

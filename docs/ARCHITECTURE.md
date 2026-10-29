@@ -2,7 +2,7 @@
 
 ## Status
 
-This document proposes implementation boundaries. No application stack, hosting provider, payment processor, model provider, or database has been selected.
+The foundation implements Node.js 24/TypeScript, a separate HTTP web process and persistent worker, and durable local SQLite storage. The component boundaries below remain the product architecture. Live economy/tools/business/commerce providers are not implemented. See [FOUNDATION.md](FOUNDATION.md) and the versioned [INTERFACES.md](INTERFACES.md) for actual commands, recovery semantics and module integration. Hosting, payment and model providers are not selected.
 
 ## Product requirements
 
