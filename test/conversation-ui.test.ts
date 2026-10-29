@@ -29,6 +29,12 @@ class Element {
   replaceChildren(...children: Element[]) {
     this.children = children;
   }
+  get firstChild() {
+    return this.children[0];
+  }
+  get options() {
+    return this.children;
+  }
 }
 
 function all(element: Element): Element[] {
@@ -73,7 +79,7 @@ function fixture(
   });
   new Script(commerceScript).runInContext(context);
   const functions = runInContext(
-    "({proposalCard,conversationDetails,sendCustomerMessage,customerConversationForm,keepToken})",
+    "({proposalCard,conversationDetails,sendCustomerMessage,customerConversationForm,keepToken,offerings})",
     context,
   ) as {
     proposalCard(
@@ -94,6 +100,7 @@ function fixture(
       conversation: Record<string, unknown>,
     ): Element;
     keepToken(token: string): void;
+    offerings(): Promise<void>;
   };
   return {
     ...functions,
@@ -220,6 +227,25 @@ test("a private email link preserves its run and keeps access tokens in fragment
   assert.equal(f.calls[0]!.path, "/api/modules/business/message");
   assert.ok(!f.calls[0]!.path.includes(token));
 });
+
+for (const unavailable of [false, true]) {
+  test(`ordinary message intake remains enabled when offerings are ${unavailable ? "unavailable" : "empty"}`, async () => {
+    const f = fixture(async () => {
+      if (unavailable) throw new Error("controlled capability outage");
+      return { offerings: [] };
+    });
+    const request = new Element("form");
+    request.elements.service = new Element("select");
+    const submit = new Element("button");
+    f.selectors.set("#commerce-request", request);
+    f.selectors.set("#commerce-request button", submit);
+    f.selectors.set("#commerce-offerings", new Element("div"));
+    await f.offerings();
+    assert.equal(submit.disabled, false);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.calls[0]!.path, "/api/modules/business/offerings");
+  });
+}
 
 test("opt-out is an immediate token-scoped request without customer-supplied authority", async () => {
   const f = fixture(async () => ({ optedOut: true }));
