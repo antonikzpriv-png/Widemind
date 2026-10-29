@@ -172,6 +172,7 @@ class IntegratedTools:
         name=action['tool']
         if name.startswith('gmail.') and name in {'gmail.send','gmail.read','gmail.list','gmail.thread'}:name='gmail'
         value={'tool_config':self.config.get('tools',{}).get(name,{}),'policy':self.config.get('policy',{}),'workspace':str(self.workspace.root),'adapter_version':self.adapters[name].spec.version if name in self.adapters else None}
+        if action['tool']=='gmail.read' and 'message_id' not in action.get('input',{}):value['conversation_inbox_version']=1
         return hashlib.sha256(canonical(value).encode()).hexdigest()
     def runtime_stopped(self,run_id):
         path=os.environ.get('WIDEMIND_RUNTIME_DATABASE')
@@ -183,13 +184,14 @@ class IntegratedTools:
         except (OSError,sqlite3.Error):return True
     def _adapter(self,action):
         if self.journal.load(action['actionId']).get('owner_fingerprint')!=self.owner_fingerprint(action):raise Unavailable('Owner adapter/account/policy changed; restore the original configuration or reconcile through operator review before retry.')
-        name=action['tool'];args=dict(action['input'])
+        name=action['tool'];args=dict(action['input']);conversation_inbox=False
         if name in {'gmail.send','gmail.read','gmail.list','gmail.thread'}:
             args['operation']=name.split('.')[1];name='gmail'
             if 'body' in args:args['text']=args.pop('body')
             if isinstance(args.get('to'),str):args['to']=[args['to']]
             if 'cursor' in args:args['page_token']=args.pop('cursor')
-            if args.get('operation')=='read' and 'message_id' not in args:args['operation']='list'
+            if args.get('operation')=='read' and 'message_id' not in args:
+                args['operation']='conversation_batch';conversation_inbox=True
             if 'attachment' in args:
                 attachment=args.pop('attachment');path='deliveries/'+hashlib.sha256(action['actionId'].encode()).hexdigest()+'/'+attachment['filename'];content=attachment['content'].encode()
                 try:
@@ -205,6 +207,9 @@ class IntegratedTools:
         if settings.get('enabled') is not True:raise Unavailable('Tool disabled in owner configuration.')
         cap=action['limit']['maxOutputBytes'];settings['max_output_bytes']=min(settings.get('max_output_bytes',cap),cap)
         if action['limit'].get('maxTokens') is not None:settings['max_output_tokens']=min(settings.get('max_output_tokens',action['limit']['maxTokens']),action['limit']['maxTokens'])
+        if conversation_inbox:
+            from .conversation_gmail import ConversationGmailAdapter
+            return ConversationGmailAdapter(self.adapters[name]),args,settings
         return self.adapters[name],args,settings
     def context(self,action,reservation,settings,*,reconciliation=False):
         deadline=time.monotonic()+min(300,integer(action['limit']['maxDurationMs'])/1000)
