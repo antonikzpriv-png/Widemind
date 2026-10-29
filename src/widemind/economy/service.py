@@ -594,7 +594,7 @@ class EconomyService:
                 if payment['status'] == 'disputed':
                     raise EconomyError('payment_disputed', 'Reconcile dispute before releasing funds')
                 self._refresh_payment_hold(db, self._payment(db, *key))
-                self._event(db, payment['run_id'], 'economy.customer_funds_released', {'payment_id': payment_id, 'released_micro_usd': released})
+                self._event(db, payment['run_id'], 'economy.customer_funds_released', {'provider': provider, 'account': account, 'mode': mode, 'payment_id': payment_id, 'released_micro_usd': released})
                 return self._payment(db, *key)
             return self._operation(db, payment['run_id'], 'payment_hold_release', idempotency_key, list(key), action)
 
