@@ -77,7 +77,7 @@ def audit_integrity(service: EconomyService, run_id: str, *, max_records: int = 
         connection.execute("PRAGMA query_only=ON")
         connection.execute("BEGIN")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (1, 2, 3, 4):
+        if version not in (1, 2, 3, 4, 5):
             return _report(False, [{"code": "supported_schema", "ok": False, "violations": 1}], {}, version)
         run = connection.execute("SELECT mode FROM runs WHERE run_id=?", (run_id,)).fetchone()
         if run is None:
@@ -299,7 +299,7 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
         check("reservation_authorization", len(recorded) == 1 and all(reservation[name] == recorded[0].get(name) for name in ("amount_micro_usd", "provider", "account", "action_id")) and limits == recorded[0].get("limits"))
         recorded_subtotal = provisional_events.get(key, {}).get("reported_subtotal_micro_usd", 0)
         check("provisional_event_projection", reservation["provisional_micro_usd"] == recorded_subtotal and (reservation["provisional_micro_usd"] == 0 or reservation["state"] in ("unknown", "settled")))
-        check("reservation_amount_state", reservation["amount_micro_usd"] > 0 and reservation["provisional_micro_usd"] >= 0 and reservation["state"] in ("reserved", "running", "unknown", "settled", "cancelled") and ((reservation["state"] == "settled" and type(reservation["actual_micro_usd"]) is int and reservation["actual_micro_usd"] >= 0) or (reservation["state"] != "settled" and reservation["actual_micro_usd"] is None)))
+        check("reservation_amount_state", reservation["amount_micro_usd"] >= 0 and reservation["provisional_micro_usd"] >= 0 and reservation["state"] in ("reserved", "running", "unknown", "settled", "cancelled") and ((reservation["state"] == "settled" and type(reservation["actual_micro_usd"]) is int and reservation["actual_micro_usd"] >= 0) or (reservation["state"] != "settled" and reservation["actual_micro_usd"] is None)))
         final = charges.get(key)
         partial = provisional.get(key)
         actual = reservation["actual_micro_usd"] if reservation["state"] == "settled" else reservation["provisional_micro_usd"]

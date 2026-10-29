@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 OPENING_CREDIT = 5_000_000
-MAX_MONEY = 9_000_000_000_000_000
+MAX_MONEY = 9_223_372_036_854_775_807
 LIMIT_NAMES = {'max_tokens', 'max_output_tokens', 'max_duration_ms', 'max_storage_bytes', 'max_units'}
 
 
@@ -87,32 +87,42 @@ class EconomyService:
         with self._initial_connection() as connection:
             connection.execute('PRAGMA busy_timeout=1000')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2, 3, 4):
+            if version not in (0, 1, 2, 3, 4, 5):
                 raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
             connection.execute('PRAGMA journal_mode=WAL')
-            connection.execute('BEGIN IMMEDIATE')
+            # Migration 5 rebuilds the reservation projection to permit a true
+            # zero-cost authorization. Disable FK enforcement only on this
+            # private migration connection and BEFORE beginning its transaction;
+            # verify every reference before committing and restore enforcement.
+            connection.execute('PRAGMA foreign_keys=OFF')
             try:
-                # Recheck after acquiring the migration lock: another process may
-                # already have upgraded while this connection waited.
-                version = connection.execute('PRAGMA user_version').fetchone()[0]
-                if version not in (0, 1, 2, 3, 4):
-                    raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
-                migrations = ('001_economy.sql', '002_reconciliation_queue.sql', '003_reconciliation_schedule_index.sql', '004_projection_guards.sql')
-                for target in range(version + 1, len(migrations) + 1):
-                    script = (Path(__file__).parent / 'migrations' / migrations[target-1]).read_text()
-                    statement = ''
-                    for line in script.splitlines(keepends=True):
-                        statement += line
-                        if sqlite3.complete_statement(statement):
-                            connection.execute(statement)
-                            statement = ''
-                    if statement.strip():
-                        raise EconomyError('invalid_migration', 'Incomplete accounting migration')
-                    connection.execute(f'PRAGMA user_version={target}')
-                connection.commit()
-            except BaseException:
-                connection.rollback()
-                raise
+                connection.execute('BEGIN IMMEDIATE')
+                try:
+                    # Recheck after acquiring the migration lock: another process
+                    # may already have upgraded while this connection waited.
+                    version = connection.execute('PRAGMA user_version').fetchone()[0]
+                    if version not in (0, 1, 2, 3, 4, 5):
+                        raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
+                    migrations = ('001_economy.sql', '002_reconciliation_queue.sql', '003_reconciliation_schedule_index.sql', '004_projection_guards.sql', '005_runtime_bridge.sql')
+                    for target in range(version + 1, len(migrations) + 1):
+                        script = (Path(__file__).parent / 'migrations' / migrations[target-1]).read_text()
+                        statement = ''
+                        for line in script.splitlines(keepends=True):
+                            statement += line
+                            if sqlite3.complete_statement(statement):
+                                connection.execute(statement)
+                                statement = ''
+                        if statement.strip():
+                            raise EconomyError('invalid_migration', 'Incomplete accounting migration')
+                        connection.execute(f'PRAGMA user_version={target}')
+                    if connection.execute('PRAGMA foreign_key_check').fetchone() is not None:
+                        raise EconomyError('invalid_migration', 'Accounting migration found an inconsistent foreign-key reference')
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+            finally:
+                connection.execute('PRAGMA foreign_keys=ON')
 
     @contextmanager
     def _initial_connection(self):
@@ -253,7 +263,12 @@ class EconomyService:
             return [self._reservation(db, r[0]) for r in db.execute('SELECT reservation_id FROM reservations WHERE run_id=? ORDER BY rowid', (run_id,))]
 
     def reserve(self, run_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits):
-        amount = money(amount_micro_usd, positive=True)
+        with self._tx() as db:
+            return self._reserve(db, run_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits)
+
+    def _reserve(self, db, run_id, action_id, amount_micro_usd, idempotency_key, provider, account, limits):
+        """Reserve within an existing transaction, including any gateway binding."""
+        amount = money(amount_micro_usd)
         for value in (action_id, provider, account):
             ident(value)
         if not isinstance(limits, dict) or not limits or set(limits) - LIMIT_NAMES:
@@ -261,25 +276,28 @@ class EconomyService:
         for value in limits.values():
             money(value, positive=True)
         args = dict(action_id=action_id, amount_micro_usd=amount, provider=provider, account=account, limits=limits)
-        with self._tx() as db:
-            def action():
-                if db.execute('SELECT 1 FROM reservations WHERE run_id=? AND action_id=?', (run_id, action_id)).fetchone():
-                    raise EconomyError('action_exists', 'Action already has a reservation; reconcile before retry')
-                if self._balance(db, run_id)['available_micro_usd'] < amount:
-                    raise EconomyError('insufficient_funds', 'Available credit cannot fund this action')
-                rid, stamp = str(uuid.uuid4()), now()
-                db.execute('INSERT INTO reservations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                           (rid, run_id, action_id, amount, provider, account, encode(limits), 'reserved', None, 0, stamp, stamp))
-                self._event(db, run_id, 'economy.reserved', {'reservation_id': rid, **args})
-                return self._reservation(db, rid)
-            return self._operation(db, run_id, 'reserve', idempotency_key, args, action)
+
+        def action():
+            if db.execute('SELECT 1 FROM reservations WHERE run_id=? AND action_id=?', (run_id, action_id)).fetchone():
+                raise EconomyError('action_exists', 'Action already has a reservation; reconcile before retry')
+            # A free operation cannot worsen a financial deficit. Paid requests
+            # retain the same admission check even for a one-micro-USD charge.
+            if amount > 0 and self._balance(db, run_id)['available_micro_usd'] < amount:
+                raise EconomyError('insufficient_funds', 'Available credit cannot fund this action')
+            rid, stamp = str(uuid.uuid4()), now()
+            db.execute('INSERT INTO reservations VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                       (rid, run_id, action_id, amount, provider, account, encode(limits), 'reserved', None, 0, stamp, stamp))
+            self._event(db, run_id, 'economy.reserved', {'reservation_id': rid, **args})
+            return self._reservation(db, rid)
+
+        return self._operation(db, run_id, 'reserve', idempotency_key, args, action)
 
     def start_reservation(self, reservation_id):
         with self._tx() as db:
             row = self._reservation(db, reservation_id)
             if row['state'] != 'reserved':
                 raise EconomyError('duplicate_dispatch', 'Action already dispatched or closed; reconcile before retry')
-            if self._balance(db, row['run_id'])['available_micro_usd'] < 0:
+            if row['amount_micro_usd'] > 0 and self._balance(db, row['run_id'])['available_micro_usd'] < 0:
                 raise EconomyError('insufficient_funds', 'New liability invalidated this authorization; reconcile or cancel before dispatch')
             db.execute("UPDATE reservations SET state='running',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
             self._event(db, row['run_id'], 'economy.dispatched', {'reservation_id': reservation_id})
