@@ -19,6 +19,7 @@ class Element {
   onsubmit: ((event: { preventDefault(): void }) => Promise<void>) | null =
     null;
   elements: Record<string, Element> = {};
+  attributes = new Map<string, string>();
   readonly tagName: string;
   constructor(tagName: string) {
     this.tagName = tagName;
@@ -28,6 +29,9 @@ class Element {
   }
   replaceChildren(...children: Element[]) {
     this.children = children;
+  }
+  setAttribute(name: string, value: string) {
+    this.attributes.set(name, value);
   }
   get firstChild() {
     return this.children[0];
@@ -47,6 +51,7 @@ function fixture(
   const storage = new Map<string, string>();
   const selectors = new Map<string, Element>();
   const calls: { path: string; body: Record<string, unknown> }[] = [];
+  const headers: Record<string, string>[] = [];
   const location = { hash: "", pathname: "/commerce" };
   let replacedFragment = "";
   const context = createContext({
@@ -70,16 +75,24 @@ function fixture(
       setItem: (key: string, value: string) => storage.set(key, value),
       removeItem: (key: string) => storage.delete(key),
     },
-    fetch: async (path: string, options: { body?: string; method: string }) => {
+    fetch: async (
+      path: string,
+      options: {
+        body?: string;
+        method: string;
+        headers?: Record<string, string>;
+      },
+    ) => {
       const body = JSON.parse(options.body ?? "{}") as Record<string, unknown>;
       calls.push({ path, body });
+      headers.push(options.headers ?? {});
       const result = await handler(path, body);
       return { ok: true, json: async () => result };
     },
   });
   new Script(commerceScript).runInContext(context);
   const functions = runInContext(
-    "({proposalCard,conversationDetails,sendCustomerMessage,customerConversationForm,keepToken,offerings})",
+    "({proposalCard,conversationDetails,sendCustomerMessage,customerConversationForm,keepToken,offerings,operatorConversationDetail})",
     context,
   ) as {
     proposalCard(
@@ -101,11 +114,17 @@ function fixture(
     ): Element;
     keepToken(token: string): void;
     offerings(): Promise<void>;
+    operatorConversationDetail(
+      conversation: Record<string, unknown>,
+      runId: string,
+      csrf: string,
+    ): Element;
   };
   return {
     ...functions,
     selectors,
     calls,
+    headers,
     storage,
     location,
     replacedFragment: () => replacedFragment,
@@ -268,4 +287,64 @@ test("opt-out is an immediate token-scoped request without customer-supplied aut
     all(stopped).filter((item) => item.tagName === "form").length,
     0,
   );
+});
+
+test("operator hold resolution requires evidence and CSRF before fresh assessment", async () => {
+  const conversation = {
+    id: "conversation-held",
+    status: "needs_operator",
+    operator_hold: true,
+    intervention: "Review a conflicting scope request",
+    messages: [],
+    proposals: [],
+  };
+  const f = fixture(async (path) => {
+    if (path.endsWith("/conversation-resolve")) return { resolved: true };
+    if (path.includes("/conversations?")) return { conversations: [] };
+    return {
+      conversation: {
+        ...conversation,
+        status: "awaiting_customer",
+        operator_hold: false,
+        intervention: null,
+      },
+    };
+  });
+  const detail = new Element("div");
+  f.selectors.set("#business-conversations", new Element("div"));
+  f.selectors.set("#business-conversation-detail", detail);
+  const view = f.operatorConversationDetail(
+    conversation,
+    "run-controlled",
+    "fixture-csrf-value",
+  );
+  const form = all(view).find((item) => item.tagName === "form")!;
+  const input = all(form).find((item) => item.name === "evidenceReference")!;
+  assert.equal(
+    all(f.conversationDetails(conversation)).some(
+      (item) => item.tagName === "form",
+    ),
+    false,
+  );
+  await form.onsubmit!({ preventDefault() {} });
+  assert.equal(f.calls.length, 0);
+  input.value = "  reviewed:case-123  ";
+  await form.onsubmit!({ preventDefault() {} });
+  assert.deepEqual(f.calls[0], {
+    path: "/api/modules/business/conversation-resolve",
+    body: {
+      runId: "run-controlled",
+      conversationId: "conversation-held",
+      evidenceReference: "reviewed:case-123",
+    },
+  });
+  assert.equal(f.headers[0]!["X-CSRF-Token"], "fixture-csrf-value");
+  assert.ok(f.calls.some((call) => call.path.includes("/conversations?")));
+  assert.ok(f.calls.some((call) => call.path.includes("/conversation?")));
+  assert.ok(
+    all(detail).some((item) =>
+      item.textContent.includes("A fresh assessment is required"),
+    ),
+  );
+  assert.ok(!f.calls.some((call) => call.path.endsWith("/accept")));
 });
