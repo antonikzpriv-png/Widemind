@@ -86,6 +86,14 @@ authenticated inbox notification schedules `gmail.sync`; idle scheduling does
 not authorize paid model calls. Local compute, transport and hosting allocations
 remain owner-provided costs, not claimed autonomous revenue.
 
+The integrated host can opt into inexpensive inbox scheduling with
+`WIDEMIND_CONVERSATION_GMAIL_POLL_SECONDS=300`. It defaults to `0` (disabled);
+enabled values are 60–86400 seconds. Only an active runtime with enabled
+conversation policy and available Gmail capability admits a scan. The durable
+event journal preserves cadence across restarts. A pending cursor page, blocked
+scan or unknown inbox effect prevents a fresh scan ID until recovery/operator
+review; the scheduler never retries an uncertain effect or invokes inference.
+
 ## Fixture verification
 
 `services/business/tests/test_conversation_transport.py` verifies exact model and
