@@ -485,14 +485,14 @@ test("bounded accounting envelope retains a known overage when optional Unicode 
     json(res, { kind: "settled" }),
   );
   const known = receipt();
-  known.usage.evidenceRef = "漢".repeat(2048);
+  known.usage.evidenceRef = "漢".repeat(2000);
   known.usage.nativeAmount = {
     currency: "USD",
     minorUnits: "600",
-    conversionRef: "漢".repeat(2048),
-    rounding: "漢".repeat(2048),
+    conversionRef: "漢".repeat(2000),
+    rounding: "漢".repeat(2000),
   };
-  known.externalRef = "漢".repeat(2048);
+  known.externalRef = "漢".repeat(2000);
   assert.equal((await client.settle(reservation(), known)).kind, "settled");
   const submitted = calls[0]?.body.receipt as ToolReceipt;
   assert.equal(submitted.usage.actualCharge.micros, "6000000");
@@ -534,4 +534,46 @@ test("definitive not-performed renewal is explicit and fails closed if the backe
   assert.equal(result.kind, "unavailable");
   assert(!JSON.stringify(result).includes("private-provider-canary"));
   assert.equal(calls.length, 2);
+});
+
+test("closed no-effect confirmation and backend evidence boundaries retain a known charge", async (t) => {
+  const { client, calls } = await rpc(t, (path, _body, _auth, res) =>
+    json(res, { kind: path.endsWith("not-performed") ? "closed" : "settled" }),
+  );
+  assert.deepEqual(
+    await client.confirmNotPerformed(
+      reservation(),
+      "provider:third-definitive-no-effect",
+    ),
+    { kind: "closed" },
+  );
+  const exact = receipt();
+  exact.usage.externalEventId = "e".repeat(2000);
+  exact.usage.evidenceRef = "r".repeat(2000);
+  exact.usage.nativeAmount = {
+    currency: "x".repeat(20),
+    minorUnits: "-" + "9".repeat(127),
+    conversionRef: "c".repeat(2000),
+    rounding: "r".repeat(2000),
+  };
+  assert.equal((await client.settle(reservation(), exact)).kind, "settled");
+  const valid = calls[1]?.body.receipt as ToolReceipt;
+  assert.equal(valid.usage.externalEventId.length, 2000);
+  assert.deepEqual(valid.usage.nativeAmount, exact.usage.nativeAmount);
+  const invalid = receipt();
+  invalid.usage.evidenceRef = "r".repeat(2001);
+  invalid.usage.nativeAmount = {
+    currency: "x".repeat(21),
+    minorUnits: "-" + "9".repeat(128),
+    conversionRef: "c".repeat(2001),
+    rounding: "r".repeat(2001),
+  };
+  assert.equal((await client.settle(reservation(), invalid)).kind, "settled");
+  const omitted = calls[2]?.body.receipt as ToolReceipt;
+  assert.equal(omitted.usage.actualCharge.micros, "6000000");
+  assert.equal(omitted.usage.nativeAmount, undefined);
+  assert.equal(
+    (omitted.result as Record<string, unknown>).usageMetadataOmitted,
+    true,
+  );
 });

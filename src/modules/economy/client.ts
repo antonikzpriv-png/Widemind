@@ -202,24 +202,29 @@ function accountingReceipt(
     actualCharge: validateMoney(source.actualCharge),
     provider: boundedString(source.provider, 200),
     accountRef: boundedString(source.accountRef, 200),
-    externalEventId: boundedString(source.externalEventId, 200),
+    externalEventId: boundedString(source.externalEventId, 2000),
     billableFailure: source.billableFailure,
     provisional: source.provisional,
     evidenceRef: "omitted:invalid-provider-evidence",
   };
   try {
-    usage.evidenceRef = boundedString(source.evidenceRef, 2048);
+    usage.evidenceRef = boundedString(source.evidenceRef, 2000);
   } catch {
     metadataOmitted = true;
   }
   if (source.nativeAmount !== undefined) {
     try {
       const native = object(source.nativeAmount);
+      if (
+        typeof native.minorUnits !== "string" ||
+        native.minorUnits.length > 128
+      )
+        throw invalid();
       usage.nativeAmount = {
-        currency: boundedString(native.currency, 32),
+        currency: boundedString(native.currency, 20),
         minorUnits: amount(native.minorUnits, true, true),
-        conversionRef: boundedString(native.conversionRef, 2048),
-        rounding: boundedString(native.rounding, 2048),
+        conversionRef: boundedString(native.conversionRef, 2000),
+        rounding: boundedString(native.rounding, 2000),
       };
     } catch {
       metadataOmitted = true;
@@ -233,12 +238,13 @@ function accountingReceipt(
     result: {
       omitted: true,
       reason: "Result retained in runtime action store",
+      ...(metadataOmitted ? { usageMetadataOmitted: true } : {}),
     },
     usage,
   };
   if (row.externalRef !== undefined) {
     try {
-      receipt.externalRef = boundedString(row.externalRef, 2048);
+      receipt.externalRef = boundedString(row.externalRef, 2000);
     } catch {
       (receipt.result as Record<string, unknown>).usageMetadataOmitted = true;
     }
@@ -452,7 +458,11 @@ export class EconomyClient implements Economy {
   async confirmNotPerformed(
     reservation: Reservation,
     evidenceRef: string,
-  ): Promise<{ kind: "renewed" } | { kind: "unavailable"; reason: string }> {
+  ): Promise<
+    | { kind: "renewed" }
+    | { kind: "closed" }
+    | { kind: "unavailable"; reason: string }
+  > {
     try {
       const response = object(
         await this.#rpc("not-performed", {
@@ -461,6 +471,7 @@ export class EconomyClient implements Economy {
         }),
       );
       if (response.kind === "renewed") return { kind: "renewed" };
+      if (response.kind === "closed") return { kind: "closed" };
     } catch {
       /* No proof of a renewed permit: keep the action unresolved. */
     }
