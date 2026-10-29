@@ -37,12 +37,15 @@ const token = (value: unknown) => {
     throw new Error("Invalid customer token");
   return value;
 };
-function receipt(action: ToolAction): ToolReceipt {
+function receipt(action: ToolAction, step: Step): ToolReceipt {
   return {
     version: 1,
     actionId: action.actionId,
     status: "succeeded",
-    result: { processed: true, transport: "private-business-portal" },
+    result: {
+      processed: step.processed === true,
+      transport: "private-business-portal",
+    },
     usage: {
       actualCharge: { currency: "USD", micros: "0" },
       provider: "business.step",
@@ -107,7 +110,7 @@ export const definition: ModuleDefinition = {
         throw new Error("Unknown business run");
       return id;
     };
-    const wake = (runId: string, reference = randomUUID()) => {
+    const wake = (runId: string, reference: string = randomUUID()) => {
       store.deliverEvent(runId, {
         source: "business",
         accountRef: "control-plane",
@@ -207,7 +210,7 @@ export const definition: ModuleDefinition = {
           return {
             kind: "work",
             candidate: {
-              workKey: `business-step:${state.eventId}:${state.attempt}`,
+              workKey: `business-step:${state.eventId}:${state.attempt}:${snapshot.actions.filter((item) => item.action.tool === "business.step" && record(item.action.input).eventId === state.eventId).length}`,
               tool: "business.step",
               input: { eventId: state.eventId },
               limit: {
@@ -243,7 +246,7 @@ export const definition: ModuleDefinition = {
                 : {}),
             },
           );
-          wake(runId);
+          wake(runId, `request:${String(result.opportunityId)}`);
           return result;
         }),
         ...(["customer", "accept", "delivery", "revoke"] as const).map((name) =>
@@ -255,7 +258,7 @@ export const definition: ModuleDefinition = {
               token: token(body.token),
             });
             if (name === "accept")
-              wake(runId, `request:${String(result.opportunityId)}`);
+              wake(runId, `accept:${identifier(body.quoteId)}`);
             return result;
           }),
         ),
@@ -323,7 +326,7 @@ export const definition: ModuleDefinition = {
             eventId: identifier(input.eventId),
           });
           return result.kind === "completed"
-            ? { kind: "receipt", receipt: receipt(action) }
+            ? { kind: "receipt", receipt: receipt(action, result) }
             : {
                 kind: "unknown",
                 reason: result.reason ?? "Business step uncertain",
@@ -345,7 +348,7 @@ export const definition: ModuleDefinition = {
             actionId: action.actionId,
           });
           return result.kind === "completed"
-            ? { kind: "receipt", receipt: receipt(action) }
+            ? { kind: "receipt", receipt: receipt(action, result) }
             : {
                 kind: "unknown",
                 reason: "Business bridge requires operator reconciliation",

@@ -53,7 +53,7 @@ class Host:
         if not row:raise ValueError('invalid customer authorization')
         return row
     def work(self,business):
-        row=business.store.one("SELECT id,due_at,attempts FROM events WHERE run_id=? AND state IN ('queued','running') ORDER BY due_at,id LIMIT 1",(business.run_id,))
+        row=business.store.one("SELECT id,CASE WHEN state='running' AND lease_until>due_at THEN lease_until ELSE due_at END AS due_at,attempts FROM events WHERE run_id=? AND state IN ('queued','running') ORDER BY due_at,id LIMIT 1",(business.run_id,))
         return {'eventId':row['id'] if row else None,'attempt':row['attempts'] if row else 0,'dueAt':row['due_at'] if row else None,'runtimeState':self.runtime.state(business.run_id)}
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
