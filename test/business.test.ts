@@ -11,16 +11,16 @@ import type {
   Json,
   ToolAction,
 } from "../src/contracts/index.ts";
-import { BusinessService } from "../src/modules/business/engine.ts";
-import type { CommerceReader } from "../src/modules/business/engine.ts";
-import { migrations } from "../src/modules/business/migrations.ts";
-import { configuredScopeValidator } from "../src/modules/business/readiness.ts";
-import { defaultPolicy } from "../src/modules/business/policy.ts";
-import { researchBrief } from "../src/modules/business/services.ts";
+import { BusinessService } from "../src/modules/brief-business/engine.ts";
+import type { CommerceReader } from "../src/modules/brief-business/engine.ts";
+import { migrations } from "../src/modules/brief-business/migrations.ts";
+import { configuredScopeValidator } from "../src/modules/brief-business/readiness.ts";
+import { defaultPolicy } from "../src/modules/brief-business/policy.ts";
+import { researchBrief } from "../src/modules/brief-business/services.ts";
 import {
   consoleProjection,
   orderProjection,
-} from "../src/modules/business/views.ts";
+} from "../src/modules/brief-business/views.ts";
 import { migrate } from "../src/db/migrate.ts";
 import { fixture, receipt } from "./helpers.ts";
 
@@ -46,7 +46,7 @@ const financial: FinancialSummary = {
 };
 function setup() {
   const f = fixture("foundation");
-  migrate(f.db, [{ id: "business", contractVersion: 1, migrations }]);
+  migrate(f.db, [{ id: "brief-business", contractVersion: 1, migrations }]);
   const runId = f.store.create("foundation");
   f.store.control(runId, "resume");
   let unavailable = false;

@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { PublicWebsiteData } from "../../contracts/index.ts";
 import { displayUsd, escape, layout } from "../../web/pages.ts";
 
-const consolePath = "/operator/modules/business/console";
-const commandPath = "/api/modules/business/command";
+const consolePath = "/operator/modules/brief-business/console";
+const commandPath = "/api/modules/brief-business/command";
 const views = [
   "overview",
   "opportunities",

@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   renderBusinessPage,
   renderBusinessPublic,
-} from "../src/modules/business/ui.ts";
+} from "../src/modules/brief-business/ui.ts";
 import { css, operatorFormErrorPage } from "../src/web/pages.ts";
 import type { PublicWebsiteData } from "../src/contracts/index.ts";
 
@@ -234,7 +234,7 @@ test("public website uses only curated content, provides optional user-sent mail
 test("form errors are escaped and the shared visual system stays monochrome and responsive", () => {
   const html = operatorFormErrorPage(
     { error: "<script>provider failure</script>" },
-    "/operator/modules/business/console",
+    "/operator/modules/brief-business/console",
   );
   assert.match(html, /&lt;script&gt;provider failure/);
   assert.doesNotMatch(html, /<script>/);

@@ -15,7 +15,7 @@ import {
   commerceSettings,
   validateCommerceOrder,
   type CommerceOrder,
-} from "../src/modules/business/commerce.ts";
+} from "../src/modules/brief-business/commerce.ts";
 import { EconomyClient } from "../src/modules/economy/client.ts";
 import { fixture as runtimeFixture } from "./helpers.ts";
 import type { ToolAction } from "../src/contracts/index.ts";

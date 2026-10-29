@@ -21,7 +21,7 @@ test("trusted scheduled inbox commands deduplicate and preserve paused/stopped s
       spawnSync(
         process.execPath,
         [
-          "src/modules/business/sync-main.ts",
+          "src/modules/brief-business/sync-main.ts",
           "--run-id",
           selectedRun,
           "--request-id",

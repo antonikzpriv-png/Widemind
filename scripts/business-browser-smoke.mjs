@@ -171,10 +171,10 @@ try {
   await click('form[action="/operator/runs"] button');
   await waitFor(() =>
     evaluate(
-      "Boolean(document.querySelector('a[href^=\"/operator/modules/business/console?\"]'))",
+      "Boolean(document.querySelector('a[href^=\"/operator/modules/brief-business/console?\"]'))",
     ),
   );
-  await click('a[href^="/operator/modules/business/console?"]');
+  await click('a[href^="/operator/modules/brief-business/console?"]');
   await waitFor(() =>
     evaluate("document.title.startsWith('Business operations')"),
   );
@@ -190,7 +190,7 @@ try {
     ),
   );
   const intake =
-    'form[action="/api/modules/business/command"]:has(input[name="command"][value="intake"])';
+    'form[action="/api/modules/brief-business/command"]:has(input[name="command"][value="intake"])';
   await click(intake + ' input[name="customerEmail"]');
   await send("Input.insertText", {
     text: "explicit-browser-fixture@example.invalid",
@@ -237,7 +237,7 @@ try {
   );
   await navigate(
     origin +
-      `/operator/modules/business/console?runId=${runId}&view=opportunities`,
+      `/operator/modules/brief-business/console?runId=${runId}&view=opportunities`,
   );
   assert.equal(
     await evaluate(

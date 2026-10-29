@@ -14,7 +14,7 @@ npm start
 npm run worker
 ```
 
-The public page is `/`. Sign in at `/operator`, create a paused runtime run, and use its **business console** link. The private page is `/operator/modules/business/console?runId=<runtime-run-id>`. Registered module pages appear in the existing Run control screen; pause/resume/stop/wake remain the foundation's controls.
+The public page is `/`. Sign in at `/operator`, create a paused runtime run, and use its **business console** link. The private page is `/operator/modules/brief-business/console?runId=<runtime-run-id>`. Registered module pages appear in the existing Run control screen; pause/resume/stop/wake remain the foundation's controls.
 
 The six console views are:
 

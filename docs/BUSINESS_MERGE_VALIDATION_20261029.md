@@ -52,7 +52,7 @@ Set `WIDEMIND_TEST_PYTHON` to the installed virtual-environment interpreter when
 
 ## Operation and remaining prerequisites
 
-Enable `WIDEMIND_BUSINESS_ENABLED=true` in the shared trusted web/worker environment for `/operator/modules/business/console`. Configure accounts and the separately opt-in provider bridge before real execution. See [business setup](BUSINESS_MODULE.md), [provider setup](BUSINESS_TOOLS.md), [economy commerce](ECONOMY_RUNTIME_BRIDGE.md), [UI](BUSINESS_UI.md), [scheduled mail](BUSINESS_SCHEDULING.md) and [explicit demo](BUSINESS_DEMO.md).
+Enable `WIDEMIND_BUSINESS_ENABLED=true` in the shared trusted web/worker environment for `/operator/modules/brief-business/console`. Configure accounts and the separately opt-in provider bridge before real execution. See [business setup](BUSINESS_MODULE.md), [provider setup](BUSINESS_TOOLS.md), [economy commerce](ECONOMY_RUNTIME_BRIDGE.md), [UI](BUSINESS_UI.md), [scheduled mail](BUSINESS_SCHEDULING.md) and [explicit demo](BUSINESS_DEMO.md).
 
 Stop web/worker services, correctly back up their database/WAL and the separate protected economy/journal state, migrate, then run all components at the same revision. Existing core/economy migrations are preserved; business applies its own namespace. Never import old fixture/alternate-wallet balances or reinterpret a sandbox run as live.
 

@@ -11,7 +11,7 @@ import type {
   Tools,
 } from "../../contracts/index.ts";
 import type { ModuleContext, ModuleDefinition } from "../registry.ts";
-import { createCommerceTools } from "../business/commerce.ts";
+import { createCommerceTools } from "../brief-business/commerce.ts";
 
 const ids = ["gmail.read", "gmail.send", "research.collect"] as const;
 const unknown = (): ToolResult => ({

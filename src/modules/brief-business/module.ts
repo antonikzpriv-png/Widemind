@@ -79,10 +79,10 @@ export function createBusinessModule(
     return consoleProjection(business, runId, query, await summary(runId));
   };
   const commandRoute = {
-    path: "/api/modules/business/command",
+    path: "/api/modules/brief-business/command",
     method: "POST" as const,
     access: "operator" as const,
-    operatorRedirect: "/operator/modules/business/console",
+    operatorRedirect: "/operator/modules/brief-business/console",
     async handle(request: { body: Json; operator: boolean }) {
       if (!request.operator)
         return { status: 403, body: { error: "Operator access required" } };
@@ -178,7 +178,7 @@ export function createBusinessModule(
     },
     operatorPages: [
       {
-        path: "/operator/modules/business/console",
+        path: "/operator/modules/brief-business/console",
         async render({
           query,
           csrf,
@@ -193,7 +193,7 @@ export function createBusinessModule(
     routes: [
       commandRoute,
       {
-        path: "/api/modules/business/console",
+        path: "/api/modules/brief-business/console",
         method: "GET" as const,
         access: "operator" as const,
         async handle(request: { query: Record<string, string> }) {
@@ -211,7 +211,7 @@ export function createBusinessModule(
         },
       },
       {
-        path: "/api/modules/business/order",
+        path: "/api/modules/brief-business/order",
         method: "GET" as const,
         access: "operator" as const,
         async handle(request: { query: Record<string, string> }) {
@@ -236,7 +236,7 @@ export function createBusinessModule(
   };
 }
 export const definition: ModuleDefinition = {
-  id: "business",
+  id: "brief-business",
   contractVersion: 1,
   migrations,
   create: createBusinessModule,

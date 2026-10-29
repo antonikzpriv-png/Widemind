@@ -14,7 +14,11 @@ if (process.argv.length !== 3 || process.argv[2] !== "--fixtures") {
   );
   const child = spawn(
     process.execPath,
-    ["--test", "--test-concurrency=1", "test/business-integration.test.ts"],
+    [
+      "--test",
+      "--test-concurrency=1",
+      "test/brief-business-integration.test.ts",
+    ],
     {
       cwd: fileURLToPath(new URL("../", import.meta.url)),
       env: { ...process.env, WIDEMIND_EXPLICIT_BUSINESS_DEMO: "1" },

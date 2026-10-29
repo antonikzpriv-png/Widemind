@@ -20,10 +20,10 @@ import { AgentRuntime } from "../src/runtime/engine.ts";
 import { Store } from "../src/runtime/store.ts";
 import { registerModules } from "../src/modules/registry.ts";
 import { createEconomyModule } from "../src/modules/economy/module.ts";
-import { BusinessService } from "../src/modules/business/engine.ts";
-import { EconomyCommerce } from "../src/modules/business/commerce.ts";
-import { migrations } from "../src/modules/business/migrations.ts";
-import { defaultPolicy } from "../src/modules/business/policy.ts";
+import { BusinessService } from "../src/modules/brief-business/engine.ts";
+import { EconomyCommerce } from "../src/modules/brief-business/commerce.ts";
+import { migrations } from "../src/modules/brief-business/migrations.ts";
+import { defaultPolicy } from "../src/modules/brief-business/policy.ts";
 import { money } from "../src/contracts/index.ts";
 import type {
   Json,
@@ -176,7 +176,7 @@ async function setup(
           }),
       },
       {
-        id: "business",
+        id: "brief-business",
         contractVersion: 1,
         migrations,
         create: () => ({ business }),

@@ -22,7 +22,7 @@ Two additional cases prove that paused runs retain intake without executing, una
 Run only these maintained checks with:
 
 ```sh
-WIDEMIND_TEST_PYTHON=/tmp/widemind-business-demo-venv/bin/python node --test --test-concurrency=1 test/business-integration.test.ts
+WIDEMIND_TEST_PYTHON=/tmp/widemind-business-demo-venv/bin/python node --test --test-concurrency=1 test/brief-business-integration.test.ts
 ```
 
 Local fixture success does not establish provider readiness. Live operation requires the dedicated Gmail OAuth account, explicit OpenAI model/rates/limits, Stripe account/key/webhook ingress, matching economy tool profiles, approved network access, a controlled recipient and deployment isolation described in the setup documents. Those prerequisites must be verified separately; fixture balances must never be imported into a live run.
