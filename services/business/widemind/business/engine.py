@@ -8,13 +8,14 @@ from .contracts import Outcome, Plan
 from .policy import Policy, integer
 from .services import ResearchBrief, single_line, text, web_url
 from .store import encode, identity
+from .discovery import DiscoveryMixin
 
 
 class Deferred(Exception):
     """Reconcile or await an external event/operator; do not hot-loop."""
 
 
-class Business:
+class Business(DiscoveryMixin):
     def __init__(self, store, *, run_id, economy, tools, runtime, policy=None,
                  services=None, clock=time.time, mode="live"):
         if mode not in {"live", "demo", "test"}:
@@ -47,7 +48,8 @@ class Business:
         return self.runtime.state(self.run_id) in {"active", "waiting"}
 
     def notify(self, *, source, external_id, kind, payload, due_at=None):
-        if kind not in {"select", "offer", "advance", "payment.changed", "gmail.sync", "deadline", "reconcile", "conversation", "conversation.followup"}:
+        if kind not in {"select", "offer", "advance", "payment.changed", "gmail.sync", "deadline", "reconcile",
+                        "conversation", "conversation.followup", "discovery.run", "discovery.observe", "experiment.step", "experiment.deadline"}:
             raise ValueError("unsupported event")
         due = self.clock() if due_at is None else due_at
         if type(due) not in {int, float} or not math.isfinite(due) or due < 0:
@@ -81,7 +83,8 @@ class Business:
         if not isinstance(scope, dict) or len(encode(scope)) > 50000:
             raise ValueError("invalid scope")
         if origin in {"outbound", "discovered"}:
-            web_url(source_reference)  # A targeted offer needs a concrete relevance reference.
+            if not (origin == 'discovered' and source == 'discovery' and self._discovery_source_reference(source_reference)):
+                web_url(source_reference)  # A targeted offer needs a concrete relevance reference.
         opportunity_id = identity(self.run_id, source, external_id)
         with self.store.transaction():
             customer_id = self._customer(customer_email) if customer_email else None
@@ -319,6 +322,11 @@ class Business:
            result.get("thread_id", result["message_id"]), result["message_id"], step, entity, self.clock()))
 
     def _assess(self, opportunity):
+        intake = self.store.one("SELECT document FROM memory WHERE run_id=? AND entity_id=? AND kind='request'", (self.run_id, opportunity['id']))
+        if opportunity['origin'] == 'discovered' and intake and json.loads(intake['document']).get('source') == 'discovery':
+            evidence = self.store.one('SELECT expires_at FROM discoveries WHERE opportunity_id=? AND run_id=?', (opportunity['id'], self.run_id))
+            if not evidence or evidence['expires_at'] <= self.clock():
+                return {'feasible': False, 'reason': 'canonical discovery evidence is missing or stale'}
         service = self.services.get(opportunity["service"])
         if not service or service.capability not in self.policy.capabilities:
             return {"feasible": False, "reason": "unsupported or disabled capability"}
@@ -363,12 +371,12 @@ class Business:
                     (encode(assessment), "assessed" if assessment["feasible"] else "needs_review", opportunity["id"]))
                 self.store.memory(self.run_id, opportunity["id"], "assessment:" + identity(assessment), assessment, self.clock(), opportunity["customer_id"])
                 if assessment["feasible"]:
-                    score = (self.policy.priority_weight * opportunity["priority"] * 1_000_000 +
+                    score = (self.policy.priority_weight * self._discovery_priority(opportunity) * 1_000_000 +
                              self.policy.margin_weight * assessment["expected_contribution_micro_usd"] +
                              self.policy.goal_weights.get(opportunity["service"], 0) * 1_000_000)
                     feasible.append((score, opportunity["id"], opportunity, assessment))
             for _, _, opportunity, assessment in sorted(feasible, key=lambda row: (-row[0], row[1])):
-                used = self.store.one("SELECT COALESCE(SUM(allowance_micro_usd),0) AS n FROM experiments WHERE run_id=?", (self.run_id,))["n"]
+                used = self.store.one("SELECT COALESCE(SUM(allowance_micro_usd),0) AS n FROM experiments WHERE run_id=?", (self.run_id,))["n"] + self._discovery_allocated()
                 cost = assessment["expected_cost_micro_usd"]
                 if used + cost > self.policy.experiment_budget_micro_usd:
                     self.store.db.execute("UPDATE opportunities SET status='budget_wait' WHERE id=?", (opportunity["id"],))
@@ -652,7 +660,7 @@ class Business:
         with self.store.transaction():
             event = self.store.one("""SELECT * FROM events WHERE run_id=? AND
                 ((state='queued' AND due_at<=?) OR (state='running' AND lease_until<=?))
-                AND (? OR kind IN ('reconcile','payment.changed')) ORDER BY due_at,id LIMIT 1""", (self.run_id, now, now, active))
+                AND (? OR kind IN ('reconcile','payment.changed','discovery.observe','experiment.deadline')) ORDER BY due_at,id LIMIT 1""", (self.run_id, now, now, active))
             if not event:
                 return False
             if event["attempts"] >= 5:
@@ -685,9 +693,17 @@ class Business:
                 self._deadline(entity, now)
             elif kind == "reconcile":
                 self._reconcile(entity)
+            elif kind == 'discovery.run':
+                self._discovery_research(event['payload'])
+            elif kind == 'discovery.observe':
+                self._discovery_observe()
+            elif kind == 'experiment.step':
+                self._experiment_step(entity)
+            elif kind == 'experiment.deadline':
+                self._experiment_deadline(entity)
             self.store.db.execute("UPDATE events SET state='done',lease_until=NULL,error=NULL WHERE id=?", (event["id"],))
         except (Deferred, ValueError, KeyError, TypeError) as exc:
-            if isinstance(exc, Deferred) and event['kind'] in {'select', 'offer', 'advance', 'conversation', 'conversation.followup'} and not self._active():
+            if isinstance(exc, Deferred) and event['kind'] in {'select', 'offer', 'advance', 'conversation', 'conversation.followup', 'discovery.run', 'experiment.step'} and not self._active():
                 # Preserve interrupted work for an explicit operator resume.
                 # Existing effect IDs/receipts still prevent duplicate paid work.
                 self.store.db.execute("UPDATE events SET state='queued',lease_until=NULL,error=NULL WHERE id=?", (event['id'],))

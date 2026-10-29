@@ -1,0 +1,29 @@
+{
+  "enabled": false,
+  "allowance_micro_usd": 500000,
+  "adaptation_limit": 5,
+  "adaptation_min_samples": 3,
+  "markets": [
+    {
+      "id": "small-business-websites",
+      "label": "Small business website needs",
+      "need_terms": ["need a website", "website redesign"],
+      "source_urls": [
+        "https://example.org/replace-with-an-authorized-market-source"
+      ],
+      "service": "software-starter",
+      "scope": {
+        "title": "Small business website starter",
+        "description": "A private static website prototype for evaluating demand."
+      },
+      "kind": "experiment",
+      "proposed_offering": "An explicitly scoped static website starter",
+      "research_allowance_micro_usd": 25000,
+      "interval_seconds": 86400,
+      "freshness_seconds": 3600,
+      "cooldown_seconds": 86400,
+      "max_attempts": 4,
+      "priority": 10
+    }
+  ]
+}

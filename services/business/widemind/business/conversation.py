@@ -466,6 +466,7 @@ class Conversations:
             if service.capability not in p.capabilities or price < p.conversation_price_floors.get(service.name, p.prices[service.name]) or price > p.prices[service.name] or price <= plan.maximum_micro_usd or encode(asdict(plan)) != row['plan']:
                 raise ValueError('operator policy changed; a new quote is required')
             used = self.s.one('SELECT COALESCE(SUM(allowance_micro_usd),0) AS n FROM experiments WHERE run_id=?', (self.b.run_id,))['n']
+            used += self.b._discovery_allocated()
             allocated = self.s.one('SELECT allowance_micro_usd FROM experiments WHERE opportunity_id=?', (thread['opportunity_id'],))
             previous_allowance = allocated['allowance_micro_usd'] if allocated else 0
             if used+max(0, plan.maximum_micro_usd-previous_allowance) > p.experiment_budget_micro_usd:
