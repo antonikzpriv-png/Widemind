@@ -119,3 +119,14 @@ def test_unspecified_or_invalid_paid_adapter_mode_fails_closed(service, mode):
     with pytest.raises(ValueError, match='mode'):
         PaidGateway(service, [adapter])
     assert not adapter.calls
+
+
+def test_changed_adapter_profile_is_rejected_before_dispatch(service):
+    rid = reserve(service)
+    adapter = FixtureAdapter(UsageReceipt('not-run',100_000))
+    gateway = PaidGateway(service,[adapter])
+    adapter.mode = 'live'
+    with pytest.raises(EconomyError,match='changed'):
+        gateway.execute(rid)
+    assert not adapter.calls
+    assert service.reservation(rid)['state'] == 'reserved'

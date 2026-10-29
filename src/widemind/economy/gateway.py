@@ -64,6 +64,8 @@ class PaidGateway:
         adapter = self.adapters.get((row['provider'], row['account'], mode))
         if adapter is None:
             raise EconomyError('adapter_unavailable', 'No trusted bounded adapter is registered', 503)
+        if (adapter.provider, adapter.account, getattr(adapter, 'mode', None)) != (row['provider'], row['account'], mode):
+            raise EconomyError('profile_mismatch', 'Paid adapter configuration changed after registration')
         # Quote before dispatch. Model-controlled limits are validated by trusted adapter code.
         limits = deepcopy(row['limits'])
         bound = money(adapter.quote(deepcopy(limits)), positive=True)

@@ -181,7 +181,7 @@ def test_v1_database_upgrade_preserves_financial_history(tmp_path):
     assert service.balance('legacy')['posted_micro_usd'] == 5_000_000
     assert len(service.ledger('legacy')) == 1
     with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 4
     queue = ReconciliationQueue(service)
     assert enqueue(queue)['state'] == 'pending'
     assert EconomyService(path).balance('legacy')['posted_micro_usd'] == 5_000_000
