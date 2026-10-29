@@ -126,3 +126,7 @@ Record choices before implementing dependent integrations. Missing credentials s
 A runnable slice has its implementation, configuration, migrations where relevant, appropriate checks, actual launch instructions, and known limitations.
 
 A plan, mock connector, or screenshot alone is not a completed live capability. Keep simulation and live-provider evidence clearly separated.
+
+## Preserved standalone tools boundary
+
+The owner-operated Python tools SDK from latest main is available under `src/widemind/tools`, with its separate control journal and documented setup in [TOOLS-SETUP.md](TOOLS-SETUP.md). It is not a Node runtime module and its development wallet is not the central economy wallet. Do not seed both ledgers for one runtime action, import SDK balances as customer receipts, or bypass the central authorization/settlement path. Paid standalone calls are blocked when central runtime configuration is present; existing effects can still be reconciled. SDK adapters require an explicit central-authority adapter before being enabled in the autonomous runtime. Existing free tools, secret setup and owner-only standalone development workflows are preserved. Fixture availability is not real account verification.

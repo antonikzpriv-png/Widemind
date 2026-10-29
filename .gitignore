@@ -51,3 +51,8 @@ var/
 
 # Python package metadata
 *.egg-info/
+
+# Standalone owner tools state
+owner-config.json
+control/
+workspace/

@@ -114,3 +114,7 @@ Then verify one actual paid job with real usage and payment records. Expand serv
 ## Implementation decisions
 
 Select a small maintainable stack and record its actual commands. Start with one deployment and one agent identity. Separate service boundaries logically first; multiple deployable microservices are not required for the first version.
+
+## Preserved standalone tools boundary
+
+The owner-operated Python tools SDK from latest main is available under `src/widemind/tools`, with its separate control journal and documented setup in [TOOLS-SETUP.md](TOOLS-SETUP.md). It is not a Node runtime module and its development wallet is not the central economy wallet. Do not seed both ledgers for one runtime action, import SDK balances as customer receipts, or bypass the central authorization/settlement path. Paid standalone calls are blocked when central runtime configuration is present; existing effects can still be reconciled. SDK adapters require an explicit central-authority adapter before being enabled in the autonomous runtime. Existing free tools, secret setup and owner-only standalone development workflows are preserved. Fixture availability is not real account verification.
