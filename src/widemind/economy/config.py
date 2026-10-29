@@ -29,7 +29,7 @@ class Settings:
                 raise ValueError("Each economy bearer token must be 32–512 ASCII characters without whitespace")
         if len(set(tokens)) != 3:
             raise ValueError("Operator, gateway and agent tokens must be distinct")
-        if not isinstance(self.agent_run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}", self.agent_run_id):
+        if not isinstance(self.agent_run_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}", self.agent_run_id):
             raise ValueError("WIDEMIND_AGENT_RUN_ID must identify the one run authorized to the agent")
         if not self.database_path or self.database_path == ":memory:":
             raise ValueError("Use a persistent economy database path")
@@ -62,6 +62,15 @@ class Settings:
     @property
     def stripe_enabled(self) -> bool:
         return bool(self.stripe_api_key)
+
+    def create_payments(self, service):
+        """Create the configured trusted adapter without contacting the provider."""
+        if not self.stripe_enabled:
+            return None
+        from .stripe import StripePayments
+        return StripePayments(service, api_key=self.stripe_api_key, account=self.stripe_account,
+                              mode=self.stripe_mode, webhook_secret=self.stripe_webhook_secret,
+                              success_url=self.checkout_success_url, cancel_url=self.checkout_cancel_url)
 
     @classmethod
     def from_env(cls) -> "Settings":

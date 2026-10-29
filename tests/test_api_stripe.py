@@ -8,6 +8,7 @@ from widemind.economy.app import create_app
 from widemind.economy.config import Settings
 from widemind.economy.service import EconomyService
 from widemind.economy.stripe import StripePayments
+from widemind.economy.reconciliation import ReconciliationWorker
 from test_stripe_payments import ACCOUNT, SECRET, StripeFixture, event, signed
 
 
@@ -48,7 +49,9 @@ def test_checkout_signed_webhook_duplicate_fulfillment_refund_http_slice(tmp_pat
             assert app.post("/v1/webhooks/stripe", content=raw+b" ", headers={"Stripe-Signature": signature}).status_code == 400
             for _duplicate in range(2):
                 response = app.post("/v1/webhooks/stripe", content=raw, headers={"Stripe-Signature": signature})
-                assert response.status_code == 200, response.text
+                assert response.status_code == 202, response.text
+            result = ReconciliationWorker(app.app.state.reconciliation_queue, payments).run_once()
+            assert result["completed"] == 1
             balance = app.get("/v1/runs/test-run/balance", headers=agent).json()
             assert balance["posted_micro_usd"] == 14_410_000
             assert balance["held_micro_usd"] == 9_410_000
@@ -65,7 +68,8 @@ def test_checkout_signed_webhook_duplicate_fulfillment_refund_http_slice(tmp_pat
                 fixture.tx("txn_refund", -1000), source="re_fixture", type="refund")
             raw, signature = signed(event("charge.refunded", "ch_fixture", id="evt_refund"))
             response = app.post("/v1/webhooks/stripe", content=raw, headers={"Stripe-Signature": signature})
-            assert response.status_code == 200, response.text
+            assert response.status_code == 202, response.text
+            assert ReconciliationWorker(app.app.state.reconciliation_queue, payments).run_once()["completed"] == 1
             assert app.post("/v1/payments/cs_created/reconcile", headers=operator).status_code == 200
             assert ledger.balance("test-run")["posted_micro_usd"] == 4_410_000
             entries = app.get("/v1/runs/test-run/ledger", headers=operator).json()

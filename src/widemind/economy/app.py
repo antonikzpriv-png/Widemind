@@ -18,12 +18,14 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import Settings
 from .service import EconomyError, EconomyService
+from .reconciliation import ReconciliationQueue
 
 MAX_MONEY = 9_000_000_000_000_000
 Money = Annotated[StrictInt, Field(ge=0, le=MAX_MONEY)]
 PositiveMoney = Annotated[StrictInt, Field(gt=0, le=MAX_MONEY)]
 SignedMoney = Annotated[StrictInt, Field(ge=-MAX_MONEY, le=MAX_MONEY)]
-Identifier = Annotated[StrictStr, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")]
+Identifier = Annotated[StrictStr, Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")]
+StripePaymentId = Annotated[StrictStr, Field(min_length=4, max_length=200, pattern=r"^cs_[A-Za-z0-9_]+$")]
 Note = Annotated[StrictStr, Field(min_length=1, max_length=200)]
 
 
@@ -97,6 +99,11 @@ class IdempotencyInput(Input):
     idempotency_key: Identifier
 
 
+class RetryInput(Input):
+    reason: Note
+    idempotency_key: Identifier
+
+
 class BoundedRoute(APIRoute):
     """Bound raw and JSON request bodies before parsing or storing them."""
     def get_route_handler(self):
@@ -118,13 +125,9 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
                payments: Any = None) -> FastAPI:
     settings = settings or Settings.from_env()
     economy = service or EconomyService(settings.database_path)
-    if payments is None and settings.stripe_enabled:
-        from .stripe import StripePayments
-        payments = StripePayments(
-            economy, api_key=settings.stripe_api_key, webhook_secret=settings.stripe_webhook_secret,
-            account=settings.stripe_account, mode=settings.stripe_mode,
-            success_url=settings.checkout_success_url, cancel_url=settings.checkout_cancel_url,
-        )
+    if payments is None:
+        payments = settings.create_payments(economy)
+    queue = ReconciliationQueue(economy)
     @asynccontextmanager
     async def lifespan(_app):
         try:
@@ -138,6 +141,7 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
     app.router.route_class = BoundedRoute
     app.state.economy = economy
     app.state.payments = payments
+    app.state.reconciliation_queue = queue
 
     @app.exception_handler(EconomyError)
     async def economy_error(_request: Request, exc: EconomyError):
@@ -148,7 +152,7 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         # Pydantic's default response includes submitted values, potentially secrets.
         return JSONResponse({"error": {"code": "invalid_input", "message": "Request does not match the versioned economy contract"}}, status_code=422)
 
-    def identity(authorization: Annotated[str | None, Header()] = None) -> str:
+    def identify(authorization: str | None) -> str:
         if authorization is None or not authorization.startswith("Bearer "):
             raise EconomyError("unauthorized", "A bearer identity is required", 401)
         value = authorization[7:]
@@ -160,7 +164,25 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
             raise EconomyError("unauthorized", "Invalid bearer identity", 401)
         return matches[0]
 
-    def authorize(role: str, allowed: set[str], run_id: str | None = None) -> None:
+    @app.middleware("http")
+    async def authenticate_before_body(request: Request, call_next):
+        # Reject missing/ambiguous credentials before JSON/body parsing. Private
+        # requests cannot consume the full body budget before authentication.
+        if request.url.path.startswith("/v1/") and request.url.path != "/v1/webhooks/stripe":
+            values = request.headers.getlist("authorization")
+            try:
+                if len(values) != 1:
+                    raise EconomyError("unauthorized", "A single bearer identity is required", 401)
+                request.state.economy_role = identify(values[0])
+            except EconomyError as exc:
+                return JSONResponse({"error": {"code": exc.code, "message": str(exc)}},
+                                    status_code=exc.status, headers={"WWW-Authenticate": "Bearer"})
+        return await call_next(request)
+
+    def identity(request: Request) -> str:
+        return request.state.economy_role
+
+    def authorize(role: str, allowed: set[str], run_id: Identifier | None = None) -> None:
         if role not in allowed:
             raise EconomyError("forbidden", "This identity cannot perform that operation", 403)
         if role == "agent" and run_id != settings.agent_run_id:
@@ -181,102 +203,144 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         return economy.create_run(**body.model_dump())
 
     @app.get("/v1/runs/{run_id}/balance")
-    def balance(run_id: str, role: str = Depends(identity)):
+    def balance(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.balance(run_id)
 
     @app.get("/v1/runs/{run_id}/ledger")
-    def ledger(run_id: str, role: str = Depends(identity)):
+    def ledger(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.ledger(run_id)
 
     @app.get("/v1/runs/{run_id}/reservations")
-    def reservations(run_id: str, role: str = Depends(identity)):
+    def reservations(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.reservations(run_id)
 
     @app.get("/v1/runs/{run_id}/events")
-    def events(run_id: str, after: Annotated[int, Query(ge=0, le=9_223_372_036_854_775_807)] = 0, role: str = Depends(identity)):
+    def events(run_id: Identifier, after: Annotated[int, Query(ge=0, le=9_223_372_036_854_775_807)] = 0, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.events(run_id, after=after)
 
     @app.get("/v1/runs/{run_id}/payments")
-    def payments_read(run_id: str, role: str = Depends(identity)):
+    def payments_read(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.payments(run_id)
 
     @app.get("/v1/runs/{run_id}/reconciliations")
-    def reconciliations(run_id: str, role: str = Depends(identity)):
+    def reconciliations(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.reconciliations(run_id)
 
     @app.get("/v1/runs/{run_id}/charges")
-    def charges(run_id: str, role: str = Depends(identity)):
+    def charges(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.charges(run_id)
 
     @app.get("/v1/runs/{run_id}/checkouts")
-    def checkouts(run_id: str, role: str = Depends(identity)):
+    def checkouts(run_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.checkouts(run_id)
 
     @app.post("/v1/runs/{run_id}/reservations")
-    def reserve(run_id: str, body: ReserveInput, role: str = Depends(identity)):
+    def reserve(run_id: Identifier, body: ReserveInput, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway", "agent"}, run_id)
         return economy.reserve(run_id, **body.model_dump())
 
     @app.post("/v1/reservations/{reservation_id}/start")
-    def start(reservation_id: str, role: str = Depends(identity)):
+    def start(reservation_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway"})
         return economy.start_reservation(reservation_id)
 
     @app.post("/v1/reservations/{reservation_id}/settle")
-    def settle(reservation_id: str, body: SettleInput, role: str = Depends(identity)):
+    def settle(reservation_id: Identifier, body: SettleInput, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway"})
         return economy.settle(reservation_id, **body.model_dump())
 
     @app.post("/v1/reservations/{reservation_id}/cancel")
-    def cancel(reservation_id: str, role: str = Depends(identity)):
+    def cancel(reservation_id: Identifier, role: str = Depends(identity)):
         authorize(role, {"operator", "gateway"})
         return economy.cancel_reservation(reservation_id)
 
     @app.post("/v1/runs/{run_id}/holds")
-    def hold(run_id: str, body: HoldInput, role: str = Depends(identity)):
+    def hold(run_id: Identifier, body: HoldInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return economy.set_hold(run_id, **body.model_dump())
 
     @app.post("/v1/runs/{run_id}/funding")
-    def fund(run_id: str, body: FundingInput, role: str = Depends(identity)):
+    def fund(run_id: Identifier, body: FundingInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return economy.record_funding(run_id, **body.model_dump())
 
     @app.post("/v1/runs/{run_id}/subsidies")
-    def subsidy(run_id: str, body: ReferenceInput, role: str = Depends(identity)):
+    def subsidy(run_id: Identifier, body: ReferenceInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return economy.record_subsidy(run_id, **body.model_dump())
 
     @app.post("/v1/runs/{run_id}/earned-revenue")
-    def earned(run_id: str, body: EarnedInput, role: str = Depends(identity)):
+    def earned(run_id: Identifier, body: EarnedInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return economy.record_earned_revenue(run_id, **body.model_dump())
 
     @app.post("/v1/runs/{run_id}/corrections")
-    def correction(run_id: str, body: CorrectionInput, role: str = Depends(identity)):
+    def correction(run_id: Identifier, body: CorrectionInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return economy.correct_entry(run_id, **body.model_dump())
 
     @app.post("/v1/runs/{run_id}/checkout")
-    def checkout(run_id: str, body: CheckoutInput, role: str = Depends(identity)):
+    def checkout(run_id: Identifier, body: CheckoutInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return stripe().create_checkout(run_id, **body.model_dump())
 
     @app.post("/v1/payments/{payment_id}/reconcile")
-    def reconcile(payment_id: str, role: str = Depends(identity)):
+    def reconcile(payment_id: StripePaymentId, role: str = Depends(identity)):
         authorize(role, {"operator"})
         return stripe().reconcile(payment_id)
 
+    @app.post("/v1/payments/{payment_id}/schedule", status_code=202)
+    def schedule_payment(payment_id: StripePaymentId, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        stripe()
+        return queue.enqueue_payment("stripe", settings.stripe_account, settings.stripe_mode, payment_id)
+
+    @app.get("/v1/reconciliation/tasks")
+    def reconciliation_tasks(state: Literal["pending", "running", "completed", "dead_letter"] | None = None,
+                             limit: Annotated[int, Query(ge=1, le=100)] = 100,
+                             role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        stripe()
+        return queue.list_tasks("stripe", settings.stripe_account, settings.stripe_mode, state=state, limit=limit)
+
+    @app.post("/v1/reconciliation/tasks/{task_id}/retry")
+    def retry_reconciliation(task_id: Identifier, body: RetryInput, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        stripe()
+        # Scope task selection to this configured account/mode before mutation.
+        # The queue itself enforces this scope through the explicit task check.
+        task = queue.task(task_id)
+        if (task["provider"], task["account"], task["mode"]) != ("stripe", settings.stripe_account, settings.stripe_mode):
+            raise EconomyError("not_found", "Reconciliation task not found", 404)
+        return queue.retry(task_id, body.reason, body.idempotency_key)
+
+    @app.post("/v1/checkouts/{request_id}/recover")
+    def recover_checkout(request_id: Identifier, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        return stripe().recover_checkout(request_id)
+
+    @app.get("/v1/runs/{run_id}/financial-summary")
+    def financial_summary(run_id: Identifier, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        from .reporting import public_summary
+        return public_summary(economy, run_id)
+
+    @app.get("/v1/runs/{run_id}/integrity")
+    def integrity(run_id: Identifier, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        from .reporting import audit_integrity
+        return audit_integrity(economy, run_id)
+
     @app.post("/v1/payments/{payment_id}/release-hold")
-    def release_hold(payment_id: str, body: IdempotencyInput, role: str = Depends(identity)):
+    def release_hold(payment_id: StripePaymentId, body: IdempotencyInput, role: str = Depends(identity)):
         authorize(role, {"operator"})
         stripe()
         return economy.release_payment_hold("stripe", settings.stripe_account, settings.stripe_mode,
@@ -287,11 +351,14 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         authorize(role, {"operator"})
         return stripe().verify_setup()
 
-    @app.post("/v1/webhooks/stripe")
+    @app.post("/v1/webhooks/stripe", status_code=202)
     async def webhook(request: Request, stripe_signature: Annotated[str | None, Header()] = None):
         if stripe_signature is None:
             raise EconomyError("invalid_signature", "Stripe signature is required", 400)
         raw_body = await request.body()
-        return await run_in_threadpool(stripe().handle_webhook, raw_body, stripe_signature)
+        adapter = stripe()
+        event, digest = adapter.verify_webhook(raw_body, stripe_signature)
+        return await run_in_threadpool(queue.enqueue_verified_event, event, digest,
+                                       "stripe", settings.stripe_account, settings.stripe_mode)
 
     return app
