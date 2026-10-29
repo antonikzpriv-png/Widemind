@@ -78,6 +78,20 @@ def _database_dump(service):
         return "\n".join(connection.iterdump())
 
 
+def _legacy_projection_update(service, table, statement, arguments=()):
+    """Inject legacy damage as a privileged test administrator, past new guards.
+
+    New databases prevent these mutations; an upgraded old database may already
+    contain them. The detector must still identify those existing bad records.
+    """
+    assert table in {"reservations", "payments"}
+    with sqlite3.connect(service.path) as connection:
+        triggers = connection.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name=?", (table,)).fetchall()
+        for (name,) in triggers:
+            connection.execute('DROP TRIGGER "' + name.replace('"', '""') + '"')
+        connection.execute(statement, arguments)
+
+
 def test_summary_is_an_explicit_allowlist_and_reconciles_with_private_ledger(populated):
     summary = public_summary(populated, RUN)
     private = populated.balance(RUN)
@@ -238,9 +252,10 @@ def test_unknown_run_uses_existing_not_found_contract(service):
         assert caught.value.status == 404
 
 
-def test_audit_supports_additive_schema_two_and_fails_closed_for_unknown_future_versions(service):
+@pytest.mark.parametrize("version", [2, 3, 4])
+def test_audit_supports_additive_schemas_and_fails_closed_for_unknown_future_versions(service, version):
     with sqlite3.connect(service.path) as connection:
-        connection.execute("PRAGMA user_version=2")
+        connection.execute(f"PRAGMA user_version={version}")
     assert audit_integrity(service, RUN)["ok"] is True
     with sqlite3.connect(service.path) as connection:
         connection.execute("PRAGMA user_version=42")
@@ -283,3 +298,53 @@ def test_corrupt_cost_metadata_is_a_failed_audit_without_a_private_exception(ser
     report = audit_integrity(service, RUN)
     assert "operating_charge_identity" in _failed(report)
     _assert_no_private_data(report)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("amount_micro_usd", 1_000_000), ("provider", "changed-provider"),
+    ("account", "changed-account"), ("action_id", "changed-action"),
+    ("limits_json", '{"max_tokens":1}'),
+])
+def test_reservation_authorization_cannot_change_while_state_is_preserved(service, field, value):
+    service.reserve(RUN, "original-action", 4_000_000, "original-key", PROVIDER, ACCOUNT, {"max_tokens": 100})
+    _legacy_projection_update(service, "reservations", f"UPDATE reservations SET {field}=?", (value,))
+    report = audit_integrity(service, RUN)
+    assert "reservation_authorization" in _failed(report)
+    _assert_no_private_data(report)
+
+
+def test_partial_charge_projection_must_match_recorded_subtotal_events(populated):
+    with sqlite3.connect(populated.path) as connection:
+        connection.execute("DROP TRIGGER events_no_update")
+        row = connection.execute("SELECT sequence,data FROM events WHERE type='economy.cost_unknown'").fetchone()
+        data = json.loads(row[1])
+        data["reported_subtotal_micro_usd"] = 100_000
+        connection.execute("UPDATE events SET data=? WHERE sequence=?", (json.dumps(data), row[0]))
+    assert "provisional_event_projection" in _failed(audit_integrity(populated, RUN))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("released_micro_usd", "bad"), ("released_micro_usd", -1),
+    ("pending_liability_micro_usd", "bad"), ("pending_liability_micro_usd", -1),
+    ("revision", "bad"), ("revision", -1),
+])
+def test_payment_numeric_projection_corruption_cannot_receive_a_clean_audit(service, field, value):
+    service.register_payment(RUN, PROVIDER, ACCOUNT, PAYMENT, JOB, "registration")
+    _legacy_projection_update(service, "payments", f"UPDATE payments SET {field}=?", (value,))
+    report = audit_integrity(service, RUN)
+    assert report["ok"] is False
+    assert "payment_projection_fields" in _failed(report)
+    _assert_no_private_data(report)
+
+
+def test_payment_release_projection_must_match_actual_customer_hold(populated):
+    with sqlite3.connect(populated.path) as connection:
+        connection.execute("UPDATE payments SET released_micro_usd=0")
+    assert "payment_hold_projection" in _failed(audit_integrity(populated, RUN))
+
+
+@pytest.mark.parametrize("state,actual", [("reserved", 1), ("unknown", -1), ("settled", None), ("settled", "bad"), ("settled", -1)])
+def test_reservation_actual_amount_is_valid_for_its_state(service, state, actual):
+    service.reserve(RUN, "action", 1_000_000, "key", PROVIDER, ACCOUNT, {"max_tokens": 100})
+    _legacy_projection_update(service, "reservations", "UPDATE reservations SET state=?,actual_micro_usd=?", (state, actual))
+    assert "reservation_amount_state" in _failed(audit_integrity(service, RUN))

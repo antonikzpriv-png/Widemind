@@ -10,7 +10,7 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import quote
 
-from .service import EconomyError, EconomyService, OPENING_CREDIT, ident
+from .service import EconomyError, EconomyService, OPENING_CREDIT, fingerprint, ident
 
 
 CASH_CATEGORIES = (
@@ -77,7 +77,7 @@ def audit_integrity(service: EconomyService, run_id: str, *, max_records: int = 
         connection.execute("PRAGMA query_only=ON")
         connection.execute("BEGIN")
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-        if version not in (1, 2):
+        if version not in (1, 2, 3, 4):
             return _report(False, [{"code": "supported_schema", "ok": False, "violations": 1}], {}, version)
         run = connection.execute("SELECT mode FROM runs WHERE run_id=?", (run_id,)).fetchone()
         if run is None:
@@ -158,18 +158,26 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
     }
     if any(type(row[field]) is not int for name, fields in numeric_fields.items() for row in rows[name] for field in fields):
         return _report(False, [{"code": "integer_monetary_storage", "ok": False, "violations": 1}], inspected, version, mode)
+    if any(type(row[field]) is not int or row[field] < 0 for row in rows["payments"] for field in ("released_micro_usd", "pending_liability_micro_usd", "revision")):
+        return _report(False, [{"code": "payment_projection_fields", "ok": False, "violations": 1}], inspected, version, mode)
 
     ledger = {row["entry_id"]: row for row in rows["ledger_entries"]}
     metadata = {key: payload(row["metadata"]) for key, row in ledger.items()}
     events = [(row, payload(row["data"])) for row in rows["events"]]
     hold_events = {}
     reservation_events = {}
+    authorizations = {}
+    provisional_events = {}
     states = {"economy.reserved": "reserved", "economy.dispatched": "running", "economy.cost_unknown": "unknown", "economy.charge_settled": "settled", "economy.reservation_cancelled": "cancelled"}
     for row, data in sorted(events, key=lambda item: item[0]["sequence"]):
         if row["type"] == "economy.hold_changed" and isinstance(data.get("hold_id"), str):
             hold_events[data["hold_id"]] = data
         if row["type"] in states and isinstance(data.get("reservation_id"), str):
             reservation_events[data["reservation_id"]] = states[row["type"]]
+        if row["type"] == "economy.reserved" and isinstance(data.get("reservation_id"), str):
+            authorizations.setdefault(data["reservation_id"], []).append(data)
+        if row["type"] == "economy.cost_unknown" and isinstance(data.get("reservation_id"), str) and type(data.get("reported_subtotal_micro_usd")) is int:
+            provisional_events[data["reservation_id"]] = data
     holds = {row["hold_id"]: row for row in rows["holds"]}
     for hold_id in holds.keys() | hold_events.keys():
         actual, recorded = holds.get(hold_id), hold_events.get(hold_id)
@@ -210,6 +218,19 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
         component_entries.add(component["entry_id"])
         components[(key, component["component"])] = component
     payments = {(row["provider"], row["account"], row["mode"], row["payment_id"]): row for row in rows["payments"]}
+    payment_net = {}
+    for component in rows["payment_components"]:
+        transaction_key = tuple(component[name] for name in ("provider", "account", "mode", "transaction_id"))
+        transaction = transactions.get(transaction_key)
+        if transaction is not None:
+            payment_key = (*transaction_key[:3], transaction["payment_id"])
+            payment_net[payment_key] = payment_net.get(payment_key, 0) + component["amount_micro_usd"]
+    for key, payment in payments.items():
+        check("payment_mode", payment["mode"] == mode)
+        hold_id = "payment:" + fingerprint(list(key))
+        actual_hold = holds.get(hold_id)
+        expected = max(0, payment_net.get(key, 0) - payment["released_micro_usd"], payment["pending_liability_micro_usd"])
+        check("payment_hold_projection", (actual_hold is not None and actual_hold["amount_micro_usd"] == expected) or (actual_hold is None and expected == 0 and payment["revision"] == 0))
     for key, transaction in transactions.items():
         check("payment_transaction_binding", (*key[:3], transaction["payment_id"]) in payments and transaction["mode"] == mode)
         check("payment_amount_identity", transaction["amount_micro_usd"] - transaction["fee_micro_usd"] == transaction["net_micro_usd"])
@@ -232,6 +253,12 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
     reservations = {row["reservation_id"]: row for row in rows["reservations"]}
     for key, reservation in reservations.items():
         check("reservation_event_projection", reservation_events.get(key) == reservation["state"])
+        recorded = authorizations.get(key, [])
+        limits = payload(reservation["limits_json"])
+        check("reservation_authorization", len(recorded) == 1 and all(reservation[name] == recorded[0].get(name) for name in ("amount_micro_usd", "provider", "account", "action_id")) and limits == recorded[0].get("limits"))
+        recorded_subtotal = provisional_events.get(key, {}).get("reported_subtotal_micro_usd", 0)
+        check("provisional_event_projection", reservation["provisional_micro_usd"] == recorded_subtotal and (reservation["provisional_micro_usd"] == 0 or reservation["state"] in ("unknown", "settled")))
+        check("reservation_amount_state", reservation["amount_micro_usd"] > 0 and reservation["provisional_micro_usd"] >= 0 and reservation["state"] in ("reserved", "running", "unknown", "settled", "cancelled") and ((reservation["state"] == "settled" and type(reservation["actual_micro_usd"]) is int and reservation["actual_micro_usd"] >= 0) or (reservation["state"] != "settled" and reservation["actual_micro_usd"] is None)))
         final = charges.get(key)
         partial = provisional.get(key)
         actual = reservation["actual_micro_usd"] if reservation["state"] == "settled" else reservation["provisional_micro_usd"]
