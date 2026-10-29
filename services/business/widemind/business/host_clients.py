@@ -79,10 +79,15 @@ class ToolsClient:
         except Exception: return Outcome('unknown',reason='tools reconciliation unavailable')
     @staticmethod
     def outcome(result):
+        if not isinstance(result,dict):return Outcome('unknown',reason='tools did not return an outcome object')
         if result.get('state') in {'succeeded','failed','unknown'}: return Outcome(result['state'],result.get('data',{}),result.get('reason',''))
         if result.get('kind')=='receipt':
-            receipt=result['receipt'];return Outcome('succeeded' if receipt['status']=='succeeded' else 'failed',receipt.get('result',{}))
-        return Outcome('unknown',reason='tools did not return a confirmed outcome')
+            receipt=result.get('receipt',{})
+            state={'succeeded':'succeeded','failed':'failed','cancelled':'failed','unavailable':'failed'}.get(receipt.get('status'),'unknown')
+            return Outcome(state,receipt.get('result',{}),receipt.get('reason',''))
+        # Authenticated tools IPC may report safe continuation metadata without
+        # claiming completion. Retain it for the engine's strict research gate.
+        return Outcome('unknown',result.get('data',{}),result.get('reason','tools did not return a confirmed outcome'))
 
 class EconomyClient:
     def __init__(self,env,store,mode):

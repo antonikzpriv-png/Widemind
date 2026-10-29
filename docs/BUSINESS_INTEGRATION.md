@@ -20,6 +20,26 @@ Offers, payment requests, commitments and deliverables are actually published to
 
 Available service types are `research-brief`, `svg-graphic`, and `software-starter`. Their availability depends on actual tool capabilities and operator policy. Local graphics/software use bounded safe templates without executing arbitrary code. Research requires configured source collection; it is not fabricated. The engine's registry remains extensible rather than a permanent single occupation.
 
+Research orders retain the customer's optional context, checklist requirements,
+ISO `as_of` date and bounded `max_age_days` in the frozen tool arguments. These
+fields never grant pricing, policy or spending authority. Delivery requires
+version-two reviewed synthesis, known source citations and meaningful distinct
+sections matching the agreed headings. Claimed positive checks cannot turn a
+repeated excerpt dump or placeholder into a deliverable. The business service
+uses the tools service's actual downloadable Markdown and verifies its hash and
+size; it does not append source excerpts. Private evidence manifests remain in
+tools recovery state and are never included in customer delivery.
+
+Free reconciliation of an interrupted research workflow only observes pending
+children. Once they are resolved, authenticated tools metadata may report
+`workflow_resumable=true` with a stable `progress_key`. Business reconciliation
+then deduplicates a queued advance event; it never executes a new stage. A later
+authorized `business.step`, while the runtime is active, first reconciles again
+and may continue the original parent action ID once. Each new paid child still
+requires its own economy reservation. Unknown children, pause and stop never
+authorize continuation. Demo research fixtures explicitly simulate this
+version-two output and do not represent fetched sources or live inference.
+
 Customer acceptance freezes quote/customer/scope identity. Payments are verified by querying the authoritative economy snapshot; browser notifications and message amounts cannot fund fulfillment. The actual create-tool ID is correctly bound to its reservation even though the reserve-effect journal has a separate ID. Earned revenue/hold release are requested only after a matching private portal publication, through idempotent economy methods. Fees, refunds, provisional costs and final cost accounting remain economy-owned.
 
 ## Verification and limits

@@ -3,12 +3,49 @@
 No network calls, actual mail, customer, funds, research collection, or revenue.
 The fixture's canned payment and usage records are deliberately labelled demo.
 """
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
 from .business.contracts import Outcome
 from .business.engine import Business
 from .business.store import Store, encode
+
+
+def synthetic_research(arguments):
+    """Version-two protocol fixture. No page was fetched or model consulted."""
+    sources = [
+        {"title": "DEMO fixture: SQLite transactions", "url": "https://www.sqlite.org/lang_transaction.html",
+         "excerpt": "SQLite supports transactions. Fixture text; not fetched in this demo."},
+        {"title": "DEMO fixture: Python sqlite3", "url": "https://docs.python.org/3/library/sqlite3.html",
+         "excerpt": "Python provides a sqlite3 interface. Fixture text; not fetched in this demo."},
+    ]
+    examples = [
+        "SQLite keeps application data in a local database file and supports explicit transaction boundaries. A small team can simplify deployment while defining ownership, backup responsibilities and a reversible migration approach.",
+        "Write contention and recovery procedures require project-specific testing before adoption. Measure concurrent update workloads, document restore steps and inspect the hosting filesystem instead of assuming suitability from an isolated example.",
+        "A deployment budget should distinguish engineering time, storage allocation and support responsibilities. Request measured usage and document the assumptions behind every estimate before comparing alternative implementation choices.",
+        "Access controls need an explicit customer-data inventory and a documented retention schedule. Review who can read exported records and use a separately protected backup location for sensitive material.",
+        "Operational monitoring should record failed writes, queue latency and restore outcomes. Agree concrete alert ownership and test the response procedure with a controlled exercise before relying on it.",
+        "Implementation can start with a small reversible pilot and representative input data. Assign acceptance criteria, review results with the customer and preserve an exit path if the workload exceeds expectations.",
+        "Alternative products should be compared against the same requested workload and service obligations. Verify vendor statements independently and identify where evaluation conditions differ from the customer's planned deployment.",
+        "A final decision should identify the remaining unknowns and the next evidence to collect. Record responsibility for each follow-up and keep observed results separate from provisional recommendations.",
+    ]
+    sections = [{"heading": heading,
+                 "text": f"DEMO synthetic {heading} finding for {arguments['topic']}: {examples[index % len(examples)]}",
+                 "source_urls": [source["url"] for source in sources]}
+                for index, heading in enumerate(arguments["sections"])]
+    lines = ["# " + arguments["topic"], "", "DEMO synthetic reviewed-research protocol fixture; no live research performed.", ""]
+    for section in sections:
+        lines.extend(["## " + section["heading"], "", section["text"], ""])
+    lines.extend(["## Sources", "", *[source["title"] + ": " + source["url"] for source in sources], ""])
+    content = "\n".join(lines)
+    artifact = {"path": "demo/research-brief.md", "sha256": hashlib.sha256(content.encode()).hexdigest(),
+                "size_bytes": len(content.encode()), "media_type": "text/markdown"}
+    return {"synthesis_version": 2, "quality": {"passed": True, "synthetic_fixture": True},
+            "checks": {"scope_sections": True, "citations": True, "source_count": len(sources)},
+            "sources": sources, "sections": sections,
+            "document": {"filename": "research-brief.md", "media_type": "text/markdown", "content": content, "artifact": artifact},
+            "plan": dict(arguments), "private_evidence_manifest": {"fixture": "private synthetic evidence; never customer output"}}
 
 
 class DemoAdapters:
@@ -112,13 +149,7 @@ class DemoAdapters:
             self.set(f"cost:{job_id}", maximum_micro_usd // 2)
             if action == "writing.create":
                 return Outcome("succeeded", {"text": "DEMO writing fixture"})
-            sources = [
-                {"title": "DEMO fixture: SQLite transactions", "url": "https://www.sqlite.org/lang_transaction.html", "excerpt": "SQLite supports transactions. Fixture text; not fetched in this demo."},
-                {"title": "DEMO fixture: Python sqlite3", "url": "https://docs.python.org/3/library/sqlite3.html", "excerpt": "Python provides a sqlite3 interface. Fixture text; not fetched in this demo."},
-            ]
-            return Outcome("succeeded", {"sources": sources, "sections": [
-                {"heading": heading, "text": "DEMO source summary: SQLite has transactions and a Python interface. These are test fixtures, not live research.",
-                 "source_urls": [source["url"] for source in sources]} for heading in arguments["sections"]]})
+            return Outcome("succeeded", synthetic_research(arguments))
         return self._once(action_id, action, result)
 
     def close(self):

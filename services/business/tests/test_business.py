@@ -12,7 +12,7 @@ from widemind.business.engine import Business
 from widemind.business.policy import Policy
 from widemind.business.services import ResearchBrief
 from widemind.business.store import Store, encode
-from widemind.demo import DemoAdapters, demonstrate, drain
+from widemind.demo import DemoAdapters, demonstrate, drain, synthetic_research
 from widemind.worker import worker_lock
 
 
@@ -570,9 +570,7 @@ class BusinessTests(unittest.TestCase):
 
     def test_research_rejects_unknown_citations_and_missing_sections(self):
         service = ResearchBrief()
-        good = {"sources": [{"url": "https://example.com/a", "title": "a", "excerpt": "a"},
-                            {"url": "https://example.com/b", "title": "b", "excerpt": "b"}],
-                "sections": [{"heading": h, "text": "summary", "source_urls": ["https://example.com/a"]} for h in self.scope["sections"]]}
+        good = synthetic_research(self.scope)
         self.assertTrue(service.deliverable(self.scope, good)["checks"]["citations"])
         bad = json.loads(encode(good))
         bad["sections"][0]["source_urls"] = ["https://example.com/not-a-source"]

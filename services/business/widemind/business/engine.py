@@ -217,7 +217,16 @@ class Business:
                 outcome = Outcome(existing["state"], json.loads(existing["result"] or "{}"), existing["reason"] or "")
             else:
                 # A prior process may have died before, during, or after the call.
-                outcome = client.reconcile(action_id=action_id)
+                outcome = self._validated_outcome(client.reconcile(action_id=action_id), action)
+                if (provider == "tools" and action == "research.collect" and not reconciliation
+                        and self._workflow_resumable(outcome) and self._active()):
+                    # Observation has resolved all pending children. Continue
+                    # the original parent exactly once in this authorized step;
+                    # the tools gateway reserves each new paid child itself.
+                    try:
+                        outcome = invoke(action_id)
+                    except Exception:
+                        outcome = Outcome("unknown", reason="workflow continuation outcome unavailable; reconcile before retry")
         else:
             if reconciliation or not self._active():
                 raise Deferred("runtime does not permit new work")
@@ -249,6 +258,8 @@ class Business:
                 raise ValueError("invalid outcome shape")
             if len(encode(outcome.data)) > 2_000_000:
                 raise ValueError("result exceeds limit")
+            if action == "research.collect" and outcome.state == "unknown" and outcome.data.get("workflow_resumable") is True:
+                single_line(outcome.data.get("progress_key"), "workflow progress key", 200)
             if action == "gmail.send" and outcome.state == "succeeded":
                 if outcome.data.get("delivery_state") not in {"confirmed", "accepted", "unknown"}:
                     raise ValueError("missing transport state")
@@ -258,6 +269,11 @@ class Business:
         except (TypeError, ValueError, RecursionError):
             return Outcome("unknown", reason="invalid adapter result; reconciliation required")
         return outcome
+
+    @staticmethod
+    def _workflow_resumable(outcome):
+        return (outcome.state == "unknown" and outcome.data.get("workflow_resumable") is True
+                and isinstance(outcome.data.get("progress_key"), str) and bool(outcome.data["progress_key"]))
 
     def _tool(self, entity, step, action, arguments, reservation=None, maximum=0):
         if not self._active():
@@ -716,6 +732,10 @@ class Business:
         # Reconciliation can replace it with confirmed delivery/bounce evidence.
         self.store.db.execute("UPDATE effects SET state=?,result=?,reason=? WHERE id=?",
             (result.state, encode(result.data), result.reason[:1000], action_id))
+        if effect["provider"] == "tools" and effect["action"] == "research.collect" and self._workflow_resumable(result):
+            # Free reconciliation never executes a stage. A stable progress key
+            # schedules one future business step, with normal runtime gating.
+            self._enqueue("advance", effect["job_id"], "workflow:" + identity(action_id, result.data["progress_key"]))
         if result.state != "unknown":
             self.store.memory(self.run_id, action_id, "reconciliation", {"state": result.state}, self.clock())
 
