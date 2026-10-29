@@ -156,6 +156,13 @@ Separate action IDs remain separate authorized messages: callers must reuse the
 original action ID for recovery, rather than trying a new action to bypass an
 uncertain send. Pause/stop must preserve reconciliation access.
 
+Attachment downloads also persist their local write intent (path, content hash,
+account, arguments, and job) before writing workspace bytes. Recovery requires a
+matching completed private attachment receipt; an existing file alone does not
+prove completion. An interruption without that receipt remains uncertain and
+never triggers an automatic download or file write. Artifact receipts retain
+their job identity and private visibility.
+
 Each HTTP request has a remaining-deadline timeout, cancellation callback, and
 response size cap; no automatic redirect or HTTP retry is requested. Once Gmail
 accepts email, local cancellation cannot withdraw it. Default bounds are listed
@@ -170,6 +177,9 @@ before each call so failed/unknown attempts remain visible. They are not claimed
 Google quota units or invoice records. Hosting/network/subscription allocation
 belongs to the trusted operating-cost accounting boundary. No numeric current
 Google project/user/daily-sending quotas were verified here.
+Ordinary errors and every reconciliation outcome carry the cumulative measured
+usage as well, so a failed profile/read or an unresolved write retains its
+attempt counts in the gateway receipt.
 
 ## Verification and future controlled smoke
 

@@ -203,7 +203,9 @@ class GmailTests(unittest.TestCase):
         self.transport.drop_response = self.transport.hide_results = True
         with self.assertRaises(Uncertain):
             self.adapter.execute(self.args, self.ctx)
-        self.assertEqual(self.adapter.reconcile(self.args, self.ctx).outcome, "uncertain")
+        recovered = self.adapter.reconcile(self.args, self.ctx)
+        self.assertEqual(recovered.outcome, "uncertain")
+        self.assertEqual(recovered.result.usage.units["http_attempts"], len(self.transport.calls))
         with self.assertRaises(Uncertain):
             GmailAdapter().execute(self.args, self.ctx)
         self.assertEqual(len(self.mutations()), 1)
@@ -337,6 +339,90 @@ class GmailTests(unittest.TestCase):
         self.assertNotIn("private-customer-body", repr(error.exception))
         self.assertEqual(self.adapter.reconcile(self.args, self.ctx).outcome, "not_executed")
         self.assertEqual(len(self.mutations()), 1)
+
+    def test_read_and_profile_failures_carry_measured_attempts_and_sanitized_errors(self):
+        self.transport.info["aud"] = "wrong-client"
+        with self.assertRaises(Unavailable) as failure:
+            self.adapter.execute({"operation": "profile"}, self.ctx)
+        self.assertEqual(failure.exception.usage.units["http_attempts"], 1)
+        self.assertEqual(failure.exception.usage.cost_microusd, 0)
+        self.transport.info["aud"] = "fixture-client"
+        self.transport.read_payload["payload"]["headers"] = None
+        with self.assertRaises(ToolError) as failure:
+            self.adapter.execute({"operation": "read", "message_id": "read1"}, self.ctx)
+        self.assertEqual(failure.exception.usage.units["http_attempts"], len(self.transport.calls))
+        self.assertEqual(failure.exception.usage.units["http_attempts"], 4)
+        recovered = self.adapter.reconcile({"operation": "read", "message_id": "read1"}, self.ctx)
+        self.assertEqual(recovered.outcome, "not_executed")
+        self.assertEqual(recovered.result.usage.units["http_attempts"], 4)
+        self.assertNotIn("fixture-access-never-log", str(failure.exception))
+
+    def test_attachment_commit_without_completed_receipt_stays_uncertain_and_never_rewrites(self):
+        self.ctx.job_id = "customer-job"
+        args = {"operation": "attachment", "message_id": "read1", "attachment_id": "attachment1", "output_path": "received/private.bin"}
+        original = self.files.write_bytes
+        writes = []
+
+        def commit_then_interrupt(path, content, **kwargs):
+            intent = PrivateState(self.state.path).load("action1")["local_intent"]
+            self.assertEqual(intent["output_path"], path)
+            self.assertEqual(intent["job_id"], "customer-job")
+            self.assertEqual(intent["bytes"], len(content))
+            writes.append(path)
+            original(path, content, **kwargs)
+            raise ToolError("cancelled", "Fixture stopped after the local commit.")
+
+        self.files.write_bytes = commit_then_interrupt
+        with self.assertRaises(ToolError) as failure:
+            self.adapter.execute(args, self.ctx)
+        self.assertEqual(failure.exception.usage.units["http_attempts"], 3)
+        self.assertEqual((self.files.root / args["output_path"]).read_bytes(), b"private attachment")
+        calls = len(self.transport.calls)
+        self.ctx.state = PrivateState(self.state.path)
+        recovered = GmailAdapter().reconcile(args, self.ctx)
+        self.assertEqual(recovered.outcome, "uncertain")
+        self.assertEqual(recovered.result.usage.units["http_attempts"], 3)
+        with self.assertRaises(Uncertain) as failure:
+            GmailAdapter().execute(args, self.ctx)
+        self.assertEqual(failure.exception.usage.units["http_attempts"], 3)
+        self.assertEqual(len(self.transport.calls), calls)
+        self.assertEqual(writes, [args["output_path"]])
+
+    def test_attachment_completed_receipt_recovers_after_cancel_with_job_hash_and_no_http(self):
+        self.ctx.job_id = "customer-job"
+        args = {"operation": "attachment", "message_id": "read1", "attachment_id": "attachment1", "output_path": "received/private.bin"}
+        self.ctx.cancelled = lambda: bool(self.state.load("action1").get("gmail_attachment", {}).get("completed"))
+        with self.assertRaises(ToolError) as failure:
+            self.adapter.execute(args, self.ctx)
+        self.assertEqual(failure.exception.code, "cancelled")
+        self.assertEqual(failure.exception.usage.units["http_attempts"], 3)
+        self.ctx.cancelled = lambda: False
+        self.ctx.state = PrivateState(self.state.path)
+        calls = len(self.transport.calls)
+        recovered = GmailAdapter().reconcile(args, self.ctx)
+        self.assertEqual(recovered.outcome, "completed")
+        artifact = recovered.result.artifacts[0]
+        self.assertEqual(artifact["job_id"], "customer-job")
+        self.assertEqual(artifact["visibility"], "private")
+        self.assertEqual(artifact["sha256"], recovered.result.data["sha256"])
+        self.assertEqual(recovered.result.usage.units["http_attempts"], 3)
+        self.assertEqual(GmailAdapter().execute(args, self.ctx).artifacts, [artifact])
+        self.ctx.job_id = "unrelated-job"
+        self.assertEqual(GmailAdapter().reconcile(args, self.ctx).outcome, "uncertain")
+        self.assertEqual(len(self.transport.calls), calls)
+
+    def test_attachment_missing_or_tampered_receipt_never_proves_not_executed(self):
+        args = {"operation": "attachment", "message_id": "read1", "attachment_id": "attachment1", "output_path": "received/file.bin"}
+        empty = self.adapter.reconcile(args, self.ctx)
+        self.assertEqual(empty.outcome, "uncertain")
+        self.assertEqual(empty.result.usage.units["http_attempts"], 0)
+        self.adapter.execute(args, self.ctx)
+        receipt = self.state.load("action1")["gmail_attachment"]
+        receipt["artifacts"][0]["sha256"] = "0" * 64
+        self.state.update("action1", {"gmail_attachment": receipt})
+        recovered = self.adapter.reconcile(args, self.ctx)
+        self.assertEqual(recovered.outcome, "uncertain")
+        self.assertEqual(recovered.result.usage.units["http_attempts"], 3)
 
     def test_timeout_cancel_and_size_bounds_are_applied_to_every_request(self):
         self.adapter.execute({"operation": "profile"}, self.ctx)

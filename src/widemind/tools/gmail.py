@@ -381,12 +381,33 @@ class GmailAdapter:
         return token, verified
 
     def execute(self, arguments: Mapping[str, Any], ctx: ToolContext) -> ToolResult:
-        ctx.check()
-        op = _validate(arguments, ctx.config)
         counter = _Counter(ctx)
         ctx = replace(ctx, transport=counter)
+        try:
+            ctx.check()
+            return self._execute(arguments, ctx, counter)
+        except ToolError as error:
+            error.usage = counter.usage()
+            raise
+        except Exception:
+            error = ToolError("gmail_operation", "Gmail operation could not finish; inspect its private receipt before retrying.")
+            error.usage = counter.usage()
+            raise error from None
+        except BaseException as error:
+            error.usage = counter.usage()
+            raise
+
+    def _execute(self, arguments: Mapping[str, Any], ctx: ToolContext, counter: _Counter) -> ToolResult:
+        op = _validate(arguments, ctx.config)
         if op in WRITES:
             return self._write(arguments, ctx, counter)
+        if op == "attachment":
+            stored = ctx.load_state()
+            if stored.get("gmail_attachment") or stored.get("local_intent"):
+                recovered = self._reconcile_attachment(arguments, ctx, counter)
+                if recovered.outcome == "completed":
+                    return recovered.result
+                raise Uncertain("The attachment write remains unresolved; no file was downloaded or written again.", usage=counter.usage())
         token, verified = self._verified(ctx)
         maximum = _limit(ctx.config, "max_read_bytes", 2_000_000, 20_000_000)
         if op == "profile":
@@ -424,9 +445,45 @@ class GmailAdapter:
         maximum = _limit(ctx.config, "max_attachment_bytes", 8_000_000, 20_000_000)
         attachment = _api(ctx, token, "GET", "/messages/" + quote(arguments["message_id"], safe="") + "/attachments/" + quote(arguments["attachment_id"], safe=""), maximum=(maximum + 2) // 3 * 4 + 1024)
         content = _decode(attachment.get("data"), maximum)
+        intent = {"provider": "gmail_attachment", "arguments_sha256": _hash(_canonical(dict(arguments))),
+                  "account": str(ctx.config.get("expected_account", "")).casefold(), "job_id": ctx.job_id,
+                  "output_path": arguments["output_path"], "sha256": _hash(content), "bytes": len(content)}
+        ctx.save_state({"local_intent": intent, "gmail_attachment": {"intent": intent}})
         ctx.check()
         artifact = ctx.workspace.write_bytes(arguments["output_path"], content, overwrite=False)
-        return ToolResult({"bytes": len(content), "sha256": _hash(content), "output_path": arguments["output_path"]}, counter.usage(), artifacts=[artifact])
+        artifact = {**artifact, "path": arguments["output_path"], "sha256": intent["sha256"], "size_bytes": len(content),
+                    "job_id": ctx.job_id, "visibility": "private", "trust": "untrusted"}
+        data = {"bytes": len(content), "sha256": intent["sha256"], "output_path": arguments["output_path"],
+                "job_id": ctx.job_id, "visibility": "private"}
+        ctx.save_state({"gmail_attachment": {"intent": intent, "completed": True, "data": data, "artifacts": [artifact]}})
+        ctx.check()
+        return ToolResult(data, counter.usage(), artifacts=[artifact])
+
+    @staticmethod
+    def _outcome(outcome: str, counter: _Counter, detail: str, result: ToolResult | None = None) -> Reconciliation:
+        return Reconciliation(outcome, result or ToolResult({}, counter.usage()), detail)
+
+    def _reconcile_attachment(self, args: Mapping[str, Any], ctx: ToolContext, counter: _Counter) -> Reconciliation:
+        state = ctx.load_state()
+        receipt = state.get("gmail_attachment", {})
+        intent = receipt.get("intent", {}) if isinstance(receipt, dict) else {}
+        expected = {"provider": "gmail_attachment", "arguments_sha256": _hash(_canonical(dict(args))),
+                    "account": str(ctx.config.get("expected_account", "")).casefold(), "job_id": ctx.job_id,
+                    "output_path": args["output_path"]}
+        if (not isinstance(intent, dict) or any(intent.get(k) != v for k, v in expected.items())
+                or state.get("local_intent") != intent or receipt.get("completed") is not True):
+            return self._outcome("uncertain", counter, "No matching completed private attachment receipt proves the local write; file existence is not proof.")
+        digest, size = intent.get("sha256"), intent.get("bytes")
+        data, artifacts = receipt.get("data"), receipt.get("artifacts")
+        if (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) or type(size) is not int or size < 0
+                or not isinstance(data, dict) or data.get("sha256") != digest or data.get("bytes") != size
+                or data.get("output_path") != args["output_path"] or data.get("job_id") != ctx.job_id
+                or not isinstance(artifacts, list) or len(artifacts) != 1 or not isinstance(artifacts[0], dict)
+                or artifacts[0].get("path") != args["output_path"] or artifacts[0].get("sha256") != digest
+                or artifacts[0].get("size_bytes") != size or artifacts[0].get("job_id") != ctx.job_id):
+            return self._outcome("uncertain", counter, "The completed attachment receipt does not match its private intent and artifact identity.")
+        return self._outcome("completed", counter, "Recovered the durable completed private attachment receipt.",
+                             ToolResult(data, counter.usage(), artifacts=artifacts))
 
     def _write(self, args: Mapping[str, Any], ctx: ToolContext, counter: _Counter) -> ToolResult:
         _enforce_recipients(args, ctx)
@@ -485,22 +542,34 @@ class GmailAdapter:
         return ToolResult(result, counter.usage())
 
     def reconcile(self, arguments: Mapping[str, Any], ctx: ToolContext) -> Reconciliation:
-        ctx.check()
-        op = _validate(arguments, ctx.config)
-        if op not in WRITES:
-            return Reconciliation("not_executed", detail="Read operations have no external mutation to repeat.")
         counter = _Counter(ctx)
-        return self._reconcile(arguments, replace(ctx, transport=counter), counter)
+        ctx = replace(ctx, transport=counter)
+        try:
+            ctx.check()
+            op = _validate(arguments, ctx.config)
+            if op == "attachment":
+                return self._reconcile_attachment(arguments, ctx, counter)
+            if op not in WRITES:
+                return self._outcome("not_executed", counter, "Read operations have no external mutation to repeat; measured attempts are retained.")
+            return self._reconcile(arguments, ctx, counter)
+        except ToolError as error:
+            error.usage = counter.usage()
+            raise
+        except Exception:
+            return self._outcome("uncertain", counter, "Gmail reconciliation could not establish the outcome; measured attempts are retained.")
+        except BaseException as error:
+            error.usage = counter.usage()
+            raise
 
     def _reconcile(self, args: Mapping[str, Any], ctx: ToolContext, counter: _Counter) -> Reconciliation:
         state = ctx.load_state().get("gmail", {})
         if (not state or state.get("arguments_sha256") != _hash(_canonical(dict(args)))
                 or state.get("account") != str(ctx.config.get("expected_account", "")).casefold()):
-            return Reconciliation("uncertain", detail="No matching private Gmail intent is available.")
+            return self._outcome("uncertain", counter, "No matching private Gmail intent is available.")
         if state.get("completed"):
             return Reconciliation("completed", ToolResult(state["result"], counter.usage()), "Recovered the durable provider acceptance receipt.")
         if state.get("rejected"):
-            return Reconciliation("not_executed", detail="The provider explicitly rejected the recorded request.")
+            return self._outcome("not_executed", counter, "The provider explicitly rejected the recorded request.")
         try:
             token, _ = self._verified(ctx)
             is_draft = state["operation"] == "draft"
@@ -511,28 +580,28 @@ class GmailAdapter:
                 response = _api(ctx, token, "GET", path, query=query)
                 rows = response.get("drafts" if is_draft else "messages", [])
                 if not isinstance(rows, list):
-                    return Reconciliation("uncertain", detail="Gmail returned invalid reconciliation candidates.")
+                    return self._outcome("uncertain", counter, "Gmail returned invalid reconciliation candidates.")
                 candidates.extend(rows)
                 page = response.get("nextPageToken")
                 if not page:
                     break
                 query["pageToken"] = page
             else:
-                return Reconciliation("uncertain", detail="The bounded reconciliation search has more pages.")
+                return self._outcome("uncertain", counter, "The bounded reconciliation search has more pages.")
             # Multiple IDs are ambiguous even if one has the expected body.
             ids = {r.get("id") for r in candidates if isinstance(r, dict) and isinstance(r.get("id"), str)}
             if len(ids) != 1:
-                return Reconciliation("uncertain", detail="Gmail search did not identify exactly one candidate; absence never proves failure.")
+                return self._outcome("uncertain", counter, "Gmail search did not identify exactly one candidate; absence never proves failure.")
             provider_id = _identifier(next(iter(ids)), "candidate ID")
             candidate = _api(ctx, token, "GET", path + "/" + quote(provider_id, safe=""), query={"format": "raw"},
                              maximum=_limit(ctx.config, "max_message_bytes", 8_000_000, 25_000_000) * 2)
             message = candidate.get("message", {}) if is_draft else candidate
             labels = message.get("labelIds", []) if isinstance(message, dict) else []
             if not isinstance(message, dict) or (not is_draft and (not isinstance(labels, list) or "SENT" not in labels)):
-                return Reconciliation("uncertain", detail="The candidate does not prove the requested provider operation.")
+                return self._outcome("uncertain", counter, "The candidate does not prove the requested provider operation.")
             raw = _decode(message.get("raw"), _limit(ctx.config, "max_message_bytes", 8_000_000, 25_000_000))
             if _fingerprint(raw) != state.get("content_fingerprint"):
-                return Reconciliation("uncertain", detail="The candidate does not match the recorded message contents and recipients.")
+                return self._outcome("uncertain", counter, "The candidate does not match the recorded message contents and recipients.")
             result = {"operation": state["operation"], "message_id": message.get("id"), "thread_id": message.get("threadId"),
                       "rfc_message_id": state["message_id"], "provider_accepted": True, "reconciled": True}
             if is_draft:
@@ -543,4 +612,4 @@ class GmailAdapter:
             ctx.save_state({"gmail": state})
             return Reconciliation("completed", ToolResult(result, counter.usage()), "Found one provider record matching the private intended message.")
         except Exception:
-            return Reconciliation("uncertain", detail="Gmail reconciliation could not establish the outcome; no mutation was retried.")
+            return self._outcome("uncertain", counter, "Gmail reconciliation could not establish the outcome; no mutation was retried.")
