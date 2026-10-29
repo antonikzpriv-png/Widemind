@@ -8,6 +8,7 @@ import tempfile
 import unittest
 
 from widemind.business.contracts import Outcome
+from widemind.business.engine import Deferred
 from widemind.business.host_server import PortalBusiness
 from widemind.business.host_services import LOCAL_SERVICES
 from widemind.business.policy import Policy
@@ -105,7 +106,8 @@ class FixtureTools:
                 callback()
             result = response if isinstance(response, Outcome) else Outcome('succeeded', {'json': response})
         elif request['action'] == 'gmail.send':
-            result = Outcome('succeeded', {'message_id': 'fixture-mail-'+aid, 'thread_id': 'fixture-thread', 'delivery_state': 'accepted'})
+            result = Outcome('succeeded', {'message_id': 'fixture-mail-'+aid,
+                'thread_id': request['arguments'].get('thread_id', 'fixture-thread'), 'delivery_state': 'accepted'})
         else:
             raise AssertionError('Unexpected provider action in a conversation fixture.')
         self.completed[aid] = result
@@ -343,7 +345,7 @@ class ConversationScenarios(unittest.TestCase):
         cid = self.send('Please make a graphic.', Outcome('unknown', reason='Synthetic lost provider response.'))
         self.assertEqual(len(self.model_calls()), 1)
         msg = self.store.one("SELECT id FROM conversation_messages WHERE conversation_id=? AND direction='inbound'", (cid,))
-        with self.assertRaises(Exception):
+        with self.assertRaises(Deferred):
             self.business._conversation_manager().process(msg['id'])
         self.assertEqual(len(self.model_calls()), 1)
         self.assertTrue(self.tools.reconciliations)
@@ -372,6 +374,81 @@ class ConversationScenarios(unittest.TestCase):
                          json.dumps(policy_before, sort_keys=True))
         self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM orders')['n'], 0)
         self.assertEqual(self.economy.money_mutations, [])
+
+    def test_supported_unicode_scope_keeps_later_context_bounded_without_losing_terms(self):
+        description = '植'*2000
+        cid = self.send('Please use this detailed supported scope.',
+            interpretation('request', 'svg-graphic', {'title': 'Garden', 'description': description}))
+        quoted = self.business.conversation_view(cid)['currentQuote']
+        self.assertEqual(quoted['scope']['description'], description)
+        self.send('What price did you quote?', interpretation('question'))
+        self.assertEqual(len(self.model_calls()), 2)
+        after = self.business.conversation_view(cid)['currentQuote']
+        self.assertEqual(after['quoteId'], quoted['quoteId'])
+        self.assertEqual(after['scope']['description'], description)
+        actual_prompt = json.loads(self.model_calls()[-1]['arguments']['prompt'])
+        context_size = len(json.dumps(actual_prompt['thread_context'], ensure_ascii=False,
+                                      separators=(',', ':')).encode())
+        self.assertLessEqual(context_size, 8000)
+
+    def test_full_capacity_is_explained_instead_of_reasking_complete_requirements(self):
+        self.business.configure(replace(self.policy, max_open_orders=1))
+        cid, proposal = self.quote()
+        self.accept(cid, proposal)
+        other = self.send('Please make an SVG titled Seed library with a green plant.',
+            interpretation('request', 'svg-graphic', {'title': 'Seed library', 'description': 'A green plant.'}),
+            thread='portal:capacity-wait')
+        view = self.business.conversation_view(other)
+        self.assertIsNone(view['currentQuote'])
+        self.assertIn('capacity', view['messages'][-1]['body'].lower())
+        self.assertNotIn('What title', view['messages'][-1]['body'])
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM orders')['n'], 1)
+
+    def test_verified_gmail_dialogue_uses_zero_cost_authorized_threaded_sends_and_portal_acceptance(self):
+        self.business.public_origin = 'https://widemind.example.invalid'
+        self.tools.responses.append(interpretation('request', 'svg-graphic',
+            {'title': 'Garden', 'description': 'A green plant.'}))
+        message = {'message_id': 'fixture-gmail-one', 'thread_id': 'fixture-mail-thread',
+            'from': CUSTOMER, 'body': 'Could you make an SVG for our garden?',
+            'rfc_message_id': '<fixture-one@example.invalid>', 'sender_verified': True}
+        self.business._gmail_message(message)
+        self.drain()
+        thread = self.store.one('SELECT id FROM customer_threads WHERE source=?', ('gmail',))
+        cid = thread['id']
+        view = self.business.conversation_view(cid)
+        self.assertIsNotNone(view['currentQuote'])
+        sends = [call for call in self.tools.calls if call['action'] == 'gmail.send']
+        self.assertEqual(len(sends), 1)
+        self.assertEqual(sends[0]['arguments']['to'], CUSTOMER)
+        self.assertEqual(sends[0]['arguments']['thread_id'], 'fixture-mail-thread')
+        self.assertEqual(sends[0]['arguments']['in_reply_to'], '<fixture-one@example.invalid>')
+        self.assertEqual(sends[0]['maximum_micro_usd'], 0)
+        self.assertIn('https://widemind.example.invalid/commerce#customer=', sends[0]['arguments']['body'])
+        self.assertEqual(view['messages'][-1]['status'], 'accepted')
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM host_notifications')['n'], 0)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM host_requests')['n'], 1)
+
+        quote = view['currentQuote']
+        self.tools.responses.append(interpretation('accept', quote_id=quote['quoteId'],
+            quote_version=quote['version'], acceptance_evidence='I accept this exact quote.'))
+        self.business._gmail_message({**message, 'message_id': 'fixture-gmail-two',
+            'rfc_message_id': '<fixture-two@example.invalid>',
+            'body': f"I accept quote {quote['quoteId']} version {quote['version']}."})
+        self.drain()
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM orders')['n'], 0)
+        self.assertEqual(self.business.conversation_view(cid)['status'], 'awaiting_acceptance')
+        before = len(self.tools.calls)
+        self.business._gmail_message(message)
+        self.drain()
+        self.assertEqual(len(self.tools.calls), before)
+
+    def test_unverified_gmail_sender_cannot_create_a_conversation_or_spend(self):
+        self.business._gmail_message({'message_id': 'fixture-unverified', 'thread_id': 'unverified-thread',
+            'from': CUSTOMER, 'body': 'Please quote a graphic.', 'sender_verified': False})
+        self.drain()
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM customer_threads')['n'], 0)
+        self.assertEqual(self.tools.calls, [])
+        self.assertEqual(self.economy.calls, [])
 
 
 if __name__ == '__main__':
