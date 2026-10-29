@@ -136,6 +136,22 @@ on a usable sandboxed runtime; no unsafe fallback was used. The implementation
 was checked against the official Playwright Python generated API:
 https://github.com/microsoft/playwright-python/blob/main/playwright/sync_api/_generated.py
 
+A further local probe on 2026-10-29 found that the executor has
+`NoNewPrivs: 1`, the installed setuid helper is owned by UID 65534 rather than
+root, and private user-namespace UID-map writes fail with a read-only filesystem
+error. Copying or chmodding that helper cannot establish a usable host sandbox.
+An existing local Docker image successfully created a user namespace and its
+private UID mapping when run as UID 1000 with the
+[official Playwright seccomp profile](https://github.com/microsoft/playwright/blob/main/utils/docker/seccomp_profile.json).
+That probe retained `--network=none`, dropped all capabilities, enabled
+`no-new-privileges`, used a read-only root filesystem, and bounded memory and
+process count. The profile enables namespace syscalls while retaining its
+default-deny action; no privileged mode, host networking or unconfined seccomp
+was used. There was no local Chromium-containing container image, so this is
+namespace feasibility evidence, not a verified container browser render. A
+dedicated browser runner with an installed Chromium runtime and these sandbox
+prerequisites remains an external deployment dependency.
+
 HTML/JSON/text/CSV extraction is supported by HTTP; browser main documents are
 HTML or plain text. PDF/binary extraction, logged-in browsing, uploads and
 search-provider credentials are not implemented. JavaScript-heavy sites may
