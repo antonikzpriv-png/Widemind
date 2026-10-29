@@ -73,7 +73,7 @@ Public activity uses a deliberately selected projection of events. Customer conv
 | [Economy](docs/ECONOMY.md) | Budget, reservations, payments, costs, and exhaustion |
 | [Roadmap](docs/ROADMAP.md) | Build sequence, acceptance criteria, and five-agent work allocation |
 
-See the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
+See [integrated implementation verification](docs/INTEGRATION_VERIFICATION.md) for current results and prerequisites, and the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
 
 ## Start building
 
