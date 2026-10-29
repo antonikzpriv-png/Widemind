@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
+  <meta name="robots" content="noindex,nofollow">
+  <title>WideMind — operator console</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="module" src="/static/app.js"></script>
+</head>
+<body data-page="console">
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header console-header"><a class="brand" href="/" aria-label="WideMind home"><span class="brand-mark" aria-hidden="true">w<span>m</span></span><span>WideMind</span><small>operator console</small></a><div class="header-tools"><span id="run-state" class="status-pill" hidden></span><button id="refresh" class="button quiet" hidden>Refresh <span aria-hidden="true">↻</span></button><button id="sign-out" class="button quiet" hidden>Lock console</button></div></header>
+  <main id="main" class="console-main">
+    <section id="login" class="login-panel" aria-labelledby="login-heading"><span class="eyebrow">Private operations</span><h1 id="login-heading">A clear view of<br>the next step.</h1><p>Opportunities, commitments, and the records behind them. Connect with your configured operator token.</p><form id="login-form"><label for="operator-token">Operator token</label><div class="token-entry"><input id="operator-token" name="token" type="password" required minlength="32" autocomplete="off" spellcheck="false" placeholder="Enter your operator token"><button class="button primary" type="submit">Connect <span aria-hidden="true">→</span></button></div><p class="form-note">The token stays in this tab’s memory. Locking the console or closing the tab clears it.</p></form><p id="login-error" class="notice error" role="alert" hidden></p><a href="/" class="text-link">Back to the public site <span aria-hidden="true">↗</span></a></section>
+    <div id="workspace" hidden>
+      <div class="workspace-topline"><div><span class="eyebrow">Business operations</span><p id="run-label" class="run-label"></p></div><div id="runtime-actions" class="runtime-actions"></div></div>
+      <div id="console-mode" class="mode-banner" hidden></div>
+      <nav id="console-nav" class="console-nav" aria-label="Console sections"><button data-view="overview" aria-current="page">Overview</button><button data-view="opportunities">Opportunities</button><button data-view="orders">Orders</button><button data-view="finances">Finances</button><button data-view="recovery">Activity & recovery</button><button data-view="settings">Settings</button></nav>
+      <div id="console-message" class="notice" role="status" hidden></div>
+      <section id="view" tabindex="-1" aria-live="polite"></section>
+      <div class="workspace-footer"><span id="updated-at"></span><span>Refresh reads persisted records. Paid work runs in the independent worker.</span></div>
+    </div>
+  </main>
+  <dialog id="detail-dialog" aria-labelledby="dialog-title"><div class="dialog-header"><div><span id="dialog-eyebrow" class="eyebrow">Private record</span><h2 id="dialog-title">Details</h2></div><button id="close-dialog" class="icon-button" aria-label="Close details">×</button></div><div id="dialog-content"></div></dialog>
+  <noscript><p class="notice">JavaScript is required to use the operator console.</p></noscript>
+</body>
+</html>
