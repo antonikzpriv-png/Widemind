@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
-from .config import load_config
+from .config import load_config, validate_accounting_authority
 from .control import ControlStore, JournalState, json_text
 from .secrets import SecretStore
 from .tools.contracts import Quote, ToolContext, ToolError, ToolResult, Unavailable, Uncertain, Usage
@@ -63,6 +63,7 @@ class Gateway:
         # API callers are trusted owners, just as the config file's owner is.
         # Task data is only accepted by execute(arguments), never here.
         self.config = json.loads(json_text(config))
+        validate_accounting_authority(self.config.get("policy", {}))
         self.store = ControlStore(config["control_dir"])
         self.secrets = SecretStore(config["control_dir"])
         from .workspace import DedicatedWorkspace

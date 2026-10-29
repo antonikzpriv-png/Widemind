@@ -10,6 +10,16 @@ from typing import Any
 from .tools.contracts import ToolError
 
 
+def validate_accounting_authority(policy):
+    """Never turn an invalid explicit accounting selection into a local wallet."""
+    if not isinstance(policy, dict):
+        raise ToolError("configuration", "Owner policy must be an object.")
+    if "accounting_authority" in policy:
+        authority = policy["accounting_authority"]
+        if type(authority) is not str or authority not in ("central", "standalone"):
+            raise ToolError("configuration", "accounting_authority must be exactly central or standalone.")
+
+
 def private_directory(path: Path) -> Path:
     path = path.absolute()
     # Reject existing symlink components, including the final component.
@@ -53,6 +63,7 @@ def load_config(filename: str | Path) -> dict[str, Any]:
         tools = config.setdefault("tools", {})
         if not isinstance(policy, dict) or not isinstance(tools, dict):
             raise ValueError()
+        validate_accounting_authority(policy)
         if policy.get("profile", "development") not in {"development", "sandbox", "production"}:
             raise ValueError()
         config["control_dir"], config["workspace_dir"] = str(control), str(workspace)
