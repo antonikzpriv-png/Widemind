@@ -24,11 +24,11 @@ Required groups:
 | Operator access | `WIDEMIND_OPERATOR_TOKEN`, at least 32 unpredictable characters |
 | Dedicated mailbox | `WIDEMIND_GMAIL_ADDRESS`, `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` |
 | Qualification recipients | `WIDEMIND_ALLOWED_RECIPIENTS`, a JSON list of addresses controlled by the operator; mandatory in provider-test |
-| Research | `OPENAI_API_KEY`, `OPENAI_MODEL`, explicit integer `OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS` and `OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS` |
-| Research limits | Optional `OPENAI_MAX_OUTPUT_TOKENS` (default 1800), `OPENAI_MAX_INPUT_BYTES` (default 24000), and `WIDEMIND_RESEARCH_SOURCE_URLS` as a JSON HTTPS URL list |
+| Research | `OPENAI_API_KEY`, `OPENAI_MODEL`, explicit integer `OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS`, `OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS`, and `OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS` |
+| Research limits | Optional `OPENAI_MAX_OUTPUT_TOKENS` (default 1800), `OPENAI_MAX_INPUT_BYTES` (default 24000), `WIDEMIND_RESEARCH_SOURCE_URLS` as a JSON HTTPS URL list, and `WIDEMIND_RESEARCH_ALLOWED_HOSTS` as exact operator-approved hostnames |
 | Stripe | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL` |
 
-Model prices are explicit configuration, not inferred earnings or guaranteed provider rates. Verify them against the actual configured provider/model. Bounded usage is enforced by the gateway; actual/provisional charges and unexpected liabilities remain economy records. A sandbox payment is not real revenue, even if its accompanying OpenAI usage is a real development/qualification expense.
+All three model prices are explicit configuration, not inferred earnings or guaranteed provider rates. The cached-input price may be zero but cannot exceed the ordinary input price; the host never guesses it from the selected model. Research hosts are exact names without wildcards, schemes, ports, or paths. If `WIDEMIND_RESEARCH_ALLOWED_HOSTS` is omitted, the allowed hosts are taken only from configured fallback source URLs; job-provided URLs cannot broaden that allowance. Verify them against the actual configured provider/model. Bounded usage is enforced by the gateway; actual/provisional charges and unexpected liabilities remain economy records. A sandbox payment is not real revenue, even if its accompanying OpenAI usage is a real development/qualification expense.
 
 Use `widemind.host.readiness()` for safe configuration diagnostics. It returns only configured/missing states and variable names. `configured_unverified` means configuration is present, not that OAuth scopes, credentials, balances, network access, or a remote account were validated. It performs no provider requests. Never print the environment to troubleshoot setup.
 

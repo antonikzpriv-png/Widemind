@@ -138,6 +138,7 @@ class HostTests(unittest.TestCase):
             "STRIPE_SUCCESS_URL": "https://example.invalid/success", "STRIPE_CANCEL_URL": "https://example.invalid/cancel",
             "OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS": "400000",
             "OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS": "1600000",
+            "OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS": "100000",
             "WIDEMIND_RESEARCH_SOURCE_URLS": '["https://example.invalid/source"]',
             "WIDEMIND_ALLOWED_RECIPIENTS": '["controlled@example.invalid"]',
         }
@@ -186,6 +187,25 @@ class HostTests(unittest.TestCase):
         with self.assertRaises(ConfigurationError):
             load_config({**test_env, "WIDEMIND_MODE": "demo"})
 
+    def test_cached_price_is_explicit_bounded_and_may_be_zero(self):
+        missing = dict(self.env)
+        missing.pop("OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS")
+        with self.assertRaises(ConfigurationError):
+            load_config(missing)
+        for invalid in ("-1", "0.1", "400001"):
+            with self.subTest(price=invalid), self.assertRaises(ConfigurationError):
+                load_config({**self.env, "OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS": invalid})
+        self.assertEqual(load_config({**self.env, "OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS": "0"}).cached_input_price_micro_usd_per_million, 0)
+
+    def test_research_hosts_are_exact_and_fall_back_only_to_configured_sources(self):
+        self.assertEqual(load_config(self.env).allowed_source_hosts, ("example.invalid",))
+        self.assertEqual(load_config({**self.env, "WIDEMIND_RESEARCH_ALLOWED_HOSTS": '["Docs.Python.org","www.sqlite.org"]'}).allowed_source_hosts,
+                         ("docs.python.org", "www.sqlite.org"))
+        self.assertEqual(load_config({**self.env, "WIDEMIND_RESEARCH_ALLOWED_HOSTS": "[]"}).allowed_source_hosts, ())
+        for invalid in ('["*.example.com"]', '["https://example.com"]', '["example.com:443"]', '["example.com/path"]'):
+            with self.subTest(hosts=invalid), self.assertRaises(ConfigurationError):
+                load_config({**self.env, "WIDEMIND_RESEARCH_ALLOWED_HOSTS": invalid})
+
     def test_providers_unavailable_never_fall_back_to_fixtures(self):
         with patch("widemind.host.importlib.import_module", side_effect=ImportError("unavailable")):
             with self.assertRaises(ConfigurationError):
@@ -194,6 +214,7 @@ class HostTests(unittest.TestCase):
     def test_explicit_setup_is_paused_and_factory_never_funds_or_resumes(self):
         resources = []
         creates = []
+        research_configs = []
         class Economy:
             def __init__(self, path, **kwargs):
                 self.path = path
@@ -212,8 +233,11 @@ class HostTests(unittest.TestCase):
             def close(self):
                 self.closed = True
         economy_module = SimpleNamespace(EconomyService=Economy, StripeClient=Provider)
+        def research_config(**kwargs):
+            research_configs.append(kwargs)
+            return SimpleNamespace(**kwargs)
         tools_module = SimpleNamespace(GmailConfig=lambda **kwargs: SimpleNamespace(**kwargs), GmailClient=Provider,
-            ResearchConfig=lambda **kwargs: SimpleNamespace(**kwargs), OpenAIResearch=Provider, LiveTools=Provider)
+            ResearchConfig=research_config, OpenAIResearch=Provider, LiveTools=Provider)
         modules = {"widemind.economy": economy_module, "widemind.tools": tools_module}
         with patch.dict("sys.modules", modules):
             result = initialize_live(environ=self.env, evidence_reference="owner authorizes opening credit")
@@ -224,6 +248,10 @@ class HostTests(unittest.TestCase):
             self.assertEqual(business.mode, "live")
             self.assertEqual(business.runtime.state("live-run"), "paused")
             self.assertEqual(len(creates), 1)  # Per-request construction funds nothing.
+            self.assertEqual(research_configs[-1]["input_micro_usd_per_million_tokens"], 400000)
+            self.assertEqual(research_configs[-1]["output_micro_usd_per_million_tokens"], 1600000)
+            self.assertEqual(research_configs[-1]["cached_input_micro_usd_per_million_tokens"], 100000)
+            self.assertEqual(research_configs[-1]["allowed_source_hosts"], ("example.invalid",))
             business.store.close()
             self.assertTrue(all(getattr(resource, "closed", False) for resource in resources if not isinstance(resource, RuntimeControl)))
 

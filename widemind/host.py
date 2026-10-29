@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+from urllib.parse import urlsplit
 
 from .business.engine import Business
 from .business.store import Store
@@ -33,9 +34,11 @@ class HostConfig:
     model: str
     input_price_micro_usd_per_million: int
     output_price_micro_usd_per_million: int
+    cached_input_price_micro_usd_per_million: int
     max_output_tokens: int
     max_input_bytes: int
     source_urls: tuple[str, ...]
+    allowed_source_hosts: tuple[str, ...]
     allowed_recipients: tuple[str, ...] | None
     success_url: str
     cancel_url: str
@@ -47,6 +50,7 @@ REQUIRED_NAMES = (
     "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN", "OPENAI_API_KEY",
     "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_SUCCESS_URL", "STRIPE_CANCEL_URL",
     "OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS", "OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS",
+    "OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS",
 )
 
 
@@ -133,20 +137,29 @@ def load_config(environ=None):
     try:
         success = web_url(values["STRIPE_SUCCESS_URL"])
         cancel = web_url(values["STRIPE_CANCEL_URL"])
-        sources = tuple(web_url(url) for url in _list(values, "WIDEMIND_RESEARCH_SOURCE_URLS", maximum=30))
+        sources = tuple(web_url(url) for url in _list(values, "WIDEMIND_RESEARCH_SOURCE_URLS", maximum=10))
     except ValueError:
         raise ConfigurationError("Configure valid HTTPS source and Stripe redirect URLs") from None
+    if "WIDEMIND_RESEARCH_ALLOWED_HOSTS" in values:
+        raw_hosts = _list(values, "WIDEMIND_RESEARCH_ALLOWED_HOSTS", maximum=100)
+    else:
+        raw_hosts = tuple(urlsplit(url).hostname for url in sources)
+    allowed_hosts = tuple(sorted(set(host.lower() for host in raw_hosts)))
+    hostname_pattern = r"(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*"
+    if any(not re.fullmatch(hostname_pattern, host) for host in allowed_hosts):
+        raise ConfigurationError("WIDEMIND_RESEARCH_ALLOWED_HOSTS must contain exact hostnames, without schemes, ports, paths, or wildcards")
+    input_price = _integer(values, "OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS")
+    cached_price = _integer(values, "OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS", minimum=0, maximum=input_price)
     recipients = _list(values, "WIDEMIND_ALLOWED_RECIPIENTS", default="[]")
     if mode == "test" and not recipients:
         raise ConfigurationError("Provider-test mode requires explicit WIDEMIND_ALLOWED_RECIPIENTS")
     if any(not re.fullmatch(r"[^\s<>@,;\x00-\x1f\x7f]+@[^\s<>@,;\x00-\x1f\x7f]+\.[^\s<>@,;\x00-\x1f\x7f]+", email) for email in recipients):
         raise ConfigurationError("WIDEMIND_ALLOWED_RECIPIENTS contains an invalid address")
     return HostConfig(run_id, mode, business, runtime, economy, tools, workspace, credential, gmail_address,
-        model, _integer(values, "OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS"),
-        _integer(values, "OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS"),
-        _integer(values, "OPENAI_MAX_OUTPUT_TOKENS", "1800", maximum=20000),
-        _integer(values, "OPENAI_MAX_INPUT_BYTES", "24000", minimum=1000, maximum=500000),
-        sources, recipients or None, success, cancel)
+        model, input_price, _integer(values, "OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS"), cached_price,
+        _integer(values, "OPENAI_MAX_OUTPUT_TOKENS", "1800", minimum=100, maximum=10000),
+        _integer(values, "OPENAI_MAX_INPUT_BYTES", "24000", minimum=1000, maximum=100000),
+        sources, allowed_hosts, recipients or None, success, cancel)
 
 
 def readiness(environ=None):
@@ -157,7 +170,7 @@ def readiness(environ=None):
         ("economy", ("WIDEMIND_ECONOMY_DB",)),
         ("stripe", ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_SUCCESS_URL", "STRIPE_CANCEL_URL")),
         ("gmail", ("WIDEMIND_GMAIL_ADDRESS", "GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN")),
-        ("research", ("OPENAI_API_KEY", "OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS", "OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS")),
+        ("research", ("OPENAI_API_KEY", "OPENAI_INPUT_MICRO_USD_PER_MILLION_TOKENS", "OPENAI_OUTPUT_MICRO_USD_PER_MILLION_TOKENS", "OPENAI_CACHED_INPUT_MICRO_USD_PER_MILLION_TOKENS")),
         ("operator_api", ("WIDEMIND_OPERATOR_TOKEN", "WIDEMIND_BUSINESS_DB", "WIDEMIND_TOOLS_DB")),
     )
     results = []
@@ -221,8 +234,9 @@ def _providers(config, values, resources):
     research = tools_module.OpenAIResearch(tools_module.ResearchConfig(api_key=values["OPENAI_API_KEY"], model=config.model,
         input_micro_usd_per_million_tokens=config.input_price_micro_usd_per_million,
         output_micro_usd_per_million_tokens=config.output_price_micro_usd_per_million,
+        cached_input_micro_usd_per_million_tokens=config.cached_input_price_micro_usd_per_million,
         max_output_tokens=config.max_output_tokens, max_input_bytes=config.max_input_bytes,
-        source_urls=config.source_urls))
+        source_urls=config.source_urls, allowed_source_hosts=config.allowed_source_hosts))
     resources.append(research)
     gateway = tools_module.LiveTools(config.tools_db, economy=economy, runtime=runtime, gmail=gmail,
         research=research, mode=config.mode, enabled_actions=DEFAULT_CAPABILITIES, allowed_recipients=config.allowed_recipients)
