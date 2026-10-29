@@ -21,6 +21,7 @@
     "format:check": "prettier --check src test scripts *.json",
     "smoke": "node scripts/smoke.mjs",
     "browser:smoke": "node scripts/browser-smoke.mjs",
+    "network:browser": "npm run build && node scripts/network-browser-smoke.mjs",
     "status": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/status-main.ts",
     "services:configure": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs configure",
     "services:setup": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs setup",

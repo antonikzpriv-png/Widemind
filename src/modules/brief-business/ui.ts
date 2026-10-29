@@ -1,7 +1,7 @@
 /** Trusted SSR business pages. Task/customer/provider data is always escaped. */
 import { randomUUID } from "node:crypto";
 import type { PublicWebsiteData } from "../../contracts/index.ts";
-import { displayUsd, escape, layout } from "../../web/pages.ts";
+import { displayUsd, escape, homeLayout, layout } from "../../web/pages.ts";
 
 const consolePath = "/operator/modules/brief-business/console";
 const commandPath = "/api/modules/brief-business/command";
@@ -308,8 +308,8 @@ export async function renderBusinessPublic(
   const contact = safeContact
     ? `<a class="button" href="mailto:${escape(encodeURIComponent(safeContact))}?subject=WideMind%20project%20request">Discuss a project →</a>`
     : '<span class="pill">Customer contact not connected</span>';
-  return layout(
-    "Headquarters",
+  return homeLayout(
+    data,
     `<div class="hero"><p class="eyebrow">AN OPEN-ENDED BUSINESS EXPERIMENT</p><h1>One mind.<br>Useful work.</h1><p class="lead">WideMind finds opportunities, agrees a clear scope, and builds useful work. Its starting operating-credit goal is $5; verified accounting and fulfilled commitments tell the rest of the story.</p><div class="hero-actions">${contact}<a class="button secondary" href="/operator">Operator workspace</a></div></div><div class="stats">${stat("Spendable", data.financial ? amount(data.financial.spendableMicros) : "Unavailable", "Verified economy, after holds")}${stat("Customer receipts", data.financial ? amount(data.financial.customerReceiptsMicros) : "Unavailable", "Cash received, distinct from earnings")}${stat("Earned revenue", data.financial ? amount(data.financial.earnedRevenueMicros) : "Unavailable", "Recognized against delivered work")}${stat("Accounting mode", data.financial?.mode ?? "Unverified", data.financial ? `Observed ${data.financial.asOf}` : "No opening grant or payment assumed")}</div><section><div class="section-heading"><h2>What WideMind can take on</h2><span class="muted">Scoped around configured capabilities</span></div>${data.offerings.length ? data.offerings.map((item) => `<article><h3>${escape(item.title)}</h3><p class="muted">${escape(item.description)}</p></article>`).join("") : empty("No live offerings are available until the required tools and delivery/payment capabilities are configured.")}<p class="muted">Research, writing, graphics, and software are possible directions. A service is offered only when its configured capabilities can support the agreed scope.</p></section><div class="business-grid"><section><h2>Work with a clear commitment</h2><p class="muted">Start with a real request. WideMind assesses feasibility and cost, proposes an offer, verifies payment, obtains spending authorization, and checks its deliverable before private delivery.</p>${contact}<p class="muted">Contact opens your email client. Nothing is sent without your own explicit send action.</p></section><section><h2>Selected public activity</h2>${data.activity.length ? data.activity.map((item) => `<div class="row"><div class="row-main"><p>${escape(item.text)}</p><small>${escape(item.at)}</small></div></div>`).join("") : empty("No curated public activity yet. Customer conversations and private work stay private.")}</section></div>`,
   );
 }

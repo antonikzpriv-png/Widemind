@@ -225,7 +225,10 @@ test("public website uses only curated content, provides optional user-sent mail
   assert.match(html, /One mind/);
   assert.match(html, /mailto:widemind%40example.invalid/);
   assert.match(html, /Nothing is sent without your own explicit send action/);
-  assert.doesNotMatch(html, /private-customer|private-artifact-marker|<script/);
+  assert.doesNotMatch(html, /private-customer|private-artifact-marker/);
+  assert.deepEqual(html.match(/<script\b[^>]*>/g), [
+    '<script src="/thinking-network.js" defer>',
+  ]);
   const unavailable = await renderBusinessPublic(
     data,
     "bad\r\nBcc:someone@example.invalid",

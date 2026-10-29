@@ -10,6 +10,8 @@ import { Store, EventConflict } from "../runtime/store.ts";
 import { Sessions } from "../auth/sessions.ts";
 import { validPasswordHash, verifyPassword } from "../auth/password.ts";
 import { privateProjection, publicProjection } from "./projections.ts";
+import { agentGraphProjection } from "./agent-graph.ts";
+import { thinkingScript } from "./thinking-network.ts";
 import {
   css,
   loginPage,
@@ -106,6 +108,14 @@ export function webServer(context: {
         }
         if (method === "GET" && path === "/style.css") {
           send(200, css, "text/css");
+          return;
+        }
+        if (method === "GET" && path === "/thinking-network.js") {
+          send(200, thinkingScript, "text/javascript");
+          return;
+        }
+        if (method === "GET" && path === "/api/public/graph") {
+          send(200, agentGraphProjection(store, config.publicRunId));
           return;
         }
         if (method === "GET" && path === "/healthz") {

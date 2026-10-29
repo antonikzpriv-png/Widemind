@@ -241,12 +241,45 @@ export interface PublicRun {
 }
 export interface PublicWebsiteData {
   version: 1;
+  /** Additive, redacted runtime visualization; absent on older saved projections. */
+  agentGraph?: PublicAgentGraph;
   financialRunId?: ID | null;
   runs: PublicRun[];
   financial: FinancialSummary | null;
   offerings: Array<{ id: string; title: string; description: string }>;
   activity: Array<{ id: string; at: string; text: string }>;
   availability: Availability;
+}
+export interface PublicAgentGraph {
+  version: 1;
+  runId: ID | null;
+  state: RunState | null;
+  profile: "foundation" | "demo" | null;
+  workerConnected: boolean;
+  observedAt: string;
+  totalActions: number;
+  /** Bounded recent window, oldest first. Never contains tool inputs/results. */
+  nodes: Array<{
+    id: string;
+    kind:
+      | "thinking"
+      | "research"
+      | "communication"
+      | "delivery"
+      | "handoff"
+      | "task";
+    state: ActionState;
+    at: string;
+    cost: {
+      micros: Micros | null;
+      status:
+        | "settled"
+        | "provisional"
+        | "recorded"
+        | "pending"
+        | "unavailable";
+    };
+  }>;
 }
 export interface Website {
   health(): Availability;

@@ -37,6 +37,8 @@ Missing finance remains **Unavailable**, rather than an invented $5 balance or z
 
 The public renderer receives only the curated public projection. It does not serialize private customer records, inbox messages, artifacts, provider configuration, or operational logs. If the dedicated contact address is configured, **Discuss a project** opens the visitor's email client; the visitor must explicitly send the message. The website does not send arbitrary mail on a public form submission.
 
+The public home page now shares the [activity constellation](THINKING_NETWORK.md) with the default headquarters. Its same-origin script visualizes redacted runtime activity and costs. The private brief-business console remains server-rendered without application scripts.
+
 ## Verification
 
 ```sh

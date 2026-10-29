@@ -6,6 +6,7 @@ import type {
   PublicWebsiteData,
 } from "../contracts/index.ts";
 import { Store, publicRun } from "../runtime/store.ts";
+import { agentGraphProjection } from "./agent-graph.ts";
 const optionalCashFields = [
   "processorFeesMicros",
   "refundsMicros",
@@ -213,6 +214,7 @@ export async function publicProjection(
       : {};
   return {
     version: 1,
+    agentGraph: agentGraphProjection(store, publicRunId),
     financialRunId: latest?.id ?? null,
     runs: runs.map(publicRun),
     financial: financialProjection(

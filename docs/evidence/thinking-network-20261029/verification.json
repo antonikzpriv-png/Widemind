@@ -1,0 +1,148 @@
+{
+  "result": "passed",
+  "synthetic": true,
+  "providerCalls": 0,
+  "checks": [
+    "empty state",
+    "new action adds exactly one line and dot",
+    "exact sub-cent labels",
+    "provisional and pending costs",
+    "receipt update without duplicate node",
+    "stable reload identities",
+    "pause state",
+    "keyboard inspection",
+    "motion controls",
+    "reduced motion",
+    "desktop/390/320 layouts",
+    "connection failure/recovery",
+    "public/private separation",
+    "headquarters navigation"
+  ],
+  "screenshots": [
+    "empty-desktop.png",
+    "constellation-desktop.png",
+    "constellation-phone.png",
+    "constellation-narrow.png"
+  ],
+  "pageErrors": [],
+  "base": "e70220f1f7b38771cf619fba1d1241298763b922",
+  "applicationCheck": {
+    "command": "npm run check",
+    "pythonTestEnvironment": "root central Python environment with existing test dependencies",
+    "passed": 235,
+    "failed": 0,
+    "skipped": 1,
+    "format": "passed",
+    "typecheck": "passed",
+    "build": "passed"
+  },
+  "additionalEconomyIntegration": {
+    "command": "node --test test/economy-integration.test.ts",
+    "pythonTestEnvironment": "isolated service economy environment",
+    "passed": 3,
+    "failed": 0,
+    "skipped": 0,
+    "note": "Includes the one optional HTTP integration skipped by the full check; 236 unique Node tests verified overall."
+  },
+  "foundationBrowser": {
+    "passed": true,
+    "profile": "demo",
+    "desktopAndPhone": true,
+    "realFormLoginCreateResumePause": true,
+    "operatorEventForm": true,
+    "workerHealth": true,
+    "pageErrors": []
+  },
+  "businessBrowser": {
+    "passed": true,
+    "profile": "foundation",
+    "syntheticIntakeFixture": true,
+    "providerCalls": false,
+    "livePayments": false,
+    "uiViews": [
+      {
+        "view": "overview",
+        "width": 1280
+      },
+      {
+        "view": "opportunities",
+        "width": 1280
+      },
+      {
+        "view": "orders",
+        "width": 1280
+      },
+      {
+        "view": "finances",
+        "width": 1280
+      },
+      {
+        "view": "recovery",
+        "width": 1280
+      },
+      {
+        "view": "settings",
+        "width": 1280
+      },
+      {
+        "view": "overview",
+        "width": 390
+      },
+      {
+        "view": "opportunities",
+        "width": 390
+      },
+      {
+        "view": "orders",
+        "width": 390
+      },
+      {
+        "view": "finances",
+        "width": 390
+      },
+      {
+        "view": "recovery",
+        "width": 390
+      },
+      {
+        "view": "settings",
+        "width": 390
+      },
+      {
+        "view": "overview",
+        "width": 320
+      },
+      {
+        "view": "opportunities",
+        "width": 320
+      },
+      {
+        "view": "orders",
+        "width": 320
+      },
+      {
+        "view": "finances",
+        "width": 320
+      },
+      {
+        "view": "recovery",
+        "width": 320
+      },
+      {
+        "view": "settings",
+        "width": 320
+      }
+    ],
+    "realFormLoginCreateIntakeResume": true,
+    "workerIndependent": true,
+    "briefPagesScriptless": true,
+    "sharedCspSupportsPortal": true,
+    "publicPrivacy": true,
+    "pageErrors": []
+  },
+  "limitations": [
+    "Synthetic visual fixture data only; no live provider calls, funding or customer work.",
+    "Latest 48 runtime actions are displayed; all older records remain in storage.",
+    "Nested business service costs are not attributed to zero-cost orchestration handoffs."
+  ]
+}

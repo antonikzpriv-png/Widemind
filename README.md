@@ -12,6 +12,8 @@ The [combined-main qualification](docs/MERGE_VALIDATION_20261029.md) records the
 
 The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
+The [home-page constellation](docs/THINKING_NETWORK.md) visualizes recorded agent actions as glowing white dots and connections on black, with exact per-action costs, live updates, and an accessible cost list.
+
 Economy, business, customer commerce and dedicated-account tool adapters are implemented as authenticated services. **PayPal Business** is the selected new checkout provider. Existing Stripe support is retained explicitly; it is not selected silently. Live accounts, credentials, funding, HTTPS and a real customer pilot are still required before claiming autonomous earnings.
 
 Start with [integrated setup](docs/INTEGRATED_SETUP.md) for all services, the private customer portal and payment workflow. The explicit zero-cost `demo` profile remains available for foundation-only checks.

@@ -161,9 +161,19 @@ export async function browserSession(directory, output) {
           mobile,
         });
       },
-      async screenshot(name) {
+      async reducedMotion(reduce) {
+        await send("Emulation.setEmulatedMedia", {
+          features: [
+            {
+              name: "prefers-reduced-motion",
+              value: reduce ? "reduce" : "no-preference",
+            },
+          ],
+        });
+      },
+      async screenshot(name, fullPage = true) {
         const { data } = await send("Page.captureScreenshot", {
-          captureBeyondViewport: true,
+          captureBeyondViewport: fullPage,
         });
         await writeFile(
           join(output, name + ".png"),

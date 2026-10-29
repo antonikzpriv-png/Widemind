@@ -168,7 +168,7 @@ try {
   await navigate(origin + "/");
   assert.equal(
     await evaluate(
-      "document.querySelector('h1').innerText.includes('One mind')",
+      "document.querySelector('#thinking-title').innerText.includes('A mind in motion') && document.querySelector('#headquarters-details').innerText.includes('One mind')",
     ),
     true,
   );
