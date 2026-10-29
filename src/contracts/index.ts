@@ -133,6 +133,8 @@ export interface ToolAction {
   opportunityId?: ID;
 }
 export interface Tools {
+  /** Free capability observation; never a paid planning path. */
+  refresh?(): Promise<void>;
   health(): Availability;
   capabilities(): ReadonlyArray<{ id: string; availability: Availability }>;
   /** Must enforce authorization/maximums, provider idempotency and AbortSignal. */
@@ -258,6 +260,7 @@ export interface ModuleRoute {
   access: "public" | "operator";
   handle(request: {
     body: Json;
+    remoteAddress?: string;
     /** Exact bytes for signature verification on public ingress routes only. */
     rawBody?: Uint8Array;
     query: Record<string, string>;

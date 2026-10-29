@@ -196,6 +196,10 @@ export class AgentRuntime {
         );
         return true;
       }
+      if (this.services.tools.refresh)
+        await this.dependency("tools.capabilities", () =>
+          this.services.tools.refresh!(),
+        );
       const financial = await this.dependency("economy.summary", () =>
         this.services.economy.summary(run.id),
       );
