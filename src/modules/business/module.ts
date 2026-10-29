@@ -8,6 +8,11 @@ import type {
 } from "../../contracts/index.ts";
 import { Store } from "../../runtime/store.ts";
 import { createBusinessClient, BusinessApiError } from "./client.ts";
+import {
+  discoveryCommandPath,
+  discoveryPagePath,
+  renderDiscoveryPage,
+} from "./discovery-ui.ts";
 interface Work {
   eventId: string | null;
   attempt: number;
@@ -34,6 +39,12 @@ const identifier = (value: unknown) => {
   )
     throw new Error("Invalid identifier");
   return value;
+};
+const historyOffset = (value: string | undefined) => {
+  if (value === undefined) return 0;
+  if (!/^(0|[1-9][0-9]{0,8})$/.test(value))
+    throw new Error("Invalid discovery history offset");
+  return Number(value);
 };
 const token = (value: unknown) => {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{32,256}$/.test(value))
@@ -194,6 +205,11 @@ export const definition: ModuleDefinition = {
         remoteAddress?: string;
       }) => {
         try {
+          if (access === "operator" && !input.operator)
+            return {
+              status: 403,
+              body: { error: "Operator access required" },
+            };
           if (
             access === "public" &&
             method === "POST" &&
@@ -222,7 +238,99 @@ export const definition: ModuleDefinition = {
         }
       },
     });
+    const discoveryCommand = async (body: Record<string, Json>) => {
+      const runId = run(body.runId);
+      const command = body.command;
+      let result: Json;
+      if (command === "configure") {
+        const document =
+          typeof body.configJson === "string"
+            ? record(JSON.parse(body.configJson))
+            : record(body.config ?? null);
+        result = await client.request("/v1/discovery-configure", {
+          runId,
+          config: document,
+        });
+      } else if (command === "start") {
+        const spec =
+          typeof body.specJson === "string"
+            ? record(JSON.parse(body.specJson))
+            : record(body.spec ?? null);
+        result = await client.request("/v1/experiment-start", {
+          runId,
+          opportunityId: identifier(body.opportunityId),
+          requestId: identifier(body.requestId),
+          spec,
+        });
+      } else if (command === "stop") {
+        if (
+          typeof body.reason !== "string" ||
+          !body.reason.trim() ||
+          body.reason.length > 1000
+        )
+          throw new Error("Stop reason required");
+        result = await client.request("/v1/experiment-stop", {
+          runId,
+          experimentId: identifier(body.experimentId),
+          reason: body.reason,
+        });
+      } else if (command === "wake") {
+        result = await client.request("/v1/discovery-wake", {
+          runId,
+          marketId: identifier(body.marketId),
+          requestId: identifier(body.requestId),
+        });
+      } else if (command === "link-order") {
+        if (
+          typeof body.evidenceReference !== "string" ||
+          !body.evidenceReference.trim() ||
+          body.evidenceReference.length > 1000
+        )
+          throw new Error("Order attribution evidence required");
+        result = await client.request("/v1/experiment-link-order", {
+          runId,
+          experimentId: identifier(body.experimentId),
+          orderId: identifier(body.orderId),
+          evidenceReference: body.evidenceReference,
+        });
+      } else if (command === "reconcile") {
+        result = await client.request("/v1/recovery", {
+          runId,
+          actionId: identifier(body.actionId),
+          mode: "reconcile",
+          evidenceReference: `operator-discovery:${identifier(body.requestId)}`,
+        });
+      } else throw new Error("Unknown discovery command");
+      wake(runId);
+      return result;
+    };
     return {
+      operatorPages: [
+        {
+          path: discoveryPagePath,
+          render: async ({ query, csrf }) => {
+            const selected =
+              query.runId ??
+              client.runId ??
+              store.runs().find((item) => item.profile === "foundation")?.id ??
+              "";
+            const data = selected
+              ? await client.request("/v1/discovery-status", {
+                  runId: run(selected),
+                  offset: historyOffset(query.offset),
+                })
+              : {};
+            const artifact =
+              selected && query.experimentId
+                ? await client.request("/v1/experiment-artifact", {
+                    runId: run(selected),
+                    experimentId: identifier(query.experimentId),
+                  })
+                : undefined;
+            return renderDiscoveryPage(data, csrf, selected, artifact);
+          },
+        },
+      ],
       website: {
         health: () => ({ available: true }),
         publicContent: async () => {
@@ -279,6 +387,38 @@ export const definition: ModuleDefinition = {
         },
       },
       routes: [
+        route("discovery-status", "operator", "GET", async (_body, query) =>
+          client.request("/v1/discovery-status", {
+            runId: run(query.runId),
+            offset: historyOffset(query.offset),
+          }),
+        ),
+        route("experiment-artifact", "operator", "GET", async (_body, query) =>
+          client.request("/v1/experiment-artifact", {
+            runId: run(query.runId),
+            experimentId: identifier(query.experimentId),
+          }),
+        ),
+        ...(
+          [
+            ["discovery-configure", "configure"],
+            ["experiment-start", "start"],
+            ["experiment-stop", "stop"],
+            ["discovery-wake", "wake"],
+            ["experiment-link-order", "link-order"],
+          ] as const
+        ).map(([name, command]) =>
+          route(name, "operator", "POST", async (body) =>
+            discoveryCommand({ ...body, command }),
+          ),
+        ),
+        {
+          ...route("discovery-command", "operator", "POST", async (body) =>
+            discoveryCommand(body),
+          ),
+          path: discoveryCommandPath,
+          operatorRedirect: discoveryPagePath,
+        },
         route("offerings", "public", "GET", async () =>
           client.runId
             ? client.request("/v1/offerings", {

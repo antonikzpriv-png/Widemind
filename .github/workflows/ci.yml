@@ -52,3 +52,6 @@ jobs:
       - run: npm run integration:browser
         env:
           WIDEMIND_CHROMIUM: /usr/bin/google-chrome
+      - run: npm run discovery:demo -- --fixtures --browser
+        env:
+          WIDEMIND_CHROMIUM: /usr/bin/google-chrome

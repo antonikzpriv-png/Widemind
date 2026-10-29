@@ -1,0 +1,208 @@
+{
+  "passed": true,
+  "mode": "explicit local fixtures",
+  "realOpportunityVerified": false,
+  "realCustomerPaymentOrProfit": false,
+  "actualServices": [
+    "economy",
+    "tools",
+    "business"
+  ],
+  "independentPersistentWorker": true,
+  "workerRestarts": 2,
+  "authorizedResearchRequests": 1,
+  "sourceEvidence": "Exact source URL, full-body SHA256 and gateway retrieval timestamp verified",
+  "discoveredOpportunities": 1,
+  "inventedCustomers": 0,
+  "inventedOrders": 0,
+  "actualPrototype": "SVG file through the authorized existing tools gateway",
+  "prototypeEffects": 1,
+  "idempotentExperimentStart": true,
+  "deadlineStopsWithoutRepeatedSpending": true,
+  "lifetimeAllowanceStopsResearch": true,
+  "publicPrivacy": true,
+  "browserViewports": [
+    1280,
+    390,
+    320
+  ],
+  "browserErrors": [],
+  "infrastructureCosts": "Owner-subsidized local compute/network/storage; not profit",
+  "balance": {
+    "run_id": "2b7f8449-1979-47f1-a0b2-ac5072a9f5fc",
+    "mode": "test",
+    "posted_micro_usd": 5000000,
+    "reserved_micro_usd": 0,
+    "held_micro_usd": 0,
+    "available_micro_usd": 5000000,
+    "exhausted": false,
+    "totals": {
+      "opening_grant": 5000000,
+      "operating_charge": 0
+    },
+    "metrics": {
+      "earned_revenue_micro_usd": 0,
+      "infrastructure_subsidy_micro_usd": 0
+    }
+  },
+  "charges": [
+    {
+      "provider": "research.fetch",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "1d4e3432b3cbb90b6dd4c7fba045ab9e14eacfb5",
+      "reservation_id": "18e8c6d0-12f2-44cb-ab75-aa2d2ced3569",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "tools-journal:1d4e3432b3cbb90b6dd4c7fba045ab9e14eacfb5"
+      },
+      "outcome": "succeeded",
+      "final": true
+    },
+    {
+      "provider": "business.step",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "64e10f72-dba7-4310-b79c-4bf403c1f2eb",
+      "reservation_id": "d79f3810-6a4f-415e-96a1-2ed93add800d",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "business-bridge:64e10f72-dba7-4310-b79c-4bf403c1f2eb"
+      },
+      "outcome": "succeeded",
+      "final": true
+    },
+    {
+      "provider": "business.step",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "c7919d83-f600-423f-aa91-af85fdc6482c",
+      "reservation_id": "c3d80195-104f-4ce9-8e11-010976378062",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "business-bridge:c7919d83-f600-423f-aa91-af85fdc6482c"
+      },
+      "outcome": "succeeded",
+      "final": true
+    },
+    {
+      "provider": "graphics.create",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "3b203dafe9052bcbbbefc869f6e4a4fcb3623fac",
+      "reservation_id": "90162af4-ff6c-4e05-8eec-cf3bbb63f506",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "tools-journal:3b203dafe9052bcbbbefc869f6e4a4fcb3623fac"
+      },
+      "outcome": "succeeded",
+      "final": true
+    },
+    {
+      "provider": "business.step",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "328c63ed-86fd-4383-ae75-2310b41dc764",
+      "reservation_id": "649d161e-3a82-4f7b-b93a-fb4cf283aff1",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "business-bridge:328c63ed-86fd-4383-ae75-2310b41dc764"
+      },
+      "outcome": "succeeded",
+      "final": true
+    },
+    {
+      "provider": "business.step",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "9d0454f7-2b66-4c1b-8627-6138159c7b74",
+      "reservation_id": "192f8784-67be-4ccd-bafe-edb06d61dc58",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "business-bridge:9d0454f7-2b66-4c1b-8627-6138159c7b74"
+      },
+      "outcome": "succeeded",
+      "final": true
+    },
+    {
+      "provider": "business.step",
+      "account": "dedicated-tools",
+      "mode": "test",
+      "external_charge_id": "09bdcd1e-ee6a-46a2-b9c9-cd8e07e1826e",
+      "reservation_id": "1938a94e-1061-4ffe-86d5-6ca1c6293a69",
+      "amount_micro_usd": 0,
+      "usage": {
+        "billable_failure": 0,
+        "evidence_ref": "business-bridge:09bdcd1e-ee6a-46a2-b9c9-cd8e07e1826e"
+      },
+      "outcome": "succeeded",
+      "final": true
+    }
+  ],
+  "experiments": [
+    {
+      "allowance_micro_usd": 100000,
+      "artifact": {
+        "checks": {
+          "height": 600,
+          "title_present": true,
+          "valid_svg": true,
+          "width": 800
+        },
+        "content_bytes": 577,
+        "content_sha256": "115b7fdaaa22c576f9b82d9f98ea95fec3d0f7f692472151dc9eba996e27a790",
+        "filename": "svg-graphic.svg",
+        "media_type": "image/svg+xml"
+      },
+      "completed_at": 1793304114.4602854,
+      "created_at": 1793304114.1506336,
+      "deadline": 1793304139.113,
+      "fingerprint": "e955e56484829149aba9dc422eb4fb406b1aa589",
+      "hypothesis": "A small release-notes sample could attract a future paid request; this fixture has no real market validation.",
+      "id": "746b23bde25a5e0333d91cddb8f692ae78bf2fc0",
+      "linked_order_ids": [],
+      "opportunity_id": "e7898a08664cd4c048c776df60ddf7df8da9e99b",
+      "overdue": false,
+      "plan": {
+        "action": "graphics.create",
+        "arguments_sha256": "2d8343b239e368dfb3794bf736846aa2b8e90a2d7cd84d508f6b2d08e995232d",
+        "maximum_micro_usd": 0
+      },
+      "request_id": "fixture-experiment-1",
+      "reservation_id": "90162af4-ff6c-4e05-8eec-cf3bbb63f506",
+      "result": {
+        "acquisition_cost_micro_usd": 0,
+        "commercial_success": false,
+        "conversions": 0,
+        "cost_boundary": "All recorded research for the source market, this prototype, and linked order fulfillment costs; hosting remains unallocated.",
+        "costs_final": true,
+        "evaluation_deadline": 1793304139.113,
+        "late_or_prior_conversions": 0,
+        "lesson": "One prototype was validated. Customer demand and contribution require separate verified outcomes.",
+        "lifetime_contribution_micro_usd": 0,
+        "measured_contribution_micro_usd": 0,
+        "prototype_valid": true
+      },
+      "run_id": "2b7f8449-1979-47f1-a0b2-ac5072a9f5fc",
+      "state": "completed",
+      "stop_conditions": [
+        "deadline",
+        "allowance_exhausted",
+        "single_attempt",
+        "scope_failure",
+        "operator_stop"
+      ],
+      "success_criteria": {
+        "artifact_valid": true,
+        "min_contribution_micro_usd": 0,
+        "min_conversions": 1
+      }
+    }
+  ]
+}
