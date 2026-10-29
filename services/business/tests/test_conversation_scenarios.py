@@ -534,6 +534,82 @@ class ConversationScenarios(unittest.TestCase):
         self.assertEqual(self.business.conversation_view(cid)['status'], 'needs_operator')
         self.assertIn('policy changed', self.business.conversation_view(cid)['intervention'].lower())
 
+    def test_gmail_price_question_keeps_the_quote_and_existing_private_access(self):
+        cid = self._start_gmail_quote()
+        quoted = self.business.conversation_view(cid)['currentQuote']
+        access_before = self.store.one('SELECT * FROM host_requests')
+        self.tools.responses.append(interpretation('question'))
+        self.business._gmail_message({'message_id': 'fixture-gmail-price-question',
+            'thread_id': 'fixture-recovery-thread', 'from': CUSTOMER, 'body': 'What price did you quote?',
+            'rfc_message_id': '<fixture-price@example.invalid>', 'sender_verified': True})
+        self.drain()
+        after = self.business.conversation_view(cid)
+        self.assertEqual(after['status'], 'quoted')
+        self.assertEqual(after['currentQuote']['quoteId'], quoted['quoteId'])
+        self.assertEqual(after['currentQuote']['version'], quoted['version'])
+        self.assertEqual(after['currentQuote']['digest'], quoted['digest'])
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM host_requests')['n'], 1)
+        self.assertEqual(self.store.one('SELECT * FROM host_requests'), access_before)
+        sends = [call for call in self.tools.calls if call['action'] == 'gmail.send']
+        self.assertEqual(len(sends), 2)
+        self.assertIn('private portal link sent earlier', sends[-1]['arguments']['body'])
+        self.assertNotIn('/commerce#customer=', sends[-1]['arguments']['body'])
+
+    def test_operator_hold_survives_ordinary_updates_until_explicit_review_and_new_quote(self):
+        for trigger in ('complaint', 'conflict'):
+            with self.subTest(trigger=trigger):
+                thread = 'portal:held-'+trigger
+                cid, original = self.quote(thread=thread)
+                self.send('This is wrong; please review the conflicting requirements.',
+                    interpretation('complaint' if trigger == 'complaint' else 'clarify', conflict=trigger == 'conflict'),
+                    thread=thread)
+                held = self.business.conversation_view(cid)
+                self.assertEqual(held['status'], 'needs_operator')
+                self.assertTrue(self.store.one('SELECT operator_hold FROM customer_threads WHERE id=?', (cid,))['operator_hold'])
+                self.send('Any update?', interpretation('question'), thread=thread)
+                after_update = self.business.conversation_view(cid)
+                self.assertEqual(after_update['status'], 'needs_operator')
+                self.assertTrue(after_update['intervention'])
+                self.assertEqual(len(after_update['proposals']), 1)
+                self.assertEqual(after_update['currentQuote']['quoteId'], original['quoteId'])
+                with self.assertRaises(ValueError):
+                    self.accept(cid, original)
+                self.tools.responses.clear()  # Held messages may avoid inference altogether.
+                with self.assertRaises(ValueError):
+                    self.business.conversation_resolve(conversation_id=cid, evidence_reference='')
+                self.business.conversation_resolve(conversation_id=cid,
+                    evidence_reference='fixture-operator-reviewed-'+trigger)
+                self.assertFalse(self.store.one('SELECT operator_hold FROM customer_threads WHERE id=?', (cid,))['operator_hold'])
+                with self.assertRaises(ValueError):
+                    self.accept(cid, original)
+                self.send('Thanks, please revise the title to Seed library.',
+                    interpretation('clarify', 'svg-graphic', {'title': 'Seed library'}), thread=thread)
+                revised = self.business.conversation_view(cid)['currentQuote']
+                self.assertGreater(revised['version'], original['version'])
+                self.assertEqual(revised['scope']['title'], 'Seed library')
+                self.accept(cid, revised)
+
+    def test_opt_out_during_gmail_capability_check_suppresses_the_unsent_reply(self):
+        original_available = self.tools.available
+        callback_fired = []
+        def available(action):
+            if action == 'gmail.send' and not callback_fired:
+                callback_fired.append(True)
+                self.business.opt_out(CUSTOMER, 'fixture-concurrent-opt-out')
+            return original_available(action)
+        self.tools.available = available
+        cid = self._start_gmail_quote()
+        self.assertEqual(callback_fired, [True])
+        self.assertEqual([call for call in self.tools.calls if call['action'] == 'gmail.send'], [])
+        view = self.business.conversation_view(cid)
+        self.assertEqual(view['status'], 'opted_out')
+        replies = [message for message in view['messages'] if message['direction'] == 'outbound']
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0]['status'], 'suppressed')
+        self.now += 86400
+        self.drain()
+        self.assertEqual([call for call in self.tools.calls if call['action'] == 'gmail.send'], [])
+
 
 if __name__ == '__main__':
     unittest.main()
