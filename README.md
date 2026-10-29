@@ -67,6 +67,8 @@ Public activity uses a deliberately selected projection of events. Customer conv
 | [Economy](docs/ECONOMY.md) | Budget, reservations, payments, costs, and exhaustion |
 | [Roadmap](docs/ROADMAP.md) | Build sequence, acceptance criteria, and five-agent work allocation |
 
+See the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
+
 ## Start building
 
 The initial stack is Node.js 24, TypeScript, and SQLite, with separate web and worker commands in this repository. Install, migration, development, build, test, and worker commands are implemented and documented in [FOUNDATION.md](docs/FOUNDATION.md).
