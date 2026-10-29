@@ -75,7 +75,9 @@ ceil((input_tokens * max(input_rate, cache_write_rate)
 
 Arithmetic is integer throughout. This deliberately makes no cached-input
 discount assumption. It is a configured-tariff operating charge, not a provider
-invoice. The exact native usage object is retained for reconciliation. Missing,
+invoice. The exact native usage object is retained in the raw receipt; compact
+state keeps bounded known token fields without duplicating arbitrary provider
+metadata. Missing,
 noninteger, negative or inconsistent token counts mean **unknown cost**, never
 zero; the action remains uncertain. Even refusals, malformed output, cancellation
 after dispatch and HTTP errors may be billable.
@@ -115,8 +117,14 @@ Example request file:
 Results contain `text`, `response_id`, `purpose` and, for structured output,
 `json`, with measured `Usage`. Responses are created with `store:true` to permit
 recovery; this has provider retention implications for private customer content.
-Both the raw bounded receipt and `x-request-id` are saved before output parsing,
-followed by the response body `id`. The latter is distinct from the request ID.
+The bounded JSON envelope is parsed first. Its `x-request-id`, response body `id`
+and compact measured usage are saved **before** the larger raw receipt, and both
+are saved before generated text/JSON or image processing. The response ID is
+distinct from the request ID. `max_response_bytes` has a hard **16,000,000-byte**
+maximum so base64 receipt storage plus normal adapter state fits the gateway's
+32,000,000-byte serialized journal limit. If preexisting state leaves insufficient
+space, raw receipt storage raises uncertainty with known `Usage`; the compact
+response ID and charge remain available for recovery rather than being lost.
 Recovery uses the saved receipt or a bounded `GET /responses/{id}`. A request ID
 alone is not enough to retrieve or safely repeat unknown generation.
 
@@ -174,12 +182,19 @@ maximum_microusd_per_image`; the certificate must match all listed settings.
 Actual reported costs above the reserved amount are still surfaced to the
 gateway. The gateway must stop further paid work and reconcile the discrepancy.
 `max_image_bytes` bounds each decoded image; `max_response_bytes` bounds the
-entire JSON/base64 receipt. The default response bound accommodates the owner's
-maximum number of configured-size byte buffers, up to 64 MB. Explicit smaller
-bounds can cause a billable uncertain response-limit failure.
+entire JSON/base64 receipt, up to 16 MB. Before any paid dispatch, the requested
+image count times the configured maximum image byte size, with base64 expansion
+and 4 KB envelope allowance, must fit that response bound. Reduce `n` or
+`max_image_bytes` when several maximum-size images cannot fit; increasing the
+response bound above 16 MB is rejected. Individual `max_image_bytes` is limited
+to 11,996,928 bytes. Unexpected provider envelope growth can still cause a
+billable uncertain response-limit failure.
 
-The adapter saves the full bounded raw receipt and request ID before decoding
-or writing. Files use deterministic `output_prefix-<action hash>-<index>.png`
+The adapter saves compact usage and request identity first, then the full bounded
+raw receipt before image decoding or writing. If raw state storage fails, known
+image counts/token charges survive; Images still has no retrieval endpoint, so
+the action remains uncertain and needs provider-record reconciliation. Files use
+deterministic `output_prefix-<action hash>-<index>.png`
 names. Recovery verifies existing bytes against the saved receipt before reuse;
 it never overwrites a conflicting file. Fewer returned images count as partial
 deliverable work with the native measured charge. A timeout without a saved
@@ -238,6 +253,14 @@ in a separate input file and intentionally new action.
 python -m pip install -e '.[test]'
 python -m pytest -q tests/test_ai.py tests/test_image_generation.py
 ```
+
+The integrated gateway also runs regressions using its actual SQLite
+`ControlStore`/`JournalState`: both text and image responses exceed the remaining
+space in a real 32 MB journal after base64 expansion, while compact identity and
+known charge survive. These two tests skip only in a foundation checkout lacking
+the gateway module; they pass in the integrated runtime. Resource-limit tests
+reject oversized receipt configuration and impossible image-count/byte bounds
+before paid dispatch.
 
 Contract verification used official `openai/openai-python` commit
 [`35fc9f33a769858475f2f512112c4256480fff41`](https://github.com/openai/openai-python/commit/35fc9f33a769858475f2f512112c4256480fff41),

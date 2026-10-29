@@ -341,3 +341,63 @@ def test_controlled_http_raw_responses_contract():
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def journal_context(tmp_path, cfg, payload, arguments, tool):
+    """Use the integrated SQLite journal, never a lookalike state-size fake."""
+    control = pytest.importorskip("widemind.control", reason="SQLite JournalState is supplied by the integrated gateway")
+    store = control.ControlStore(tmp_path / "control")
+    store.create_run("synthetic-run")
+    adapter_quote = tool.quote(arguments, cfg)
+    store.prepare(action_id="synthetic-action", run_id="synthetic-run", job_id=None,
+                  tool=tool.spec.name, version=1, arguments=arguments, config=cfg, policy={}, quote=adapter_quote)
+    claim = store.claim("synthetic-action", 120)
+    journal = control.JournalState(store, claim, "synthetic-action")
+    # This valid preexisting state makes a bounded large raw receipt exceed the
+    # real 32,000,000-byte serialized journal limit after base64 expansion.
+    journal.update("synthetic-action", {"existing_state": "x" * 12_100_000})
+    receipt = json.dumps(payload).encode()
+    assert len(receipt) < 16_000_000
+
+    class JournalReceiptTransport:
+        context = None
+
+        def request(self, method, url, **kwargs):
+            assert store.get("synthetic-action")["dispatched"] == 1
+            return HTTPResponse(200, {"x-request-id": "req_bounded_journal"}, receipt, url)
+
+    ctx = context(cfg, JournalReceiptTransport())
+    ctx.state = journal
+    ctx.deadline = time.monotonic() + 120
+    ctx.authorize = lambda: store.authorize("synthetic-action", claim)
+    return ctx, store
+
+
+def test_actual_32mb_journal_keeps_identity_and_charge_before_raw_overflow(tmp_path):
+    arguments = {"prompt": "x"}
+    cfg = config(max_response_bytes=16_000_000)
+    payload = text_response(extra_provider_data="x" * 15_000_000)
+    ctx, store = journal_context(tmp_path, cfg, payload, arguments, AIAdapter())
+    with pytest.raises(Uncertain) as failure:
+        AIAdapter().execute(arguments, ctx)
+    assert failure.value.usage.cost_microusd > 0
+    saved = ctx.load_state()
+    assert saved["ai_response_id"] == "resp_test" and saved["ai_request_id"] == "req_bounded_journal"
+    assert saved["ai_usage"]["cost_microusd"] == failure.value.usage.cost_microusd
+    assert "ai_response_body" not in saved
+    # Affirm this is the actual journal's 32 MB bound, with transactional failure.
+    with pytest.raises(ToolError, match="size limit"):
+        ctx.save_state({"overflow": "x" * 20_000_000})
+    assert store.get("synthetic-action")["dispatched"] == 1
+
+
+def test_receipt_limit_and_compact_usage_prevent_state_amplification():
+    with pytest.raises(Unavailable):
+        AIAdapter().quote({"prompt": "x"}, config(max_response_bytes=16_000_001))
+    payload = text_response()
+    payload["usage"]["unexpected_provider_field"] = "x" * 100_000
+    ctx = context(transport=FixtureTransport(payload))
+    result = AIAdapter().execute({"prompt": "x"}, ctx)
+    assert len(json.dumps(result.usage.details)) < 2000
+    assert "unexpected_provider_field" not in result.usage.details["provider_usage"]
+    assert ctx.state.data["ai_response_body"]

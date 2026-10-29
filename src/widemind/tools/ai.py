@@ -17,6 +17,8 @@ from urllib.parse import quote, urlsplit
 from .contracts import (Quote, Reconciliation, Secrets, ToolContext, ToolError,
                         ToolResult, ToolSpec, Unavailable, Uncertain, Usage)
 
+MAX_RECEIPT_BYTES = 16_000_000  # base64 plus compact state fits JournalState's 32 MB
+
 
 def _integer(value: Any, name: str, minimum: int = 1, maximum: int = 1_000_000_000) -> int:
     if type(value) is not int or not minimum <= value <= maximum:
@@ -68,7 +70,7 @@ def _settings(config: Mapping[str, Any], *, require_context: bool = True) -> dic
                     output_rate=output_rate,
                     max_input_bytes=_integer(config.get("max_input_bytes", 32_000), "max_input_bytes", 1, 1_000_000),
                     max_output_bytes=_integer(config.get("max_output_bytes", 128_000), "max_output_bytes", 1, 8_000_000),
-                    max_response_bytes=_integer(config.get("max_response_bytes", 2_000_000), "max_response_bytes", 1024, 64_000_000),
+                    max_response_bytes=_integer(config.get("max_response_bytes", 2_000_000), "max_response_bytes", 1024, MAX_RECEIPT_BYTES),
                     max_output_tokens=_integer(config.get("max_output_tokens", 4096), "configured max_output_tokens", 1, 1_000_000),
                     # A model's documented context ceiling, never a tokenizer estimate.
                     context_tokens=_integer(config.get("model_context_tokens") if require_context else 1, "model_context_tokens", 1, 10_000_000),
@@ -97,8 +99,18 @@ def _usage(payload: Mapping[str, Any], request_id: str | None, settings: Mapping
     except (ToolError, ValueError):
         return Usage(None, units, request_id, True, {"reason": "Provider usage is incomplete or inconsistent; retain reservation."})
     units.update(input_tokens=inp, output_tokens=out, total_tokens=total)
+    # Persist only bounded native accounting fields in compact state. The raw
+    # receipt separately preserves unknown provider fields without duplicating
+    # potentially enormous untrusted objects in the usage record.
+    native = {"input_tokens": inp, "output_tokens": out, "total_tokens": total}
+    for field, allowed in (("input_tokens_details", {"cached_tokens", "cache_write_tokens", "image_tokens", "text_tokens"}),
+                           ("output_tokens_details", {"reasoning_tokens", "image_tokens", "text_tokens"})):
+        detail = raw.get(field)
+        if isinstance(detail, dict):
+            native[field] = {key: value for key, value in detail.items()
+                             if key in allowed and type(value) is int and 0 <= value <= 10**12}
     return Usage(_cost(inp, out, settings), units, request_id, True,
-                 {"tariff_basis": "owner integer micro-USD per million tokens; ceiling after sum", "provider_usage": raw})
+                 {"tariff_basis": "owner integer micro-USD per million tokens; ceiling after sum", "provider_usage": native})
 
 
 def _credentials(settings: Mapping[str, Any], secrets: Secrets) -> dict:
@@ -120,14 +132,42 @@ def _decode_body(encoded: str) -> dict:
         raise Uncertain("Provider returned an invalid JSON object; saved response needs operator reconciliation.") from exc
 
 
-def _save_response(ctx: ToolContext, response: Any, prefix: str) -> dict:
-    # Save raw receipt and request identity before JSON/output processing.
-    ctx.save_state({f"{prefix}_response_body": base64.b64encode(response.body).decode("ascii"),
-                    f"{prefix}_request_id": response.headers.get("x-request-id"),
-                    f"{prefix}_http_status": response.status})
-    payload = _decode_body(base64.b64encode(response.body).decode("ascii"))
-    if isinstance(payload.get("id"), str):
-        ctx.save_state({f"{prefix}_response_id": payload["id"]})
+def _save_response(ctx: ToolContext, response: Any, prefix: str, settings: Mapping[str, Any]) -> dict:
+    request_id = response.headers.get("x-request-id")
+    if not isinstance(request_id, str) or len(request_id) > 500:
+        request_id = None
+    identity = {f"{prefix}_request_id": request_id, f"{prefix}_http_status": response.status}
+    if len(response.body) > min(MAX_RECEIPT_BYTES, settings["max_response_bytes"]):
+        try:
+            ctx.save_state(identity)
+        except Exception:
+            pass
+        raise Uncertain("Provider receipt exceeded its bounded transport/state limit; retain the reservation.")
+    encoded = base64.b64encode(response.body).decode("ascii")
+    try:
+        payload = _decode_body(encoded)
+    except Uncertain:
+        # Invalid JSON has no known usage/response ID, but preserve its bounded
+        # receipt when possible for operator reconciliation.
+        try:
+            ctx.save_state(identity)
+            ctx.save_state({f"{prefix}_response_body": encoded})
+        except Exception:
+            pass
+        raise
+    records = payload.get("data")
+    usage = _usage(payload, request_id, settings, images=len(records) if prefix == "image" and isinstance(records, list) else None)
+    core = {**identity, f"{prefix}_usage": asdict(usage)}
+    response_id = payload.get("id")
+    if isinstance(response_id, str) and len(response_id) <= 256:
+        core[f"{prefix}_response_id"] = response_id
+    try:
+        # Known identity and measured liability survive even when the larger raw
+        # receipt cannot fit a nearly full journal. No output processing yet.
+        ctx.save_state(core)
+        ctx.save_state({f"{prefix}_response_body": encoded})
+    except Exception as exc:
+        raise Uncertain("Provider identity/usage parsed but durable raw receipt storage failed; retain liability and reconcile the saved response ID or provider records.", usage=usage) from exc
     return payload
 
 
@@ -329,7 +369,7 @@ class AIAdapter:
             ctx.check()
             response = ctx.transport.request("POST", settings["endpoint"] + "/responses", headers=headers,
                                              body=encoded, timeout=ctx.remaining(), max_bytes=settings["max_response_bytes"], cancel=ctx.check)
-            payload = _save_response(ctx, response, "ai")
+            payload = _save_response(ctx, response, "ai", settings)
         except Exception as exc:
             if isinstance(exc, Uncertain):
                 raise
@@ -358,7 +398,7 @@ class AIAdapter:
             ctx.check()
             response = ctx.transport.request("GET", settings["endpoint"] + "/responses/" + quote(response_id, safe=""),
                                              headers=headers, timeout=ctx.remaining(), max_bytes=settings["max_response_bytes"], cancel=ctx.check)
-            payload = _save_response(ctx, response, "ai")
+            payload = _save_response(ctx, response, "ai", settings)
             return Reconciliation("completed", self._result(arguments, ctx, payload))
         except Exception as exc:
             usage = getattr(exc, "usage", None)

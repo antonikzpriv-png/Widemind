@@ -14,7 +14,7 @@ from dataclasses import asdict
 from pathlib import PurePosixPath
 from typing import Any, Mapping
 
-from .ai import (_credentials, _decode_body, _integer, _json, _save_response,
+from .ai import (MAX_RECEIPT_BYTES, _credentials, _decode_body, _integer, _json, _save_response,
                  _settings, _text, _usage)
 from .contracts import (Quote, Reconciliation, Secrets, ToolContext, ToolError,
                         ToolResult, ToolSpec, Unavailable, Uncertain)
@@ -40,10 +40,10 @@ def _image_settings(config: Mapping[str, Any]) -> dict:
         settings.update(size=size, quality=quality, charge_bound_evidence=evidence,
                         maximum_per_image=maximum_per_image,
                         max_images=_integer(config.get("max_images", 1), "max_images", 1, 4),
-                        max_image_bytes=_integer(config.get("max_image_bytes", 8_000_000), "max_image_bytes", 64, 32_000_000))
+                        max_image_bytes=_integer(config.get("max_image_bytes", 8_000_000), "max_image_bytes", 64, (MAX_RECEIPT_BYTES - 4096) * 3 // 4))
         if "max_response_bytes" not in config:
-            settings["max_response_bytes"] = min(64_000_000,
-                settings["max_images"] * 4 * ((settings["max_image_bytes"] + 2) // 3) + 65_536)
+            settings["max_response_bytes"] = min(MAX_RECEIPT_BYTES,
+                settings["max_images"] * 4 * ((settings["max_image_bytes"] + 2) // 3) + 4096)
         return settings
     except ToolError as exc:
         raise Unavailable(f"Image provider configuration: {exc.message}") from exc
@@ -67,6 +67,8 @@ class ImageGenerationAdapter:
             raise ToolError("invalid_input", "Image arguments are prompt, n, output_prefix and max_cost_microusd; provider settings belong to the owner.")
         prompt = _text(arguments.get("prompt"), "prompt", settings["max_input_bytes"])
         n = _integer(arguments.get("n", 1), "n", 1, settings["max_images"])
+        if n * 4 * ((settings["max_image_bytes"] + 2) // 3) + 4096 > settings["max_response_bytes"]:
+            raise ToolError("invalid_input", "Requested image count and max_image_bytes cannot fit the bounded receipt; lower n/image byte cap or increase max_response_bytes up to 16 MB.")
         prefix = arguments.get("output_prefix", "generated/image")
         _text(prefix, "output_prefix", 200)
         path = PurePosixPath(prefix)
@@ -156,7 +158,7 @@ class ImageGenerationAdapter:
             ctx.check()
             response = ctx.transport.request("POST", settings["endpoint"] + "/images/generations", headers=headers,
                                              body=encoded, timeout=ctx.remaining(), max_bytes=settings["max_response_bytes"], cancel=ctx.check)
-            payload = _save_response(ctx, response, "image")
+            payload = _save_response(ctx, response, "image", settings)
         except Exception as exc:
             if isinstance(exc, Uncertain):
                 raise

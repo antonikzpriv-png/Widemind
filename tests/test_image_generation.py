@@ -10,7 +10,7 @@ from widemind.tools.contracts import ToolError, Unavailable, Uncertain
 from widemind.tools.image_generation import ImageGenerationAdapter
 
 from test_ai import (FixtureTransport, LocalHTTPTransport, MemorySecrets, MemoryState,
-                     MemoryWorkspace, config, context)
+                     MemoryWorkspace, config, context, journal_context)
 
 
 # Public-domain 1x1 PNG, generated locally. Not an inference recording.
@@ -191,3 +191,25 @@ def test_controlled_http_images_contract():
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_total_image_byte_capacity_rejected_before_paid_dispatch():
+    ctx = context(image_config(max_image_bytes=8_000_000, max_response_bytes=16_000_000), FixtureTransport())
+    with pytest.raises(ToolError, match="cannot fit"):
+        ImageGenerationAdapter().execute({"prompt": "x", "n": 2}, ctx)
+    assert not ctx.transport.calls and not ctx.state.data.get("dispatched")
+    with pytest.raises(Unavailable):
+        ImageGenerationAdapter().quote({"prompt": "x"}, image_config(max_response_bytes=32_000_000))
+
+
+def test_actual_32mb_journal_retains_image_charge_when_raw_receipt_cannot_fit(tmp_path):
+    cfg = image_config(max_response_bytes=16_000_000)
+    payload = image_response(extra_provider_data="x" * 15_000_000)
+    arguments = {"prompt": "x"}
+    ctx, _ = journal_context(tmp_path, cfg, payload, arguments, ImageGenerationAdapter())
+    with pytest.raises(Uncertain) as failure:
+        ImageGenerationAdapter().execute(arguments, ctx)
+    assert failure.value.usage.cost_microusd > 0 and failure.value.usage.units["images"] == 1
+    saved = ctx.load_state()
+    assert saved["image_usage"]["cost_microusd"] == failure.value.usage.cost_microusd
+    assert saved["image_request_id"] == "req_bounded_journal" and "image_response_body" not in saved
