@@ -122,3 +122,25 @@ class RecoveryFencingIntegration(unittest.TestCase):
             with patch.dict(os.environ,{'WIDEMIND_RUNTIME_DATABASE':str(runtime)}):
                 result=tools.execute({'action':a,'reservation':r})
             self.assertEqual(result['kind'],'unknown');self.assertFalse((root/'workspace/note.txt').exists());self.assertEqual(econ.rows['reservation-1']['state'],'running')
+
+class ServiceRedirectIntegration(unittest.TestCase):
+    def test_authoritative_service_redirect_never_forwards_gateway_credential(self):
+        from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
+        from widemind.integrated_service import EconomyClient
+        calls=[]
+        class Other(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):calls.append(self.headers.get('Authorization'));self.send_response(200);self.end_headers();self.wfile.write(b'{}')
+        other=ThreadingHTTPServer(('127.0.0.1',0),Other)
+        class Redirect(BaseHTTPRequestHandler):
+            def log_message(self,*args):pass
+            def do_GET(self):self.send_response(302);self.send_header('Location',f'http://127.0.0.1:{other.server_address[1]}/other-account');self.end_headers()
+        redirect=ThreadingHTTPServer(('127.0.0.1',0),Redirect);threads=[threading.Thread(target=s.serve_forever,daemon=True) for s in [other,redirect]]
+        for thread in threads:thread.start()
+        try:
+            client=EconomyClient(f'http://127.0.0.1:{redirect.server_address[1]}','fixture-economy-gateway-'+('x'*32))
+            with self.assertRaises(Exception):client.reservation('reservation-1')
+            self.assertEqual(calls,[])
+        finally:
+            for service in [other,redirect]:service.shutdown();service.server_close()
+            for thread in threads:thread.join()

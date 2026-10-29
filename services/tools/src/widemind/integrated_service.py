@@ -18,7 +18,7 @@ import sqlite3
 import threading
 import time
 from urllib.parse import urlsplit, quote as urlquote
-from urllib.request import Request, build_opener, ProxyHandler
+from urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler
 from urllib.error import HTTPError
 
 from .config import load_config, private_directory
@@ -49,12 +49,16 @@ def service_url(value):
     return value.rstrip('/')
 
 
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self,req,fp,code,msg,headers,newurl):return None
+
+
 class EconomyClient:
     def __init__(self,url,token):
         self.url=service_url(url);self.token=token
         if len(token)<32:raise ToolError('configuration','Configure a distinct economy gateway token.')
         # Loopback service traffic never leaves the executor or provider proxy.
-        self.opener=build_opener(ProxyHandler({})) if urlsplit(url).hostname in {'127.0.0.1','localhost','::1'} else build_opener()
+        self.opener=build_opener(ProxyHandler({}),NoRedirect()) if urlsplit(url).hostname in {'127.0.0.1','localhost','::1'} else build_opener(NoRedirect())
     def request(self,method,path,data=None):
         req=Request(self.url+path,data=None if data is None else canonical(data).encode(),method=method,headers={'Authorization':'Bearer '+self.token,'Content-Type':'application/json'})
         try:
