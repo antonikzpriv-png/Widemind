@@ -1,5 +1,7 @@
 # Economy audit and extension qualification
 
+This historical economy-only report predates the runtime integration. See the [subsequent merged-main audit](MAIN_AUDIT_20261029.md) for current integration status and qualification; branch/main status below describes this earlier audit only.
+
 Audited base: `3110aad2f58a1db1224907fc2a7f45b8143615c3`. Final implementation qualification: `78694d585b2a97b41a451bac078022be853d5bb5`, economy package **0.2.0**, SQLite schema **4**. This report covers the economy/payment module, not the unmerged autonomous-runtime or business branches.
 
 ## Confirmed defects fixed

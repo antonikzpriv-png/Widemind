@@ -16,6 +16,10 @@ observational recovery remain available. A future runtime adapter must use the
 central authorization and settlement contracts in
 [RUNTIME_ECONOMY.md](RUNTIME_ECONOMY.md), without seeding a second wallet.
 
+When supplied, `accounting_authority` must be exactly `central` or `standalone`.
+Unknown strings and other types fail configuration before opening control state;
+omitting the field preserves the owner-only standalone development default.
+
 ## Install and first local deliverable
 
 ```sh

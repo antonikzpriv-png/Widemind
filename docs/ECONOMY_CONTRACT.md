@@ -1,6 +1,6 @@
 # Economy integration contract v1
 
-The fetched foundation is documentation-only (`fc6df21`). This task selects Python 3.12+, FastAPI, HTTPX and SQLite for the economy service only. It does not implement a worker or website. Money is an integer micro-USD, never a float; one run has a fixed `test` or `live` mode. Times are UTC. Identifiers follow ARCHITECTURE.md. All responses are JSON-compatible dictionaries.
+The economy originated against documentation-only foundation `fc6df21` and now integrates with the Node runtime through the bridge described below. Its trusted service uses Python 3.12+, FastAPI, HTTPX and SQLite, with a separate payment-reconciliation worker. Money is an integer micro-USD, never a float; one run has a fixed `test` or `live` mode. Times are UTC. Identifiers follow ARCHITECTURE.md. All responses are JSON-compatible dictionaries.
 
 ## Trusted service interface
 
@@ -19,6 +19,8 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 - `correct_entry(run_id, entry_id, amount_micro_usd, reason, idempotency_key)`: operator-only append-only compensating cash correction; noncash metric originals are rejected and use signed metric corrections instead. Active provisional operating charges (including correction chains) must be finalized with the provider total before a separate cash correction.
 
 ## Payment adapter boundary
+
+Optional settlement usage diagnostics cannot suppress a known bill. The HTTP boundary retains strict financial/provider/outcome fields while the core preserves finite JSON objects up to 16 KiB or records an explicit diagnostic-omission marker. The smaller diagnostic bound leaves room for journal envelopes. Existing larger receipts retain exact replay support without rewriting their supporting records.
 
 `register_payment(run_id, provider, account, payment_id, job_id, idempotency_key)` binds a provider payment to a run before accepting receipts. Provider account includes a separately enforced mode; the same external ID in another account is not the same object. Checkout stores its durable request before the network call and retries only with the same provider idempotency key.
 

@@ -1,5 +1,7 @@
 # Integrated runtime and economy qualification
 
+This records the initial integration qualification. The subsequent [main audit](MAIN_AUDIT_20261029.md) documents additional repairs and the current test/package results.
+
 The audited Node runtime (`46cacdc`), Python economy (`c1b9a47`) and tools SDK from main (`1ac5f08`) are combined. The registered runtime economy module uses the single protected accounting service. Implementation qualification: `42072f7`; subsequent documentation edits do not alter application behavior. Python package: **0.3.0**; accounting schema: **5**.
 
 ## Verified behavior

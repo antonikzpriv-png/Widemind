@@ -69,6 +69,8 @@ Public activity uses a deliberately selected projection of events. Customer conv
 
 See the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
 
+The [merged-main economy/runtime audit](docs/MAIN_AUDIT_20261029.md) records the latest integration fixes, complete qualification and remaining external setup.
+
 ## Start building
 
 The foundation uses Node.js 24, TypeScript and SQLite, with independent web and worker processes; see [FOUNDATION.md](docs/FOUNDATION.md). The economy uses Python 3.12+, FastAPI, HTTPX and a separate protected SQLite database. Install with `python -m pip install -r requirements.lock -e .`, validate with `python -m pytest -q`, and follow [economy setup](docs/ECONOMY_SETUP.md) and [operations](docs/ECONOMY_OPERATIONS.md) for its HTTP and reconciliation-worker processes.
