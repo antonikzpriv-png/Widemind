@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +22,8 @@ class Settings:
     stripe_mode: str = "test"
     checkout_success_url: str | None = None
     checkout_cancel_url: str | None = None
+    runtime_auth_secret: str | None = field(default=None, repr=False)
+    runtime_tool_profiles: dict = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         tokens = (self.operator_token, self.gateway_token, self.agent_token)
@@ -35,6 +38,16 @@ class Settings:
             raise ValueError("Use a persistent economy database path")
         if self.stripe_mode not in {"test", "live"}:
             raise ValueError("WIDEMIND_STRIPE_MODE must be test or live")
+        if bool(self.runtime_auth_secret) != bool(self.runtime_tool_profiles):
+            raise ValueError("Runtime bridge requires both authorization secret and trusted tool profiles")
+        if self.runtime_auth_secret:
+            secret = self.runtime_auth_secret
+            if not isinstance(secret, str) or not 32 <= len(secret) <= 512 or not secret.isascii() or any(c.isspace() for c in secret):
+                raise ValueError("Runtime authorization secret must contain 32–512 ASCII characters without whitespace")
+            if secret in tokens:
+                raise ValueError("Runtime authorization secret must differ from bearer identities")
+            from .runtime import validate_profiles
+            object.__setattr__(self, 'runtime_tool_profiles', validate_profiles(self.runtime_tool_profiles))
         stripe_values = (self.stripe_api_key, self.stripe_webhook_secret, self.stripe_account,
                          self.checkout_success_url, self.checkout_cancel_url)
         if any(stripe_values) and not all(stripe_values):
@@ -78,6 +91,15 @@ class Settings:
         for name in required:
             if not os.environ.get(name):
                 raise ValueError(f"Missing required environment variable: {name}")
+        profile_json = os.environ.get("WIDEMIND_RUNTIME_TOOL_PROFILES", "{}")
+        if len(profile_json.encode()) > 65536:
+            raise ValueError("Runtime tool profile configuration exceeds 64 KiB")
+        try:
+            profiles = json.loads(profile_json)
+        except (ValueError, RecursionError):
+            raise ValueError("Runtime tool profile configuration must be valid JSON") from None
+        if not isinstance(profiles, dict):
+            raise ValueError("Runtime tool profiles must be a JSON object")
         return cls(
             database_path=os.environ.get("WIDEMIND_ECONOMY_DB", str(Path("data") / "economy.sqlite3")),
             operator_token=os.environ[required[0]], gateway_token=os.environ[required[1]],
@@ -88,4 +110,6 @@ class Settings:
             stripe_mode=os.environ.get("WIDEMIND_STRIPE_MODE", "test"),
             checkout_success_url=os.environ.get("WIDEMIND_CHECKOUT_SUCCESS_URL") or None,
             checkout_cancel_url=os.environ.get("WIDEMIND_CHECKOUT_CANCEL_URL") or None,
+            runtime_auth_secret=os.environ.get("WIDEMIND_RUNTIME_AUTH_SECRET") or None,
+            runtime_tool_profiles=profiles,
         )

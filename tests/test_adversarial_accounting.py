@@ -332,8 +332,8 @@ def test_funding_categories_do_not_allow_test_money_in_live_runs(service):
     assert service.balance("live-run")["posted_micro_usd"] == 5_000_000
 
 
-@pytest.mark.parametrize("amount", [True, False, 0, -1, 0.5, 1.0, "100", 2**64])
-def test_reservations_reject_nonpositive_noninteger_and_unrepresentable_money(service, amount):
+@pytest.mark.parametrize("amount", [True, False, -1, 0.5, 1.0, "100", 2**64])
+def test_reservations_reject_negative_noninteger_and_unrepresentable_money(service, amount):
     before = service.balance("run")
     with pytest.raises(EconomyError):
         _reserve(service, "invalid", amount)

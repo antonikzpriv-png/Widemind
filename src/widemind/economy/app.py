@@ -19,6 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from .config import Settings
 from .service import EconomyError, EconomyService
 from .reconciliation import ReconciliationQueue
+from .runtime import RuntimeBridge, RunRequest, SeedRequest, AuthorizationRequest, SettlementRequest, VerificationRequest
 
 MAX_MONEY = 9_000_000_000_000_000
 Money = Annotated[StrictInt, Field(ge=0, le=MAX_MONEY)]
@@ -142,6 +143,8 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
     app.state.economy = economy
     app.state.payments = payments
     app.state.reconciliation_queue = queue
+    app.state.runtime_bridge = RuntimeBridge(economy, secret=settings.runtime_auth_secret,
+                                            profiles=settings.runtime_tool_profiles) if settings.runtime_auth_secret else None
 
     @app.exception_handler(EconomyError)
     async def economy_error(_request: Request, exc: EconomyError):
@@ -192,6 +195,36 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         if app.state.payments is None:
             raise EconomyError("provider_not_configured", "Stripe account, mode, credentials and checkout redirects must be configured", 503)
         return app.state.payments
+
+    def runtime_bridge():
+        if app.state.runtime_bridge is None:
+            raise EconomyError("runtime_not_configured", "Runtime accounting profiles and authorization secret must be configured", 503)
+        return app.state.runtime_bridge
+
+    @app.post("/v1/runtime/summary")
+    def runtime_summary(body: RunRequest, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return runtime_bridge().summary(body.runId)
+
+    @app.post("/v1/runtime/seed")
+    def runtime_seed(body: SeedRequest, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        return runtime_bridge().seed(body)
+
+    @app.post("/v1/runtime/authorize")
+    def runtime_authorize(body: AuthorizationRequest, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return runtime_bridge().authorize(body)
+
+    @app.post("/v1/runtime/verify")
+    def runtime_verify(body: VerificationRequest, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return runtime_bridge().verify(body)
+
+    @app.post("/v1/runtime/settle")
+    def runtime_settle(body: SettlementRequest, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return runtime_bridge().settle(body)
 
     @app.get("/health")
     def health():
