@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import tempfile
+import threading
 import unittest
 
 from widemind.business.contracts import Outcome
@@ -386,6 +387,56 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(self.economy.authorizations, [])
         self.assertEqual(self.economy.settlements, [])
         self.assertEqual(self.transport.requests, [])
+
+    def test_concurrent_reconcile_cannot_abort_an_active_preparation(self):
+        entered, resume = threading.Event(), threading.Event()
+        original_prepare = self.research.prepare
+        def hold(*args, **kwargs):
+            entered.set()
+            if not resume.wait(2):
+                raise AssertionError("TEST barrier timed out")
+            return original_prepare(*args, **kwargs)
+        self.research.prepare = hold
+        results = []
+        def worker():
+            gateway = LiveTools(self.path, economy=self.economy, runtime=self.runtime, gmail=self.gmail,
+                                research=self.research, mode="test")
+            try:
+                results.append(gateway.execute(run_id="TEST_RUN", job_id="TEST_JOB", action_id="ACTIVE_ACTION",
+                    action="research.collect", arguments=self.arguments, reservation_id="TEST_RESERVATION", maximum_micro_usd=250000))
+            finally:
+                gateway.close()
+        thread = threading.Thread(target=worker)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            self.assertIsNone(self.tools._row("ACTIVE_ACTION")["context"])
+            concurrent = self.tools.reconcile(action_id="ACTIVE_ACTION")
+            self.assertEqual(concurrent.state, "unknown")
+            self.assertIn("currently executing", concurrent.reason)
+            self.assertEqual(self.economy.releases, [])
+            self.assertEqual(self.economy.settlements, [])
+        finally:
+            resume.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results[0].state, "succeeded")
+        self.assertEqual(self.economy.settlements[-1]["actual_micro_usd"], 104)
+        self.assertEqual(self.model_calls(), 1)
+        self.assertEqual(self.tools.reconcile(action_id="ACTIVE_ACTION").state, "succeeded")
+
+    def test_funding_revocation_during_preparation_is_rechecked_before_paid_post(self):
+        original_prepare = self.research.prepare
+        def revoke(*args, **kwargs):
+            prepared = original_prepare(*args, **kwargs)
+            self.economy.deny = True  # Fixture refund/breach invalidates coverage.
+            return prepared
+        self.research.prepare = revoke
+        result = self.execute()
+        self.assertEqual(result.state, "failed")
+        self.assertEqual(len(self.economy.authorizations), 2)
+        self.assertEqual(self.model_calls(), 0)
+        self.assertEqual(self.economy.settlements[-1]["actual_micro_usd"], 0)
 
     def test_credentials_do_not_appear_in_journal_or_config_repr(self):
         self.execute()

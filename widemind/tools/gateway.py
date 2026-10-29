@@ -1,4 +1,6 @@
 """Persistent tool gateway. Credentials and billing stay outside the agent workspace."""
+from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -28,7 +30,9 @@ class LiveTools:
         self.max_gmail_actions_per_day = integer(max_gmail_actions_per_day, "daily Gmail limit", 1, 10000)
         self.max_research_actions_per_day = integer(max_research_actions_per_day, "daily research limit", 1, 1000)
         self.allowed_recipients = None if allowed_recipients is None else frozenset(address(item) for item in allowed_recipients)
-        path = Path(path)
+        path = Path(path).resolve()
+        self.lock_directory = path.parent / (path.name + ".actions")
+        self.lock_directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
@@ -51,6 +55,34 @@ class LiveTools:
         self.db.execute("""CREATE TABLE IF NOT EXISTS delivery_evidence(
           action_id TEXT NOT NULL,evidence_reference TEXT NOT NULL,recipient TEXT NOT NULL,created_at REAL NOT NULL,
           PRIMARY KEY(action_id,evidence_reference))""")
+
+    @contextmanager
+    def _action_lock(self, action_id):
+        # An OS lock spans intent, preparation, provider dispatch and settlement.
+        # It is released by process death; reconciliation can never abort a still
+        # active attempt or overwrite evidence from a concurrent completion.
+        key = hashlib.sha256(action_id.encode()).hexdigest()
+        fd = os.open(self.lock_directory / (key + ".lock"), os.O_CREAT | os.O_RDWR, 0o600)
+        stream = os.fdopen(fd, "a+b")
+        acquired = False
+        try:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    if os.fstat(stream.fileno()).st_size == 0:
+                        stream.write(b"\0")
+                        stream.flush()
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except OSError:
+                pass
+            yield acquired
+        finally:
+            stream.close()
 
     def available(self, action):
         if action not in self.enabled_actions:
@@ -107,6 +139,14 @@ class LiveTools:
 
     def execute(self, *, run_id, job_id, action_id, action, arguments, reservation_id, maximum_micro_usd):
         single_line(action_id, "action ID", 300)
+        with self._action_lock(action_id) as acquired:
+            if not acquired:
+                return Outcome("unknown", reason="this action is currently executing or reconciling")
+            return self._execute(run_id=run_id, job_id=job_id, action_id=action_id, action=action,
+                                 arguments=arguments, reservation_id=reservation_id, maximum_micro_usd=maximum_micro_usd)
+
+    def _execute(self, *, run_id, job_id, action_id, action, arguments, reservation_id, maximum_micro_usd):
+        single_line(action_id, "action ID", 300)
         single_line(run_id, "run ID", 200)
         single_line(job_id, "job ID", 200)
         integer(maximum_micro_usd, "maximum cost")
@@ -148,7 +188,7 @@ class LiveTools:
             self.db.execute("COMMIT")
         except sqlite3.IntegrityError:
             self.db.execute("ROLLBACK")
-            return self.execute(run_id=run_id, job_id=job_id, action_id=action_id, action=action, arguments=arguments,
+            return self._execute(run_id=run_id, job_id=job_id, action_id=action_id, action=action, arguments=arguments,
                                 reservation_id=reservation_id, maximum_micro_usd=maximum_micro_usd)
         except BaseException:
             if self.db.in_transaction:
@@ -181,7 +221,15 @@ class LiveTools:
             # Persist exact evidence before sending it to OpenAI so a restart never
             # refetches modified pages or pays to reconstruct a prior attempt.
             self.db.execute("UPDATE tool_actions SET context=? WHERE action_id=?", (encode(prepared), action_id))
-            result = self.research.run(action_id, arguments, maximum_micro_usd, prepared=prepared, before_dispatch=before_dispatch)
+            def paid_dispatch_guard():
+                before_dispatch()
+                # Source collection may take time. Revalidate current wallet
+                # coverage and immutable ownership immediately before paid POST.
+                current = self.economy.begin_execution(run_id=run_id, job_id=job_id, reservation_id=reservation_id,
+                    action_id=action_id, maximum_micro_usd=maximum_micro_usd)
+                if not isinstance(current, Outcome) or current.state != "succeeded" or not isinstance(current.data, dict) or any(current.data.get(key) != value for key, value in expected_authorization.items()):
+                    raise ValueError("execution funding or ownership changed before dispatch")
+            result = self.research.run(action_id, arguments, maximum_micro_usd, prepared=prepared, before_dispatch=paid_dispatch_guard)
             return self._finish_research(action_id, result)
         except Exception:
             # Never erase provider charge evidence if settlement itself failed.
@@ -209,6 +257,13 @@ class LiveTools:
         return self._outcome(self._row(action_id))
 
     def reconcile(self, *, action_id):
+        single_line(action_id, "action ID", 300)
+        with self._action_lock(action_id) as acquired:
+            if not acquired:
+                return Outcome("unknown", reason="this action is currently executing or reconciling")
+            return self._reconcile(action_id=action_id)
+
+    def _reconcile(self, *, action_id):
         row = self._row(action_id)
         if not row:
             return Outcome("unknown", reason="gateway has no action evidence")
@@ -277,12 +332,21 @@ class LiveTools:
                 row = self._row(action_id)
             if row["state"] != "succeeded":
                 continue
-            self.confirm_delivery(action_id=action_id, recipient_email=recipient,
+            confirmed = self.confirm_delivery(action_id=action_id, recipient_email=recipient,
                                   evidence_reference="authenticated-gmail-reply:" + message["message_id"])
+            if confirmed.state != "succeeded":
+                continue
             updates.append({"action_id": action_id, "job_id": row["job_id"], "delivery_state": "confirmed"})
         return updates
 
     def confirm_delivery(self, *, action_id, recipient_email, evidence_reference):
+        single_line(action_id, "action ID", 300)
+        with self._action_lock(action_id) as acquired:
+            if not acquired:
+                return Outcome("unknown", reason="mail action is still executing or reconciling")
+            return self._confirm_delivery(action_id=action_id, recipient_email=recipient_email, evidence_reference=evidence_reference)
+
+    def _confirm_delivery(self, *, action_id, recipient_email, evidence_reference):
         """Trusted control-plane attestation only; never expose as a public/model tool.
 
         The caller must authenticate the recipient acknowledgment or other actual
