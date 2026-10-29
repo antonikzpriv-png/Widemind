@@ -29,6 +29,12 @@ approve and provision their own reviewed local image, including its license,
 contents and update policy. An immutable image ID is also accepted. The image
 must contain `/usr/local/bin/python3` and its standard library. Availability
 reports missing configuration, CLI, image or daemon access independently.
+Images declaring Docker volumes are rejected: those mounts would bypass tmpfs
+storage bounds. Baked environment is restricted to validated standard binary
+PATH directories, supported LANG values, public GPG fingerprints, Python
+version/SHA metadata, and boolean Python buffering/bytecode settings. Unknown
+variables, duplicate keys and surprising values are rejected before launch.
+The remaining image filesystem still requires owner review for secrets.
 
 Input arguments are `{"code": "...Python source...", "inputs": ["relative/file"]}`.
 No task argument can choose an image, executable, Docker option, environment,
@@ -60,7 +66,8 @@ directory descriptors and `O_NOFOLLOW`; links, special files, ambiguous paths,
 duplicate names and over-limit byte/count streams are rejected. Host-side
 validation completes before any workspace writes. The Docker daemon in this
 environment cannot archive tmpfs content with `docker cp`; this collector was
-verified against real tmpfs output instead. The container is removed afterwards.
+verified against real tmpfs output instead. The owned container and its anonymous volumes are removed afterwards;
+read-only input binds are not deleted by Docker volume cleanup.
 
 Before create, the adapter persists an action-derived container name, ownership
 label, request hash and launch intent. Reconciliation checks those labels before

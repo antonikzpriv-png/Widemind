@@ -27,6 +27,32 @@ _PIN = re.compile(r"(?:sha256:[0-9a-f]{64}|[a-zA-Z0-9][a-zA-Z0-9._/:\-]*@sha256:
 _KEEPER = "import os,time; os.makedirs('/work/output',exist_ok=True); time.sleep(86400)"
 _PROGRAM = "import os,sys;os.makedirs('/work/output',exist_ok=True);exec(compile(sys.stdin.buffer.read(),'<widemind-code>','exec'),{'__name__':'__main__'})"
 
+
+def _safe_image_environment(values):
+    if not isinstance(values, list): return False
+    seen = set()
+    for entry in values:
+        if not isinstance(entry, str) or "=" not in entry: return False
+        name, value = entry.split("=", 1)
+        if name in seen: return False
+        seen.add(name)
+        if name == "PATH":
+            allowed = {"/usr/local/bin", "/usr/local/sbin", "/usr/bin", "/usr/sbin", "/bin", "/sbin"}
+            if not value or any(part not in allowed for part in value.split(":")): return False
+        elif name == "LANG":
+            if value not in {"C", "C.UTF-8", "C.utf8", "en_US.UTF-8"}: return False
+        elif name == "GPG_KEY":
+            if not re.fullmatch(r"[0-9a-fA-F]{40}", value): return False
+        elif name == "PYTHON_VERSION":
+            if not re.fullmatch(r"\d{1,2}\.\d{1,2}\.\d{1,3}(?:(?:a|b|rc)\d{1,2})?", value): return False
+        elif name == "PYTHON_SHA256":
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", value): return False
+        elif name in {"PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE"}:
+            if value not in {"0", "1"}: return False
+        else:
+            return False
+    return True
+
 # This program runs in a separate isolated interpreter from the generated code.
 # Stop remaining sandbox processes, then use descriptor-relative no-follow I/O.
 _COLLECTOR = r'''
@@ -232,9 +258,17 @@ class CodeAdapter:
 
     @staticmethod
     def _image(config, check, deadline):
-        status, body, _ = _run(["image", "inspect", "--format", "{{.Id}}", config["image"]], check=check, deadline=deadline)
-        if status or not re.fullmatch(rb"sha256:[0-9a-f]{64}\s*", body):
+        fmt = '{"id":{{json .Id}},"volumes":{{json .Config.Volumes}},"env":{{json .Config.Env}}}'
+        status, body, _ = _run(["image", "inspect", "--format", fmt, config["image"]], check=check, deadline=deadline)
+        if status:
             raise Unavailable("Pinned Docker image is not installed or the local daemon is unavailable. Provision the approved image manually; this adapter never pulls or uses host execution.")
+        try:
+            metadata = json.loads(body)
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", metadata["id"]): raise ValueError("id")
+            if metadata["volumes"] not in (None, {}): raise ValueError("volumes")
+            if not _safe_image_environment(metadata["env"] if metadata["env"] is not None else []): raise ValueError("environment")
+        except (ValueError, TypeError, KeyError) as exc:
+            raise Unavailable("Pinned image must declare no Docker volumes and only the documented harmless Python image environment; rebuild/review the image before execution.") from exc
 
     def _inspect(self, ctx, *, check=lambda: None):
         state = ctx.load_state()
@@ -258,7 +292,7 @@ class CodeAdapter:
     def _cleanup(self, ctx):
         found = self._inspect(ctx)
         if found:
-            status, _, _ = _run(["rm", "--force", found["id"]])
+            status, _, _ = _run(["rm", "--force", "--volumes", found["id"]])
             if status or self._inspect(ctx) is not None:
                 raise Uncertain("Owned Docker sandbox could not be removed; reconcile it before another attempt.")
 
@@ -334,7 +368,7 @@ class CodeAdapter:
             try:
                 argv = ["create", "--pull=never", "--name", name, "--label", _LABEL + "=" + identity,
                     "--network", "none", "--user", "65532:65532", "--read-only", "--cap-drop", "ALL",
-                    "--security-opt", "no-new-privileges", "--pids-limit", str(limits["pids"]),
+                    "--security-opt", "no-new-privileges", "--no-healthcheck", "--pids-limit", str(limits["pids"]),
                     "--memory", str(limits["memory_bytes"]), "--memory-swap", str(limits["memory_bytes"]),
                     "--cpus", f'{limits["cpu_millis"] / 1000:.3f}', "--log-driver", "none", "--shm-size", "1048576",
                     "--ulimit", "nofile=64:64", "--ulimit", "core=0:0",

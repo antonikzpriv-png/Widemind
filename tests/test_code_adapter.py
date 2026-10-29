@@ -53,7 +53,9 @@ class DockerFixture:
     def __call__(self, args, **kwargs):
         self.commands.append((args, kwargs))
         if kwargs.get("check"): kwargs["check"]()
-        if args[:2] == ["image", "inspect"]: return 0, b"sha256:" + b"a" * 64 + b"\n", b""
+        if args[:2] == ["image", "inspect"]:
+            return 0, json.dumps({"id": "sha256:" + "a" * 64, "volumes": None,
+                                  "env": ["PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8"]}).encode(), b""
         if args[0] == "create":
             assert self.ctx.state.intent is not None
             assert self.ctx.state.value["code_container"].startswith("widemind-code-")
@@ -101,7 +103,7 @@ def test_fixture_execution_is_hardened_durable_bounded_and_cached(tmp_path):
     creates = [args for args, _ in docker.commands if args[0] == "create"]
     assert len(creates) == 1
     argv = creates[0]
-    for flag in ["--pull=never", "--network", "none", "--read-only", "--cap-drop", "ALL", "no-new-privileges", "65532:65532", "--pids-limit", "--memory", "--memory-swap", "--cpus", "--tmpfs"]:
+    for flag in ["--pull=never", "--network", "none", "--read-only", "--cap-drop", "ALL", "no-new-privileges", "--no-healthcheck", "65532:65532", "--pids-limit", "--memory", "--memory-swap", "--cpus", "--tmpfs"]:
         assert flag in argv
     mount = argv[argv.index("--mount") + 1]
     assert "dst=/inputs,readonly" in mount and "workspace" not in mount
@@ -170,3 +172,18 @@ def test_unavailable_docker_never_uses_a_host_fallback(tmp_path):
         with pytest.raises(Unavailable): CodeAdapter().execute({"code": "raise Exception('never host')"}, ctx)
     assert command.call_count == 1
     assert ctx.state.intent is None
+
+
+@pytest.mark.parametrize("volumes,env", [
+    ({"/unbounded-volume": {}}, []),
+    (None, ["AWS_SECRET_ACCESS_KEY=fixture-not-a-real-key"]),
+    (None, ["PATH=/work:/usr/bin"]),
+    (None, ["LANG=C.UTF-8", "LANG=C"]),
+    (None, ["PYTHON_VERSION=secret-text"]),
+])
+def test_image_declared_volumes_and_unexpected_baked_environment_are_rejected_before_launch(tmp_path, volumes, env):
+    ctx = context(tmp_path)
+    metadata = {"id": "sha256:" + "a" * 64, "volumes": volumes, "env": env}
+    with patch("widemind.tools.code._run", return_value=(0, json.dumps(metadata).encode(), b"")) as command:
+        with pytest.raises(Unavailable): CodeAdapter().execute({"code": "print('never dispatched')"}, ctx)
+    assert command.call_count == 1 and ctx.state.intent is None
