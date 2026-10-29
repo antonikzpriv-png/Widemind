@@ -205,7 +205,10 @@ def test_potential_conflicts_keep_distinct_facts_and_both_provenances(first, sec
     result = evaluate_sources(plan, [source("https://one.example/report", first), source("https://two.example/report", second)], {})
     assert len(result["sources"]) == 2
     assert result["conflicts"]
-    assert result["sufficient"] is False
+    # Contradictory relevant sources are usable evidence. Synthesis must discuss
+    # their uncertainty; conflict alone must not erase otherwise valid coverage.
+    assert result["sufficient"] is True
+    assert any("discussion" in issue for issue in result["issues"])
     spans = {span["id"]: span for span in result["spans"]}
     for conflict in result["conflicts"]:
         assert conflict["id"].startswith("C") and conflict["description"]
