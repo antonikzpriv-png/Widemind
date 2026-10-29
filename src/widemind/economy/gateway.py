@@ -24,6 +24,7 @@ class UsageReceipt:
 class BoundedAdapter(Protocol):
     provider: str
     account: str
+    mode: str
 
     def quote(self, limits: dict[str, int]) -> int:
         """Offline upper bound for the entire attempt, including input and retries.
@@ -49,14 +50,18 @@ class PaidGateway:
         self.service = service
         self.adapters = {}
         for adapter in adapters:
-            key = (adapter.provider, adapter.account)
+            mode = getattr(adapter, 'mode', None)
+            if mode not in ('test', 'live'):
+                raise ValueError('Paid adapters must explicitly declare test or live mode')
+            key = (adapter.provider, adapter.account, mode)
             if key in self.adapters:
                 raise ValueError('Duplicate paid adapter registration')
             self.adapters[key] = adapter
 
     def execute(self, reservation_id: str) -> dict:
         row = self.service.reservation(reservation_id)
-        adapter = self.adapters.get((row['provider'], row['account']))
+        mode = self.service.balance(row['run_id'])['mode']
+        adapter = self.adapters.get((row['provider'], row['account'], mode))
         if adapter is None:
             raise EconomyError('adapter_unavailable', 'No trusted bounded adapter is registered', 503)
         # Quote before dispatch. Model-controlled limits are validated by trusted adapter code.

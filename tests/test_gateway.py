@@ -6,7 +6,7 @@ from widemind.economy.service import EconomyError, EconomyService
 
 
 class FixtureAdapter:
-    provider, account = 'fixture', 'sandbox'
+    provider, account, mode = 'fixture', 'sandbox', 'test'
 
     def __init__(self, receipt=None, error=None, bound=1_000_000):
         self.receipt, self.error, self.bound = receipt, error, bound
@@ -89,4 +89,33 @@ def test_new_liability_invalidates_undispatched_authorization(service):
     adapter = FixtureAdapter(UsageReceipt('not-run', 0))
     with pytest.raises(EconomyError, match='liability'):
         PaidGateway(service, [adapter]).execute(rid)
+    assert not adapter.calls
+
+
+def test_test_funding_cannot_dispatch_live_adapter(service):
+    service.record_funding('run', 10_000_000, 'test_funding', 'synthetic', 'test-grant')
+    rid = reserve(service)
+    adapter = FixtureAdapter(UsageReceipt('live-charge', 100_000))
+    adapter.mode = 'live'
+    with pytest.raises(EconomyError, match='registered'):
+        PaidGateway(service, [adapter]).execute(rid)
+    assert not adapter.calls
+    assert service.reservation(rid)['state'] == 'reserved'
+
+
+def test_mode_scoped_adapter_registration_uses_only_matching_profile(service):
+    rid = reserve(service)
+    test = FixtureAdapter(UsageReceipt('test-charge', 100_000))
+    live = FixtureAdapter(UsageReceipt('live-charge', 100_000))
+    live.mode = 'live'
+    PaidGateway(service, [test, live]).execute(rid)
+    assert len(test.calls) == 1 and not live.calls
+
+
+@pytest.mark.parametrize('mode', [None, '', 'LIVE', True])
+def test_unspecified_or_invalid_paid_adapter_mode_fails_closed(service, mode):
+    adapter = FixtureAdapter()
+    adapter.mode = mode
+    with pytest.raises(ValueError, match='mode'):
+        PaidGateway(service, [adapter])
     assert not adapter.calls

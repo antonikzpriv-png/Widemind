@@ -190,7 +190,7 @@ class EconomyService:
             return result
 
     def events(self, run_id, after=0):
-        if type(after) is not int or after < 0:
+        if type(after) is not int or not 0 <= after <= 9_223_372_036_854_775_807:
             raise EconomyError('invalid_input', 'Event cursor must be nonnegative integer', 422)
         with self._read() as db:
             self._run(db, run_id)
@@ -382,7 +382,24 @@ class EconomyService:
             original = db.execute('SELECT * FROM ledger WHERE run_id=? AND entry_id=?', (run_id, entry_id)).fetchone()
             if original is None:
                 raise EconomyError('not_found', 'Original entry not found', 404)
-            if original['kind'] in ('earned_revenue', 'infrastructure_subsidy'):
+            root = original
+            # True-up uses the authoritative subtotal projection. A separate cash
+            # correction while it is active would refund the same cost twice.
+            for _ in range(128):
+                if root['kind'] != 'correction':
+                    break
+                prior = json.loads(root['metadata']).get('corrects_entry_id')
+                root = db.execute('SELECT * FROM ledger WHERE run_id=? AND entry_id=?', (run_id, prior)).fetchone()
+                if root is None:
+                    raise EconomyError('invalid_correction_chain', 'Correction history is incomplete')
+            else:
+                raise EconomyError('correction_chain_limit', 'Correction chain exceeds the bounded review limit')
+            if root['kind'] == 'operating_charge':
+                reservation_id = json.loads(root['metadata']).get('reservation_id')
+                reservation = self._reservation(db, reservation_id)
+                if reservation['state'] != 'settled':
+                    raise EconomyError('reconciliation_required', 'Finalize the provider total before correcting a provisional charge')
+            if root['kind'] in ('earned_revenue', 'infrastructure_subsidy'):
                 raise EconomyError('noncash_correction', 'Correct performance/subsidy metrics with a signed metric entry, not a cash correction', 422)
             def action():
                 eid = self._entry(db, run_id, 'correction', amount_micro_usd, entry_id, {'reason': reason, 'corrects_entry_id': entry_id})
@@ -583,15 +600,17 @@ class EconomyService:
         with self._read() as db:
             return self._checkout(db, provider, account, mode, request_id)
 
-    def finish_checkout(self, provider, account, mode, request_id, payment_id, url):
+    def finish_checkout(self, provider, account, mode, request_id, payment_id, url=None):
         ident(payment_id)
-        if not isinstance(url, str) or len(url) > 2048 or not url.startswith('https://'):
+        if url is not None and (not isinstance(url, str) or len(url) > 2048 or not url.startswith('https://')):
             raise EconomyError('invalid_checkout_url', 'Expected HTTPS provider checkout URL', 422)
         with self._tx() as db:
             key = (provider, account, mode, request_id)
             old = self._checkout(db, *key)
-            if old['payment_id'] and (old['payment_id'], old['url']) != (payment_id, url):
+            if old['payment_id'] and (old['payment_id'] != payment_id or (old['url'] is not None and url is not None and old['url'] != url)):
                 raise EconomyError('idempotency_conflict', 'Checkout already completed differently')
+            if old['url'] is not None:
+                url = old['url']
             self._register_payment(db, old['run_id'], provider, account, mode, payment_id, old['job_id'])
             db.execute('UPDATE checkouts SET payment_id=?,url=? WHERE provider=? AND account=? AND mode=? AND request_id=?', (payment_id, url, *key))
             if old['payment_id'] is None:
