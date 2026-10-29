@@ -54,10 +54,21 @@ export interface FinancialSummary {
   holdsMicros: Micros;
   spendableMicros: string;
   customerReceiptsMicros: Micros;
-  earnedRevenueMicros: Micros;
+  /** Net performance metrics can be negative after compensating corrections. */
+  earnedRevenueMicros: string;
   operatingChargesMicros: Micros;
   ownerFundingMicros: Micros;
-  subsidiesMicros: Micros;
+  subsidiesMicros: string;
+  /** Expense sign: a negative processor fee is a verified fee credit. */
+  processorFeesMicros?: string;
+  refundsMicros?: Micros;
+  chargebacksMicros?: Micros;
+  /** Wallet sign: positive values increase cash and negative values reduce it. */
+  chargebackReversalsMicros?: string;
+  paymentAdjustmentsMicros?: string;
+  correctionsMicros?: string;
+  testFundingMicros?: Micros;
+  otherCashMicros?: string;
   mode: "live" | "sandbox";
   asOf: string;
 }

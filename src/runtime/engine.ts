@@ -392,12 +392,31 @@ export class AgentRuntime {
       );
     }
     validateReservation(reservation, action);
-    if (!receipt && (row.state === "running" || row.state === "unresolved")) {
+    const pendingState = (): "waiting" | "exhausted" =>
+      receipt &&
+      BigInt(receipt.usage.actualCharge.micros) >
+        BigInt(reservation!.limit.maximum.micros)
+        ? "exhausted"
+        : "waiting";
+    if (
+      (!receipt || receipt.usage.provisional) &&
+      (row.state === "running" || row.state === "unresolved")
+    ) {
       const reconciled = await this.dependency("tools.reconcile", () =>
         this.services.tools.reconcile(action, reservation!),
       );
       if (reconciled.kind === "receipt") receipt = reconciled.receipt;
       else if (reconciled.kind === "not_performed") {
+        if (receipt?.usage.provisional) {
+          // The previous receipt already reported outcome/usage. An observation
+          // without a final cost cannot authorize replay or erase that liability.
+          this.unresolved(
+            lease,
+            action.actionId,
+            "Provisional usage requires a final receipt before any new attempt",
+          );
+          return pendingState();
+        }
         if (!reconciled.evidenceRef || row.attempts >= 3 || !canStart())
           return "waiting";
         this.store.fenced(lease, () => {
@@ -421,7 +440,7 @@ export class AgentRuntime {
         });
       } else {
         this.unresolved(lease, action.actionId, reconciled.reason);
-        return "waiting";
+        return pendingState();
       }
     }
     if (!receipt) {
@@ -527,9 +546,19 @@ export class AgentRuntime {
     const settlement = await this.dependency("economy.settle", () =>
       this.services.economy.settle(reservation!, receipt!),
     );
+    if (receipt.usage.provisional) {
+      // Preserve and post known usage, while keeping the action recoverable.
+      // A module's acknowledgement cannot make a provisional cost final.
+      this.unresolved(
+        lease,
+        action.actionId,
+        "Provider usage remains provisional; awaiting final reconciliation",
+      );
+      return pendingState();
+    }
     if (settlement.kind !== "settled") {
       this.unresolved(lease, action.actionId, settlement.reason);
-      return "waiting";
+      return pendingState();
     }
     this.store.fenced(lease, () => {
       this.store.db

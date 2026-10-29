@@ -5,10 +5,38 @@ import type {
   PublicWebsiteData,
 } from "../contracts/index.ts";
 import { Store, publicRun } from "../runtime/store.ts";
+const optionalCashFields = [
+  "processorFeesMicros",
+  "refundsMicros",
+  "chargebacksMicros",
+  "chargebackReversalsMicros",
+  "paymentAdjustmentsMicros",
+  "correctionsMicros",
+  "testFundingMicros",
+] as const;
+const signedOptionalFields = new Set<string>([
+  "processorFeesMicros",
+  "chargebackReversalsMicros",
+  "paymentAdjustmentsMicros",
+  "correctionsMicros",
+  "otherCashMicros",
+]);
+function canonicalSummaryMicros(
+  value: unknown,
+  signed = false,
+): value is string {
+  if (typeof value !== "string") return false;
+  const digits = value.startsWith("-") ? value.slice(1) : value;
+  return (
+    digits.length <= 128 &&
+    (signed ? /^(0|-?[1-9][0-9]*)$/ : /^(0|[1-9][0-9]*)$/).test(value)
+  );
+}
 function financialProjection(
   summary: FinancialSummary | null,
 ): FinancialSummary | null {
-  if (!summary) return null;
+  if (!summary || typeof summary !== "object" || Array.isArray(summary))
+    return null;
   const {
     currency,
     openingCreditMicros,
@@ -24,7 +52,36 @@ function financialProjection(
     mode,
     asOf,
   } = summary;
-  return {
+  if (
+    currency !== "USD" ||
+    !["sandbox", "live"].includes(mode) ||
+    ![
+      openingCreditMicros,
+      reservedMicros,
+      holdsMicros,
+      customerReceiptsMicros,
+      operatingChargesMicros,
+      ownerFundingMicros,
+    ].every((value) => canonicalSummaryMicros(value)) ||
+    ![
+      postedMicros,
+      spendableMicros,
+      earnedRevenueMicros,
+      subsidiesMicros,
+    ].every((value) => canonicalSummaryMicros(value, true)) ||
+    typeof asOf !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(
+      asOf,
+    ) ||
+    !Number.isFinite(Date.parse(asOf))
+  )
+    return null;
+  if (
+    BigInt(spendableMicros) !==
+    BigInt(postedMicros) - BigInt(reservedMicros) - BigInt(holdsMicros)
+  )
+    return null;
+  const result: FinancialSummary = {
     currency,
     openingCreditMicros,
     postedMicros,
@@ -39,6 +96,37 @@ function financialProjection(
     mode,
     asOf,
   };
+  for (const key of [...optionalCashFields, "otherCashMicros"] as const) {
+    const value = summary[key];
+    if (value === undefined) continue;
+    if (!canonicalSummaryMicros(value, signedOptionalFields.has(key)))
+      return null;
+    Object.assign(result, { [key]: value });
+  }
+  // Legacy summaries may omit categories. Once the full breakdown is supplied,
+  // require the same cash equation as the authoritative append-only ledger.
+  if (optionalCashFields.every((key) => summary[key] !== undefined)) {
+    const cash = (
+      key: (typeof optionalCashFields)[number] | "otherCashMicros",
+    ) => BigInt(summary[key] ?? "0");
+    if (
+      BigInt(postedMicros) !==
+      BigInt(openingCreditMicros) +
+        BigInt(ownerFundingMicros) +
+        BigInt(customerReceiptsMicros) -
+        BigInt(operatingChargesMicros) +
+        cash("testFundingMicros") +
+        cash("chargebackReversalsMicros") +
+        cash("paymentAdjustmentsMicros") +
+        cash("correctionsMicros") +
+        cash("otherCashMicros") -
+        cash("processorFeesMicros") -
+        cash("refundsMicros") -
+        cash("chargebacksMicros")
+    )
+      return null;
+  }
+  return result;
 }
 export async function publicProjection(
   store: Store,
