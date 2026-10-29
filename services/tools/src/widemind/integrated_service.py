@@ -74,7 +74,7 @@ class EconomyClient:
     def settle(self,id,receipt):
         usage=receipt['usage']
         # Provisional tariff costs stay an unknown liability until reconciled.
-        return self.request('POST','/v1/reservations/'+urlquote(id,safe='')+'/settle',{'actual_micro_usd':integer(usage['actualCharge']['micros']),'provider':usage['provider'],'account':usage['accountRef'],'external_charge_id':usage['externalEventId'],'usage':usage,'outcome':'unknown' if usage['provisional'] else receipt['status']})
+        return self.request('POST','/v1/reservations/'+urlquote(id,safe='')+'/settle',{'actual_micro_usd':integer(usage['actualCharge']['micros']),'provider':usage['provider'],'account':usage['accountRef'],'external_charge_id':usage['externalEventId'],'usage':{'evidence_ref':usage['evidenceRef'],'billable_failure':1 if usage['billableFailure'] else 0},'outcome':'unknown' if usage['provisional'] else receipt['status']})
 
 
 class OwnerSecrets:

@@ -144,3 +144,25 @@ class ServiceRedirectIntegration(unittest.TestCase):
         finally:
             for service in [other,redirect]:service.shutdown();service.server_close()
             for thread in threads:thread.join()
+
+class EconomySchemaIntegration(unittest.TestCase):
+    def test_settlement_uses_flat_primitive_usage_metadata(self):
+        from widemind.integrated_service import EconomyClient
+        client=EconomyClient('http://127.0.0.1:8080','fixture-gateway-token-'+('x'*32));requests=[]
+        client.request=lambda method,path,data=None: requests.append((method,path,data)) or {}
+        receipt={'status':'succeeded','usage':{'actualCharge':{'currency':'USD','micros':'0'},'provider':'graphics.create','accountRef':'dedicated-tools','externalEventId':'action-schema','evidenceRef':'tools-journal:action-schema','billableFailure':False,'provisional':False}}
+        client.settle('reservation-schema',receipt);body=requests[0][2]
+        self.assertEqual(body['usage'],{'evidence_ref':'tools-journal:action-schema','billable_failure':0})
+        self.assertTrue(all(type(value) in (str,int) for value in body['usage'].values()))
+        self.assertEqual(body['actual_micro_usd'],0)
+    def test_actual_economy_strict_settle_schema_accepts_tool_metadata(self):
+        import os,subprocess
+        from widemind.integrated_service import EconomyClient
+        executable=Path(os.environ.get('WIDEMIND_TEST_ECONOMY_PYTHON',str(Path(__file__).resolve().parents[3]/'.venvs/economy/bin/python')))
+        if not executable.is_file():self.skipTest('Install the separate economy venv for the cross-package strict-schema check')
+        client=EconomyClient('http://127.0.0.1:8080','fixture-gateway-token-'+('x'*32));requests=[];client.request=lambda method,path,data=None: requests.append(data) or {}
+        for provisional in (False,True):
+            client.settle('reservation-schema',{'status':'failed' if provisional else 'succeeded','usage':{'actualCharge':{'currency':'USD','micros':'4' if provisional else '0'},'provider':'graphics.create','accountRef':'dedicated-tools','externalEventId':'action-schema','evidenceRef':'tools-journal:action-schema','billableFailure':provisional,'provisional':provisional}})
+        script='import json,sys; from widemind.economy.app import SettleInput; [SettleInput.model_validate(value) for value in json.load(sys.stdin)]; print("strict-schema-accepted")'
+        result=subprocess.run([str(executable),'-c',script],input=json.dumps(requests),text=True,capture_output=True,timeout=15,env={key:value for key,value in os.environ.items() if key!='PYTHONPATH'})
+        self.assertEqual(result.returncode,0,result.stderr);self.assertIn('strict-schema-accepted',result.stdout)
