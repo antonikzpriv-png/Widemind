@@ -179,6 +179,8 @@ class OpenAIResearch:
                 raise ValueError("whole source-collection deadline exceeded")
             if response.status != 200:
                 raise ValueError("source unavailable; redirects are not followed")
+            if response.headers.get("content-encoding", "identity").lower() not in {"", "identity"}:
+                raise ValueError("compressed source needs a separately bounded extraction adapter")
             kind = response.headers.get("content-type", "").split(";", 1)[0].lower()
             decoded = response.body.decode("utf-8", errors="replace")
             if kind in {"text/html", "application/xhtml+xml"}:
@@ -245,6 +247,20 @@ class OpenAIResearch:
                                   reason="runtime or capability changed before OpenAI dispatch")
         except TransportError:
             return ProviderResult("unknown", reason="OpenAI outcome unknown; retain authorization and reconcile")
+        if response.status != 200:
+            # An error status is not proof of free execution. Preserve any
+            # provider-supplied usage evidence, including billed failures.
+            try:
+                error_data = response.json()
+                if "usage" in error_data:
+                    reference = single_line(error_data.get("id") or response.headers.get("x-request-id"), "provider error reference", 300)
+                    usage = error_data["usage"]
+                    actual = self.cost(usage["prompt_tokens"], usage["completion_tokens"],
+                                       usage.get("prompt_tokens_details", {}).get("cached_tokens", 0))
+                    return ProviderResult("failed", actual_micro_usd=actual, reference=reference,
+                                          reason="provider error included billable usage evidence")
+            except (ValueError, TypeError, KeyError, AttributeError):
+                return ProviderResult("unknown", reason="error response does not establish reliable usage evidence")
         if response.status in {400, 401, 403, 404, 413, 422, 429}:
             return ProviderResult("failed", actual_micro_usd=0, reference=f"openai-rejected:{response.status}:{action_id}",
                                   reason="OpenAI rejected the request before a completion")

@@ -68,6 +68,7 @@ class FixtureTransport:
         self.send_uncertain = False
         self.openai_uncertain = False
         self.openai_finish = "stop"
+        self.openai_status = 200
         self.cached_tokens = 0
         self.inbox = []
         self.after_source = None
@@ -104,7 +105,7 @@ class FixtureTransport:
             self.stored_completion = completion
             if self.openai_uncertain:
                 raise TransportError("explicit fixture lost completion response")
-            return response(completion)
+            return response(completion, status=self.openai_status)
         if method == "GET" and url.startswith("https://example.com/"):
             if self.after_source:
                 self.after_source()
@@ -437,6 +438,13 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(len(self.economy.authorizations), 2)
         self.assertEqual(self.model_calls(), 0)
         self.assertEqual(self.economy.settlements[-1]["actual_micro_usd"], 0)
+
+    def test_provider_error_with_explicit_usage_does_not_become_free_failure(self):
+        self.transport.openai_status = 429
+        result = self.execute()
+        self.assertEqual(result.state, "failed")
+        self.assertEqual(self.economy.settlements[0]["actual_micro_usd"], 104)
+        self.assertEqual(self.economy.settlements[0]["evidence_reference"], "chatcmpl_TEST_ONLY")
 
     def test_credentials_do_not_appear_in_journal_or_config_repr(self):
         self.execute()
