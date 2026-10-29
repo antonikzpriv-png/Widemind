@@ -10,7 +10,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from .service import EconomyError, EconomyService, money
+from .service import EconomyError, EconomyService, encode, money
 
 
 @dataclass(frozen=True)
@@ -74,8 +74,17 @@ class PaidGateway:
             receipt = adapter.execute(limits=limits, idempotency_key=reservation_id)
             if not isinstance(receipt, UsageReceipt):
                 raise TypeError('Adapter returned no authoritative usage receipt')
+            # Optional provider diagnostics must never suppress a known liability.
+            # Leave room for the journal/event envelope around the usage object.
+            try:
+                usage = receipt.usage
+                encoded_usage = encode(usage)
+                if not isinstance(usage, dict) or len(encoded_usage.encode()) > 16_384:
+                    raise ValueError('Oversized or non-object usage')
+            except (EconomyError, ValueError):
+                usage = {'usage_omitted': True, 'reason': 'invalid_or_oversized_provider_diagnostics'}
             return self.service.settle(reservation_id, receipt.actual_micro_usd, row['provider'], row['account'],
-                                       receipt.external_charge_id, usage=receipt.usage, outcome=receipt.outcome)
+                                       receipt.external_charge_id, usage=usage, outcome=receipt.outcome)
         except BaseException:
             # Dispatch was durable before the call. Timeout/cancellation/bad response is
             # not evidence of free execution; preserve authorization for reconciliation.

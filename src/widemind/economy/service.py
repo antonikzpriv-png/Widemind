@@ -71,11 +71,32 @@ class EconomyService:
         os.close(fd)
         with self._initial_connection() as connection:
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, 2):
                 raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
             connection.execute('PRAGMA journal_mode=WAL')
-            script = (Path(__file__).parent / 'migrations/001_economy.sql').read_text()
-            connection.executescript('BEGIN IMMEDIATE;\n' + script + '\nPRAGMA user_version=1;\nCOMMIT;')
+            connection.execute('BEGIN IMMEDIATE')
+            try:
+                # Recheck after acquiring the migration lock: another process may
+                # already have upgraded while this connection waited.
+                version = connection.execute('PRAGMA user_version').fetchone()[0]
+                if version not in (0, 1, 2):
+                    raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
+                migrations = ('001_economy.sql', '002_reconciliation_queue.sql')
+                for target in range(version + 1, len(migrations) + 1):
+                    script = (Path(__file__).parent / 'migrations' / migrations[target-1]).read_text()
+                    statement = ''
+                    for line in script.splitlines(keepends=True):
+                        statement += line
+                        if sqlite3.complete_statement(statement):
+                            connection.execute(statement)
+                            statement = ''
+                    if statement.strip():
+                        raise EconomyError('invalid_migration', 'Incomplete accounting migration')
+                    connection.execute(f'PRAGMA user_version={target}')
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
 
     @contextmanager
     def _initial_connection(self):
