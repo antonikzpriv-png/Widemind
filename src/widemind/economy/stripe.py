@@ -10,6 +10,9 @@ import hashlib
 import hmac
 import json
 import time
+from contextvars import ContextVar
+from dataclasses import dataclass
+from functools import wraps
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
@@ -22,6 +25,33 @@ API_VERSION = "2024-06-20"
 MAX_WEBHOOK_BYTES = 1_048_576
 MAX_PAGES = 100
 MICRO_PER_CENT = 10_000
+MAX_OPERATION_REQUESTS = 256
+OPERATION_SECONDS = 60.0
+MAX_PROVIDER_BYTES = 2_097_152
+
+
+@dataclass
+class _OperationBudget:
+    owner: object
+    deadline: float
+    requests: int = 0
+
+
+_operation_budget: ContextVar[_OperationBudget | None] = ContextVar("stripe_operation_budget", default=None)
+
+
+def _bounded_operation(method):
+    @wraps(method)
+    def bounded(self, *args, **kwargs):
+        current = _operation_budget.get()
+        if current is not None and current.owner is self:
+            return method(self, *args, **kwargs)
+        token = _operation_budget.set(_OperationBudget(self, self._monotonic() + OPERATION_SECONDS))
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            _operation_budget.reset(token)
+    return bounded
 
 
 def _integer(value: Any, name: str) -> int:
@@ -42,12 +72,25 @@ def _id(value: Any) -> str | None:
     return value.get("id") if isinstance(value, dict) else value
 
 
+def _checkout_url(value: Any) -> str:
+    try:
+        if not isinstance(value, str) or len(value) > 2048 or any(ord(char) < 32 for char in value):
+            raise ValueError("Invalid hosted URL")
+        parsed = urlsplit(value)
+        if (parsed.scheme != "https" or parsed.hostname != "checkout.stripe.com" or parsed.username or parsed.password
+                or (parsed.port is not None and parsed.port != 443)):
+            raise ValueError("Invalid hosted URL")
+    except (TypeError, ValueError):
+        raise EconomyError("invalid_provider_record", "Stripe did not return a valid hosted checkout URL", 502) from None
+    return value
+
+
 class StripePayments:
     """A configured Stripe business account. Keep this instance outside agent access."""
 
     def __init__(self, service, *, api_key: str, account: str, mode: str,
                  webhook_secret: str, success_url: str, cancel_url: str,
-                 client: httpx.Client | None = None, clock=time.time):
+                 client: httpx.Client | None = None, clock=time.time, monotonic=time.monotonic):
         if mode not in {"test", "live"}:
             raise EconomyError("invalid_config", "Stripe mode must be test or live", 422)
         if not api_key.startswith((f"sk_{mode}_", f"rk_{mode}_")):
@@ -67,6 +110,7 @@ class StripePayments:
         self.success_url = success_url
         self.cancel_url = cancel_url
         self.clock = clock
+        self._monotonic = monotonic
         self._owns_client = client is None
         self.client = client or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=False)
         self._headers = {"Authorization": f"Bearer {api_key}", "Stripe-Account": account, "Stripe-Version": API_VERSION}
@@ -76,23 +120,42 @@ class StripePayments:
         if self._owns_client:
             self.client.close()
 
+    @_bounded_operation
     def _request(self, method: str, path: str, *, params=None, data=None, idempotency_key=None) -> dict:
+        budget = _operation_budget.get()
+        remaining = budget.deadline - self._monotonic()
+        if remaining <= 0 or budget.requests >= MAX_OPERATION_REQUESTS:
+            raise EconomyError("provider_operation_budget", "Stripe operation exceeded its bounded request/time budget; reconciliation remains pending", 503)
+        budget.requests += 1
         headers = dict(self._headers)
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
+        timeout = httpx.Timeout(min(20.0, remaining), connect=min(10.0, remaining))
         try:
-            response = self.client.request(method, f"https://api.stripe.com/v1{path}", headers=headers, params=params, data=data)
+            # Bound body memory and inspect the monotonic budget between chunks.
+            # Redirects remain disabled even for an externally configured client.
+            with self.client.stream(method, f"https://api.stripe.com/v1{path}", headers=headers, params=params,
+                                    data=data, timeout=timeout, follow_redirects=False) as response:
+                if response.status_code == 429 or response.status_code >= 500:
+                    raise EconomyError("provider_unavailable", "Stripe is temporarily unavailable; reconciliation remains pending", 503)
+                if not 200 <= response.status_code < 300:
+                    raise EconomyError("provider_rejected", f"Stripe rejected the request (HTTP {response.status_code})", 502)
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    if self._monotonic() >= budget.deadline:
+                        raise EconomyError("provider_operation_budget", "Stripe operation exceeded its time budget; reconciliation remains pending", 503)
+                    if len(body) + len(chunk) > MAX_PROVIDER_BYTES:
+                        raise EconomyError("invalid_provider_record", "Stripe response exceeded the bounded body limit", 502)
+                    body.extend(chunk)
         except httpx.HTTPError:
             # Do not include request/response bodies, keys, customer records or
             # URLs in public errors. The durable checkout claim survives this.
             raise EconomyError("provider_unavailable", "Stripe outcome is unknown; reconcile before retrying", 503) from None
-        if response.status_code == 429 or response.status_code >= 500:
-            raise EconomyError("provider_unavailable", "Stripe is temporarily unavailable; reconciliation remains pending", 503)
-        if response.status_code >= 400:
-            raise EconomyError("provider_rejected", f"Stripe rejected the request (HTTP {response.status_code})", 502)
+        if self._monotonic() >= budget.deadline:
+            raise EconomyError("provider_operation_budget", "Stripe operation exceeded its time budget; reconciliation remains pending", 503)
         try:
-            result = response.json()
-        except ValueError:
+            result = json.loads(body)
+        except (ValueError, UnicodeDecodeError, RecursionError):
             raise EconomyError("invalid_provider_record", "Stripe returned invalid JSON", 502) from None
         if not isinstance(result, dict):
             raise EconomyError("invalid_provider_record", "Stripe returned an unexpected response", 502)
@@ -101,6 +164,7 @@ class StripePayments:
             raise EconomyError("invalid_provider_record", "Stripe response identity differs from the requested object", 502)
         return result
 
+    @_bounded_operation
     def verify_setup(self) -> dict:
         account = self._request("GET", "/account")
         if account.get("id") != self.account:
@@ -120,6 +184,7 @@ class StripePayments:
         if record.get("livemode") is not (self.mode == "live"):
             raise EconomyError("provider_mode_mismatch", "Stripe object is from a different mode", 502)
 
+    @_bounded_operation
     def create_checkout(self, run_id: str, request_id: str, job_id: str | None,
                         amount_micro_usd: int, description: str = "WideMind order") -> dict:
         if isinstance(amount_micro_usd, bool) or not isinstance(amount_micro_usd, int) or amount_micro_usd <= 0 or amount_micro_usd % MICRO_PER_CENT:
@@ -131,7 +196,9 @@ class StripePayments:
         details = {"description": description, "success_url": self.success_url, "cancel_url": self.cancel_url}
         claim = self.service.record_checkout(run_id, "stripe", self.account, self.mode,
                                              request_id, job_id, amount_micro_usd, details)
-        if claim.get("payment_id") and claim.get("url"):
+        if claim.get("payment_id"):
+            # Recovery can bind a completed session whose hosted URL is now null.
+            # A bound payment is never permission to create another session.
             return claim
         created_at = claim.get("created_at")
         if not isinstance(created_at, str):
@@ -143,7 +210,7 @@ class StripePayments:
         if self.clock() - created > 23 * 3600:
             raise EconomyError("checkout_reconciliation_required", "Checkout request exceeded the safe Stripe retry window; reconcile it manually", 409)
         self._ensure_setup()
-        request_key = hashlib.sha256(json.dumps(["stripe", self.account, self.mode, run_id, request_id], separators=(",", ":")).encode()).hexdigest()
+        request_key = self._checkout_request_key(run_id, request_id)
         record = self._request("POST", "/checkout/sessions", idempotency_key=f"widemind-{request_key}", data={
             "mode": "payment", "success_url": self.success_url, "cancel_url": self.cancel_url,
             "client_reference_id": request_key, "metadata[widemind_request]": request_key,
@@ -154,10 +221,64 @@ class StripePayments:
         })
         self._assert_mode(record)
         payment_id = _identifier(record.get("id"), "cs_")
-        url = record.get("url")
-        if not isinstance(url, str) or urlsplit(url).scheme != "https" or urlsplit(url).hostname != "checkout.stripe.com":
-            raise EconomyError("invalid_provider_record", "Stripe did not return a hosted checkout URL", 502)
+        url = _checkout_url(record.get("url"))
         return self.service.finish_checkout("stripe", self.account, self.mode, request_id, payment_id, url)
+
+    def _checkout_request_key(self, run_id: str, request_id: str) -> str:
+        return hashlib.sha256(json.dumps(["stripe", self.account, self.mode, run_id, request_id], separators=(",", ":")).encode()).hexdigest()
+
+    @_bounded_operation
+    def recover_checkout(self, request_id: str) -> dict:
+        """Bind one existing authenticated session after an uncertain checkout POST.
+
+        This method never creates a Stripe object or posts cash. It deliberately
+        works after Stripe's idempotency retention window: recovery only reads.
+        The local durable claim plus the request hash, amount, mode and creation
+        window establish the binding; an event/metadata field alone cannot do so.
+        """
+        claim = self.service.checkout("stripe", self.account, self.mode, request_id)
+        if claim.get("payment_id"):
+            return claim
+        try:
+            timestamp = datetime.fromisoformat(claim["created_at"].replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                raise ValueError("Missing creation timezone")
+            created = int(timestamp.timestamp())
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise EconomyError("checkout_reconciliation_required", "Checkout creation time is invalid; operator inspection is required", 409) from None
+        if created < 0 or created > int(self.clock()) + 300:
+            raise EconomyError("checkout_reconciliation_required", "Checkout creation time is outside the valid recovery range", 409)
+        # create_checkout permits POST retries only during the first 23 hours.
+        # Five minutes on either side permits ordinary local/provider clock skew.
+        start, end = max(0, created - 300), created + 23 * 3600 + 300
+        request_key = self._checkout_request_key(claim["run_id"], request_id)
+        self._ensure_setup()
+        candidates = []
+        for item in self._list("/checkout/sessions", {"created[gte]": start, "created[lte]": end}):
+            metadata = item.get("metadata")
+            if item.get("client_reference_id") == request_key and isinstance(metadata, dict) and metadata.get("widemind_request") == request_key:
+                candidates.append(_identifier(item.get("id"), "cs_"))
+        if len(candidates) != 1:
+            raise EconomyError("checkout_not_found" if not candidates else "checkout_ambiguous",
+                               "Recovery requires exactly one existing Stripe checkout for the durable request",
+                               404 if not candidates else 409)
+        session = self._request("GET", f"/checkout/sessions/{candidates[0]}")
+        self._assert_mode(session)
+        metadata = session.get("metadata")
+        session_created = _integer(session.get("created"), "checkout creation time")
+        if (session.get("mode") != "payment" or session.get("currency") != "usd"
+                or session.get("status") not in {"open", "complete", "expired"}
+                or session.get("client_reference_id") != request_key or not isinstance(metadata, dict)
+                or metadata.get("widemind_request") != request_key
+                or not start <= session_created <= end
+                or _integer(session.get("amount_total"), "checkout total") * MICRO_PER_CENT != claim["amount_micro_usd"]):
+            raise EconomyError("checkout_recovery_mismatch", "Existing Stripe checkout does not match the durable request", 409)
+        url = session.get("url")
+        if url is not None:
+            url = _checkout_url(url)
+        elif session["status"] == "open":
+            raise EconomyError("invalid_provider_record", "An open Stripe checkout is missing its hosted URL", 502)
+        return self.service.finish_checkout("stripe", self.account, self.mode, request_id, session["id"], url)
 
     def verify_webhook(self, raw_body: bytes, signature: str) -> tuple[dict, str]:
         if not isinstance(raw_body, bytes) or len(raw_body) > MAX_WEBHOOK_BYTES or not isinstance(signature, str) or len(signature) > 8192:
@@ -189,8 +310,26 @@ class StripePayments:
             raise EconomyError("provider_account_mismatch", "Stripe event is for a different account", 400)
         return event, hashlib.sha256(raw_body).hexdigest()
 
+    @_bounded_operation
     def handle_webhook(self, raw_body: bytes, stripe_signature: str) -> dict:
         event, digest = self.verify_webhook(raw_body, stripe_signature)
+        return self.process_verified_event(event, digest)
+
+    @_bounded_operation
+    def process_verified_event(self, event: dict, event_digest: str) -> dict:
+        """Dispatch a previously authenticated event from the trusted durable inbox.
+
+        Never expose this method directly to an unverified HTTP request or model.
+        Signature verification occurs at inbox admission; queued processing may
+        legitimately happen after the original five-minute delivery window.
+        """
+        if (not isinstance(event, dict) or not isinstance(event_digest, str) or len(event_digest) != 64
+                or any(c not in "0123456789abcdef" for c in event_digest)):
+            raise EconomyError("invalid_webhook", "Invalid verified event record", 400)
+        _identifier(event.get("id"), "evt_")
+        self._assert_mode(event)
+        if event.get("account", self.account) != self.account:
+            raise EconomyError("provider_account_mismatch", "Stripe event is for a different account", 400)
         event_type = event.get("type", "")
         if not isinstance(event_type, str) or len(event_type) > 200:
             raise EconomyError("invalid_webhook", "Stripe event type is invalid", 400)
@@ -212,7 +351,7 @@ class StripePayments:
         else:
             return {"accepted": True, "handled": False, "reason": "unsupported_event", "event_id": event["id"]}
         self._ensure_setup()
-        result = self.reconcile(payment_id, event_id=event["id"], event_digest=digest)
+        result = self.reconcile(payment_id, event_id=event["id"], event_digest=event_digest)
         return {"accepted": True, "handled": True, "event_id": event["id"], "payment": result}
 
     def _list(self, path: str, params: dict) -> list[dict]:
@@ -286,6 +425,7 @@ class StripePayments:
         result["native"]["source"] = source_id
         return result
 
+    @_bounded_operation
     def reconcile(self, payment_id: str, *, event_id=None, event_digest=None) -> dict:
         payment_id = _identifier(payment_id, "cs_")
         self._ensure_setup()

@@ -436,3 +436,286 @@ def test_legacy_charge_refund_updated_event_maps_refund_object(setup):
     stripe.records["/refunds/re_fixture"] = {"id": "re_fixture", "charge": "ch_fixture"}
     adapter.handle_webhook(*signed(event("charge.refund.updated", "re_fixture")))
     assert service.balance("run")["posted_micro_usd"] == 14_410_000
+
+
+# Recovery fixtures are authenticated synthetic Stripe records, never live payments.
+def recovery_fixture(setup, *, request="lost-request", status="open", url="https://checkout.stripe.com/c/pay/recovered"):
+    service, stripe, adapter = setup
+    claim = service.record_checkout("run", "stripe", ACCOUNT, "test", request, "job", 10_000_000,
+                                    {"description": "WideMind order", "success_url": adapter.success_url, "cancel_url": adapter.cancel_url})
+    created = int(datetime.fromisoformat(claim["created_at"]).timestamp())
+    request_key = hashlib.sha256(json.dumps(["stripe", ACCOUNT, "test", "run", request], separators=(",", ":")).encode()).hexdigest()
+    session = dict(stripe.records["/checkout/sessions/cs_fixture"], id="cs_recovered", created=created,
+                   client_reference_id=request_key, metadata={"widemind_request": request_key}, status=status, url=url)
+    stripe.records["/checkout/sessions/cs_recovered"] = session
+    stripe.records["/checkout/sessions/cs_fixture"] = session
+    return claim, session
+
+
+def test_recover_after_safe_post_window_reads_existing_session_without_new_post(setup):
+    service, stripe, adapter = setup
+    claim, session = recovery_fixture(setup)
+    adapter.clock = lambda: time.time()+25*3600
+    result = adapter.recover_checkout("lost-request")
+    assert result["payment_id"] == "cs_recovered" and result["url"] == session["url"]
+    assert service.payment("stripe", ACCOUNT, "test", "cs_recovered")["run_id"] == "run"
+    assert service.balance("run")["posted_micro_usd"] == 5_000_000
+    assert not stripe.checkout_keys and all(call[0] == "GET" for call in stripe.calls)
+    listing = next(call for call in stripe.calls if call[1] == "/checkout/sessions")
+    assert listing[2]["created[gte]"] == str(session["created"]-300)
+    assert listing[2]["created[lte]"] == str(session["created"]+23*3600+300)
+    calls = list(stripe.calls)
+    assert adapter.recover_checkout("lost-request") == result and stripe.calls == calls
+    # Repeating normal creation after recovery also cannot create another session.
+    assert adapter.create_checkout("run", "lost-request", "job", 10_000_000) == result
+    assert not stripe.checkout_keys
+
+
+@pytest.mark.parametrize("status", ["complete", "expired"])
+def test_recover_completed_session_without_hosted_url_and_do_not_repost(status, setup):
+    service, stripe, adapter = setup
+    recovery_fixture(setup, status=status, url=None)
+    result = adapter.recover_checkout("lost-request")
+    assert result["payment_id"] == "cs_recovered" and result["url"] is None
+    assert adapter.create_checkout("run", "lost-request", "job", 10_000_000) == result
+    assert not stripe.checkout_keys
+    assert service.balance("run")["posted_micro_usd"] == 5_000_000
+
+
+@pytest.mark.parametrize("mutation", [
+    {"amount_total": 999}, {"currency": "eur"}, {"livemode": True}, {"mode": "subscription"},
+    {"created": 0}, {"created": 10**20}, {"created": True}, {"created": 1.5}, {"status": "unknown"},
+    {"client_reference_id": "other"}, {"metadata": {"widemind_request": "other"}},
+])
+def test_recovery_rejects_existing_record_mismatches_without_binding(mutation, setup):
+    service, stripe, adapter = setup
+    _, session = recovery_fixture(setup)
+    session.update(mutation)
+    with pytest.raises(EconomyError):
+        adapter.recover_checkout("lost-request")
+    assert service.checkout("stripe", ACCOUNT, "test", "lost-request")["payment_id"] is None
+    assert service.balance("run")["posted_micro_usd"] == 5_000_000 and not stripe.checkout_keys
+
+
+def test_recovery_revalidates_fresh_get_instead_of_trusting_list(setup):
+    service, stripe, adapter = setup
+    _, session = recovery_fixture(setup)
+    def stale_list(request, path):
+        if path == "/checkout/sessions":
+            listed = dict(session)
+            session["amount_total"] = 999
+            return httpx.Response(200, json={"data": [listed], "has_more": False})
+    stripe.extra = stale_list
+    with pytest.raises(EconomyError) as exc:
+        adapter.recover_checkout("lost-request")
+    assert exc.value.code == "checkout_recovery_mismatch"
+    assert service.checkout("stripe", ACCOUNT, "test", "lost-request")["payment_id"] is None
+
+
+def test_recovery_requires_exactly_one_match_across_complete_pagination(setup):
+    service, stripe, adapter = setup
+    _, session = recovery_fixture(setup)
+    def duplicates(request, path):
+        if path == "/checkout/sessions":
+            first = request.url.params.get("starting_after") is None
+            item = dict(session, id="cs_first" if first else "cs_second")
+            return httpx.Response(200, json={"data": [item], "has_more": first})
+    stripe.extra = duplicates
+    with pytest.raises(EconomyError) as exc:
+        adapter.recover_checkout("lost-request")
+    assert exc.value.code == "checkout_ambiguous"
+    assert sum(call[1] == "/checkout/sessions" for call in stripe.calls) == 2
+    assert service.checkout("stripe", ACCOUNT, "test", "lost-request")["payment_id"] is None
+    assert not stripe.checkout_keys
+
+
+def test_recovery_does_not_bind_from_partial_listing(setup):
+    service, stripe, adapter = setup
+    _, session = recovery_fixture(setup)
+    def incomplete(request, path):
+        if path == "/checkout/sessions":
+            if request.url.params.get("starting_after") is None:
+                return httpx.Response(200, json={"data": [session], "has_more": True})
+            return httpx.Response(200, json={"data": [], "has_more": True})
+    stripe.extra = incomplete
+    with pytest.raises(EconomyError) as exc:
+        adapter.recover_checkout("lost-request")
+    assert exc.value.code == "incomplete_provider_snapshot"
+    assert service.checkout("stripe", ACCOUNT, "test", "lost-request")["payment_id"] is None
+
+
+def test_recovery_without_matching_provider_object_keeps_unknown_request(setup):
+    service, stripe, adapter = setup
+    recovery_fixture(setup)
+    stripe.records["/checkout/sessions/cs_fixture"]["client_reference_id"] = "unrelated"
+    with pytest.raises(EconomyError) as exc:
+        adapter.recover_checkout("lost-request")
+    assert exc.value.code == "checkout_not_found"
+    assert service.checkout("stripe", ACCOUNT, "test", "lost-request")["payment_id"] is None
+    assert not stripe.checkout_keys
+
+
+@pytest.mark.parametrize("url", [None, "http://checkout.stripe.com/x", "https://other.invalid/x", "https://user@checkout.stripe.com/x", "https://checkout.stripe.com:0/x", "https://checkout.stripe.com:wrong/x", "https://checkout.stripe.com:444/x", "https://checkout.stripe.com/\nsecret"])
+def test_recovery_open_session_requires_safe_hosted_url(url, setup):
+    service, stripe, adapter = setup
+    recovery_fixture(setup, url=url)
+    with pytest.raises(EconomyError):
+        adapter.recover_checkout("lost-request")
+    assert service.checkout("stripe", ACCOUNT, "test", "lost-request")["payment_id"] is None
+
+
+def test_webhook_before_local_binding_remains_retryable_until_explicit_recovery(setup):
+    service, stripe, adapter = setup
+    recovery_fixture(setup)
+    raw, signature = signed(event(identifier="cs_recovered"))
+    with pytest.raises(EconomyError) as exc:
+        adapter.handle_webhook(raw, signature)
+    assert exc.value.status == 404
+    assert service.balance("run")["posted_micro_usd"] == 5_000_000
+    adapter.recover_checkout("lost-request")
+    adapter.handle_webhook(raw, signature)
+    assert service.balance("run")["posted_micro_usd"] == 14_410_000
+
+
+def test_durable_verified_event_processes_after_original_delivery_timestamp_expires(setup):
+    service, stripe, adapter = setup
+    raw, signature = signed(event())
+    verified, digest = adapter.verify_webhook(raw, signature)
+    adapter.clock = lambda: time.time()+3600
+    with pytest.raises(EconomyError, match="allowed window"):
+        adapter.verify_webhook(raw, signature)
+    minimal = {"id": verified["id"], "type": verified["type"], "livemode": verified["livemode"],
+               "data": {"object": {"id": verified["data"]["object"]["id"]}}}
+    result = adapter.process_verified_event(minimal, digest)
+    assert result["handled"] is True
+    assert service.balance("run")["posted_micro_usd"] == 14_410_000
+    adapter.process_verified_event(minimal, digest)
+    assert service.balance("run")["posted_micro_usd"] == 14_410_000
+
+
+@pytest.mark.parametrize("digest", [None, "", "x"*64, "é"*64, "1"*63])
+def test_verified_queue_dispatch_still_rejects_invalid_digest(digest, setup):
+    _, stripe, adapter = setup
+    with pytest.raises(EconomyError):
+        adapter.process_verified_event(event(), digest)
+    assert not stripe.calls
+
+
+@pytest.mark.parametrize("url", ["https://user@checkout.stripe.com/pay/x", "https://checkout.stripe.com:0/pay/x", "https://checkout.stripe.com:wrong/pay/x", "https://checkout.stripe.com/\nsecret"])
+def test_checkout_creation_rejects_unsafe_hosted_url(url, setup):
+    service, stripe, adapter = setup
+    def bad_url(request, path):
+        if request.method == "POST" and path == "/checkout/sessions":
+            return httpx.Response(200, json={"id": "cs_badurl", "livemode": False, "url": url})
+    stripe.extra = bad_url
+    with pytest.raises(EconomyError) as exc:
+        adapter.create_checkout("run", "badurl", "job", 10_000_000)
+    assert exc.value.code == "invalid_provider_record"
+    assert service.checkout("stripe", ACCOUNT, "test", "badurl")["payment_id"] is None
+
+
+def test_nested_verified_dispatch_shares_one_request_budget_and_preserves_cash_on_exhaustion(setup, monkeypatch):
+    import widemind.economy.stripe as module
+    service, stripe, adapter = setup
+    monkeypatch.setattr(module, 'MAX_OPERATION_REQUESTS', 4)
+    with pytest.raises(EconomyError) as exc:
+        adapter.handle_webhook(*signed(event()))
+    assert exc.value.code == 'provider_operation_budget'
+    assert len(stripe.calls) == 4
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+    # A later operator/queue retry starts a new bounded attempt, never a partial posting.
+    monkeypatch.setattr(module, 'MAX_OPERATION_REQUESTS', 16)
+    adapter.handle_webhook(*signed(event()))
+    assert service.balance('run')['posted_micro_usd'] == 14_410_000
+
+
+def test_elapsed_provider_budget_fails_before_posting_and_later_operation_can_retry(setup):
+    service, stripe, adapter = setup
+    elapsed = [0.0]
+    adapter._monotonic = lambda: elapsed[0]
+    def expired(request, path):
+        if path == '/account':
+            elapsed[0] = 61.0
+    stripe.extra = expired
+    with pytest.raises(EconomyError) as exc:
+        adapter.reconcile('cs_fixture')
+    assert exc.value.code == 'provider_operation_budget'
+    assert len(stripe.calls) == 1
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+    stripe.extra = None
+    adapter.reconcile('cs_fixture')
+    assert service.balance('run')['posted_micro_usd'] == 14_410_000
+
+
+def test_each_provider_timeout_is_limited_to_remaining_operation_budget(setup):
+    service, stripe, adapter = setup
+    elapsed, timeouts = [0.0], []
+    adapter._monotonic = lambda: elapsed[0]
+    def near_deadline(request, path):
+        timeouts.append(request.extensions['timeout'])
+        if path == '/account':
+            elapsed[0] = 55.0
+    stripe.extra = near_deadline
+    adapter.reconcile('cs_fixture')
+    assert timeouts[0]['read'] == 20.0 and timeouts[0]['connect'] == 10.0
+    assert all(timeout['read'] == 5.0 and timeout['connect'] == 5.0 for timeout in timeouts[1:])
+    assert service.balance('run')['posted_micro_usd'] == 14_410_000
+
+
+def test_concurrent_operations_on_shared_adapter_have_independent_budgets(setup, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    import widemind.economy.stripe as module
+    _, stripe, adapter = setup
+    monkeypatch.setattr(module, 'MAX_OPERATION_REQUESTS', 1)
+    barrier = Barrier(2)
+    def parallel(request, path):
+        assert path == '/account'
+        barrier.wait(timeout=5)
+    stripe.extra = parallel
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(adapter.verify_setup) for _ in range(2)]
+        assert [future.result(timeout=10)['account'] for future in futures] == [ACCOUNT, ACCOUNT]
+    assert len(stripe.calls) == 2
+
+
+def test_oversized_provider_response_fails_closed_without_private_body_reflection(setup):
+    from widemind.economy.stripe import MAX_PROVIDER_BYTES
+    service, stripe, adapter = setup
+    private_marker = 'fixture-private-metadata'
+    stripe.extra = lambda request, path: httpx.Response(200, json={'id': ACCOUNT, 'padding': private_marker+'x'*MAX_PROVIDER_BYTES})
+    with pytest.raises(EconomyError) as exc:
+        adapter.reconcile('cs_fixture')
+    assert exc.value.code == 'invalid_provider_record'
+    assert private_marker not in str(exc.value)
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+
+
+def test_redirects_are_rejected_even_if_external_client_enables_them(setup):
+    service, stripe, adapter = setup
+    adapter.client.follow_redirects = True
+    stripe.extra = lambda request, path: httpx.Response(302, headers={'Location': 'https://other.invalid/redirect'}, json={'id': ACCOUNT})
+    with pytest.raises(EconomyError) as exc:
+        adapter.reconcile('cs_fixture')
+    assert exc.value.code == 'provider_rejected'
+    assert len(stripe.calls) == 1
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+
+
+def test_operation_budget_is_checked_between_streamed_body_chunks_and_closes_response(setup):
+    service, stripe, adapter = setup
+    elapsed, closed = [0.0], []
+    adapter._monotonic = lambda: elapsed[0]
+    class SlowFixtureStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"id":'
+            elapsed[0] = 61.0
+            yield b'"acct_fixture"}'
+        def close(self):
+            closed.append(True)
+    stripe.extra = lambda request, path: httpx.Response(200, stream=SlowFixtureStream())
+    with pytest.raises(EconomyError) as exc:
+        adapter.reconcile('cs_fixture')
+    assert exc.value.code == 'provider_operation_budget'
+    assert closed == [True]
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
