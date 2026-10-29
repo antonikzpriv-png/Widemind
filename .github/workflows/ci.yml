@@ -26,3 +26,6 @@ jobs:
       - run: npm run browser:smoke
         env:
           WIDEMIND_CHROMIUM: /usr/bin/google-chrome
+      - run: npm run business:browser
+        env:
+          WIDEMIND_CHROMIUM: /usr/bin/google-chrome

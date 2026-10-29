@@ -21,7 +21,10 @@
     "format:check": "prettier --check src test scripts *.json",
     "smoke": "node scripts/smoke.mjs",
     "browser:smoke": "node scripts/browser-smoke.mjs",
-    "status": "node --env-file-if-exists=.env src/runtime/status-main.ts"
+    "status": "node --env-file-if-exists=.env src/runtime/status-main.ts",
+    "business:sync-inbox": "node --env-file-if-exists=.env src/modules/business/sync-main.ts",
+    "business:demo": "node scripts/business-demo.mjs",
+    "business:browser": "node scripts/business-browser-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

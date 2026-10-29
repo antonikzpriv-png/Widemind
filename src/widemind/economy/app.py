@@ -20,6 +20,7 @@ from .config import Settings
 from .service import EconomyError, EconomyService
 from .reconciliation import ReconciliationQueue
 from .runtime import RuntimeBridge, RunRequest, SeedRequest, AuthorizationRequest, SettlementRequest, VerificationRequest, NotPerformedRequest
+from .commerce import CommerceBridge, OrderRequest, CheckoutRequest, FulfillmentRequest
 
 MAX_MONEY = 9_000_000_000_000_000
 Money = Annotated[StrictInt, Field(ge=0, le=MAX_MONEY)]
@@ -203,6 +204,28 @@ def create_app(settings: Settings | None = None, *, service: EconomyService | No
         if app.state.runtime_bridge is None:
             raise EconomyError("runtime_not_configured", "Runtime accounting profiles and authorization secret must be configured", 503)
         return app.state.runtime_bridge
+
+    commerce = CommerceBridge(economy, account=settings.stripe_account, mode=settings.stripe_mode, payments=stripe)
+
+    @app.post("/v1/runtime/commerce/order")
+    def commerce_order(body: OrderRequest, role: str = Depends(identity)):
+        authorize(role, {"operator", "gateway"})
+        return commerce.order(body)
+
+    @app.post("/v1/runtime/commerce/checkout")
+    def commerce_checkout(body: CheckoutRequest, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        return commerce.checkout(body)
+
+    @app.post("/v1/runtime/commerce/fulfillment")
+    def commerce_fulfillment(body: FulfillmentRequest, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        return commerce.fulfillment(body)
+
+    @app.post("/v1/runtime/commerce/release-hold")
+    def commerce_release(body: FulfillmentRequest, role: str = Depends(identity)):
+        authorize(role, {"operator"})
+        return commerce.release_hold(body)
 
     @app.post("/v1/runtime/summary")
     def runtime_summary(body: RunRequest, role: str = Depends(identity)):

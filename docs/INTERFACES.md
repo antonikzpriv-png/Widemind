@@ -88,6 +88,12 @@ Free asynchronous module calls are deadline-bounded by optional `RuntimeConfig.d
 
 Public module POST handlers additionally receive optional `rawBody` bytes, bounded by the same 16 KiB request cap, for exact provider-signature verification. Verify these bytes before accepting an event; re-serializing parsed JSON is not equivalent. Operator routes do not receive raw bodies, so their core form CSRF values cannot bypass the forwarding filter. The foundation supplies no provider secret or generic “verified payment” flag; each ingress implementation owns verification, account scope and provider-event deduplication.
 
+## Private server-rendered module pages
+
+A registration may supply `operatorPages`, each with an exact path below `/operator/modules/<module-id>/` and a trusted `render({query, csrf})` callback. The web host enforces its existing operator session before rendering, bounds asynchronous dependency time, and checks the session again before returning private HTML. The callback receives the current server-derived CSRF token for local forms, never the session cookie or provider secrets. Trusted renderers must escape task data. The existing no-script CSP remains active.
+
+An operator POST route can declare `operatorRedirect` pointing to one of its own registered pages. Only a successful, authenticated, same-origin, CSRF-checked HTML form POST uses that fixed redirect. JSON clients retain their ordinary JSON response. The host forwards only an encoded run ID and an allowlisted business view, never an external return URL. Registration rejects out-of-namespace/duplicate pages, public redirects and unregistered redirect targets. This adds a private UI extension without exposing operator APIs to customers or allowing the browser to execute the worker.
+
 ## Implemented economy bridge
 
 The economy role is now implemented by `src/modules/economy/module.ts`, backed by the protected Python service. See [setup](RUNTIME_ECONOMY.md) and [RPC details](ECONOMY_RUNTIME_BRIDGE.md). Module factories may receive optional private `context.env` when bootstrap is given an explicit environment; it is never included in public RuntimeConfig or projections. Constructors still perform no external effects.

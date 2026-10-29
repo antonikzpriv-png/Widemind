@@ -277,6 +277,8 @@ export interface ModuleRoute {
   path: string;
   method: "GET" | "POST";
   access: "public" | "operator";
+  /** Fixed registered operator page for successful same-origin HTML form posts. */
+  operatorRedirect?: string;
   handle(request: {
     body: Json;
     /** Exact bytes for signature verification on public ingress routes only. */
@@ -285,6 +287,15 @@ export interface ModuleRoute {
     headers: Record<string, string>;
     operator: boolean;
   }): Promise<{ status: number; body: Json }>;
+}
+/** Trusted server-rendered private UI; authentication is enforced by the host. */
+export interface OperatorPage {
+  /** Exact namespaced path: /operator/modules/<module-id>/<page>. */
+  path: string;
+  render(request: {
+    query: Record<string, string>;
+    csrf: string;
+  }): string | Promise<string>;
 }
 export interface ModuleRegistration {
   id: string;
@@ -295,4 +306,5 @@ export interface ModuleRegistration {
   business?: Business;
   website?: Website;
   routes?: readonly ModuleRoute[];
+  operatorPages?: readonly OperatorPage[];
 }

@@ -624,6 +624,9 @@ class EconomyService:
             db.execute('UPDATE payments SET status=?,pending_liability_micro_usd=?,revision=revision+1 WHERE provider=? AND account=? AND mode=? AND payment_id=?', (status, pending, *key))
             payment = self._payment(db, *key)
             self._refresh_payment_hold(db, payment, pending)
+            # Commerce performance corrections share the verified payment transaction.
+            from .commerce import reconcile_commerce_earned
+            reconcile_commerce_earned(self, db, payment)
             if event_id is not None:
                 db.execute('INSERT INTO payment_events VALUES(?,?,?,?,?,?)', (*key[:3], event_id, event_digest, key[3]))
             summary = {'posted_transaction_ids': posted, 'status': status, 'event_id': event_id, 'pending_liability_micro_usd': pending, 'observations': observations}

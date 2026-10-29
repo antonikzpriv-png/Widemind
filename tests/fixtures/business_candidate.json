@@ -1,0 +1,1 @@
+{"workKey":"business:active:create","tool":"research.collect","jobId":"active","input":{"topic":"Explicit offline business fixture","sections":["Overview"],"minSources":2},"limit":{"maximum":{"currency":"USD","micros":"250000"},"maxTokens":30000,"maxDurationMs":120000,"maxOutputBytes":1000000}}
