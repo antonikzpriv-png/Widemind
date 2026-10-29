@@ -33,7 +33,9 @@ function environment(name) {
     });
   if (name === "tools")
     Object.assign(env, {
-      WIDEMIND_TOOLS_STATE: resolve(env.WIDEMIND_TOOLS_STATE ?? "var/tools"),
+      WIDEMIND_TOOLS_STATE: resolve(
+        env.WIDEMIND_TOOLS_STATE ?? "var/tools/control",
+      ),
       WIDEMIND_TOOLS_WORKSPACE: resolve(
         env.WIDEMIND_TOOLS_WORKSPACE ?? "var/workspace",
       ),
