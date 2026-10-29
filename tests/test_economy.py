@@ -318,6 +318,36 @@ class EconomyTests(unittest.TestCase):
             self.service.payment(run_id="run",job_id="job")
         self.assertEqual(self.service.balance(run_id="run")["receipts_micro_usd"],0)
 
+    def test_balance_available_webhook_never_scans_historical_sessions(self):
+        self.link()
+        calls=[]
+        self.stripe.inspect_checkout=lambda **kwargs: calls.append(kwargs) or dict(self.stripe.current)
+        body=json.dumps({"id":"balance-event","type":"balance.available"}).encode()
+        self.assertEqual(self.service.handle_webhook(body,"fixture-verified"),[])
+        self.assertEqual(calls,[])
+
+    def test_scheduled_reconciliation_skips_history_and_continues_pending_cursor(self):
+        with self.service.transaction():
+            for index in range(1005):
+                self.service.db.execute("INSERT INTO economy_jobs (run_id,job_id,session_id,canonical,updated_at) VALUES (?,?,?,?,0)",
+                    ("run",f"history-{index:04}",f"cs_history_{index}",json.dumps({"status":"settled"})))
+            for index in range(7):
+                self.service.db.execute("INSERT INTO economy_jobs (run_id,job_id,session_id,canonical,updated_at) VALUES (?,?,?,?,0)",
+                    ("run",f"pending-{index}",f"cs_pending_{index}",'{}'))
+        calls=[]
+        def inspect(*,session_id):
+            calls.append(session_id)
+            return {**self.stripe.current,"job_id":"pending-"+session_id.rsplit("_",1)[1]}
+        self.stripe.inspect_checkout=inspect
+        first=self.service.reconcile_payments(run_id="run")
+        self.assertEqual(len(first["job_ids"]),5)
+        self.assertFalse(first["complete"])
+        second=self.service.reconcile_payments(run_id="run",cursor=first["next_cursor"])
+        self.assertEqual(len(second["job_ids"]),2)
+        self.assertTrue(second["complete"])
+        self.assertEqual(len(calls),7)
+        self.assertTrue(all(value.startswith("cs_pending_") for value in calls))
+
 
 if __name__ == "__main__":
     unittest.main()

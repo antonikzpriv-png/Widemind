@@ -4,7 +4,7 @@ The business process receives the protocol surface, never a writable wallet file
 All provider events are independently verified by StripeClient before these books
 change. SQLite triggers prohibit rewriting financial entries.
 """
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from hashlib import sha256
 import json
 import os
@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS economy_jobs (
  fulfilled_reference TEXT, revision INTEGER NOT NULL DEFAULT 0,
  updated_at REAL NOT NULL, PRIMARY KEY(run_id,job_id)
 );
+CREATE INDEX IF NOT EXISTS economy_pending_jobs ON economy_jobs
+ (run_id,COALESCE(json_extract(canonical,'$.status'),'pending'),job_id);
 CREATE TABLE IF NOT EXISTS ledger (
  id INTEGER PRIMARY KEY AUTOINCREMENT, event_key TEXT NOT NULL UNIQUE,
  run_id TEXT NOT NULL REFERENCES economy_runs(run_id), job_id TEXT,
@@ -517,18 +519,57 @@ class EconomyService:
             if previous and previous["state"] == "processed":
                 return json.loads(previous["jobs"])
             self.db.execute("INSERT OR IGNORE INTO stripe_events VALUES (?,?,?,'running','[]',?)", (scope,event_id,digest,self.clock()))
-        session_ids = self.stripe.session_ids_for_event(event)
-        if event.get("type") == "balance.available":
-            session_ids = [row["session_id"] for row in self.all("SELECT session_id FROM economy_jobs WHERE session_id IS NOT NULL LIMIT 1000")]
-        if not isinstance(session_ids,list) or len(session_ids) > 1000:
-            raise ValueError("invalid Stripe event routing")
+        # balance.available is a broad account notification, not permission to
+        # scan all historical orders inside one webhook request. The host schedules
+        # reconcile_payments batches independently of paid/model work.
         changed = []
-        for session_id in set(session_ids):
-            job = self.one("SELECT * FROM economy_jobs WHERE session_id=?", (session_id,))
-            if job:
-                self.refresh_payment(run_id=job["run_id"],job_id=job["job_id"])
-                changed.append(job["job_id"])
+        budget = getattr(self.stripe,"operation_budget",None)
+        with budget(seconds=10,requests=20) if callable(budget) else nullcontext():
+            session_ids = [] if event.get("type") == "balance.available" else self.stripe.session_ids_for_event(event)
+            if not isinstance(session_ids,list) or len(session_ids) > 5:
+                raise ValueError("Stripe event routing requires bounded reconciliation")
+            for session_id in set(session_ids):
+                job = self.one("SELECT * FROM economy_jobs WHERE session_id=?", (session_id,))
+                if job:
+                    self.refresh_payment(run_id=job["run_id"],job_id=job["job_id"])
+                    changed.append(job["job_id"])
         changed.sort()
         with self.transaction():
             self.db.execute("UPDATE stripe_events SET state='processed',jobs=? WHERE provider_scope=? AND event_id=?", (_json(changed),scope,event_id))
         return changed
+
+    def reconcile_payments(self, *, run_id, limit=5, cursor=None, time_budget_seconds=10):
+        """Scheduled finite reconciliation of unresolved sessions; no paid inference.
+
+        Resume next_cursor until complete, then wait for the next scheduled wakeup.
+        Newly inserted lower IDs are included in the next cycle, not an infinite loop.
+        """
+        self._run(run_id)
+        if type(limit) is not int or not 1 <= limit <= 5 or type(time_budget_seconds) not in {int,float} or not 0 < time_budget_seconds <= 10:
+            raise ValueError("invalid reconciliation batch limit")
+        if cursor is not None:
+            _text(cursor,"payment cursor")
+        if self.stripe is None:
+            return {"job_ids":[],"next_cursor":None,"complete":True,"errors":[{"reason":"Stripe not configured"}]}
+        rows = self.all("""SELECT job_id FROM economy_jobs WHERE run_id=? AND session_id IS NOT NULL
+            AND job_id>? AND COALESCE(json_extract(canonical,'$.status'),'pending') IN ('pending','partial','disputed')
+            ORDER BY job_id LIMIT ?""", (run_id,cursor or "",limit+1))
+        selected,more = rows[:limit],len(rows)>limit
+        job_ids,errors,last = [],[],cursor
+        deadline = time.monotonic()+time_budget_seconds
+        budget = getattr(self.stripe,"operation_budget",None)
+        with budget(seconds=time_budget_seconds,requests=20) if callable(budget) else nullcontext():
+            for row in selected:
+                if time.monotonic() >= deadline:
+                    more = True
+                    break
+                try:
+                    self.refresh_payment(run_id=run_id,job_id=row["job_id"])
+                    job_ids.append(row["job_id"])
+                except Exception:
+                    errors.append({"job_id":row["job_id"],"reason":"provider reconciliation unavailable; retry on a scheduled cycle"})
+                    if time.monotonic() >= deadline:
+                        more = True
+                        break
+                last = row["job_id"]
+        return {"job_ids":job_ids,"next_cursor":last if more else None,"complete":not more,"errors":errors}

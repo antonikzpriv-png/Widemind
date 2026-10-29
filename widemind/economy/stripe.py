@@ -127,6 +127,20 @@ class StripeClient:
         finally:
             self._budget.reset(token)
 
+    @contextlib.contextmanager
+    def operation_budget(self, *, seconds=10, requests=20):
+        """Share a finite budget across a host-selected batch of provider reads."""
+        if type(seconds) not in {int,float} or not 0 < seconds <= 45 or type(requests) is not int or not 1 <= requests <= 50:
+            raise ValueError("invalid Stripe operation budget")
+        if self._budget.get() is not None:
+            yield
+            return
+        token = self._budget.set([requests,time.monotonic()+seconds])
+        try:
+            yield
+        finally:
+            self._budget.reset(token)
+
     @staticmethod
     def _urllib_transport(method, url, headers, body, timeout):
         # No redirect may forward Stripe authorization to another origin. Standard

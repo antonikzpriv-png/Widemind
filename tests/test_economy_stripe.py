@@ -280,6 +280,13 @@ class StripeTests(unittest.TestCase):
             self.client.create_checkout(run_id="r", job_id="j", action_id="a", amount_micro_usd=10000)
         self.assertTrue(error.exception.uncertain)
 
+    def test_host_batch_budget_is_shared_across_nested_provider_reads(self):
+        with self.client.operation_budget(seconds=5,requests=2):
+            self.assertEqual(self.inspect()["status"],"settled")
+            with self.assertRaises(StripeError):
+                self.inspect()
+        self.assertEqual(len(self.transport.calls),2)
+
 
 if __name__ == "__main__":
     unittest.main()
