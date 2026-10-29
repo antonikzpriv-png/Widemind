@@ -1,0 +1,110 @@
+{
+  "validatedSourceSha": "f82d1629848cc97029411d1573e3edb3e23205a2",
+  "parents": [
+    "63f8b1ff7d9ed7ea0a50b79c0f034026f69dfc80",
+    "4b0a530fa39c10a82189437c055c287de5063f52"
+  ],
+  "verifiedAtUtc": "2026-10-29T17:30:09.187139+00:00",
+  "tests": {
+    "node": {
+      "passed": 192,
+      "failed": 0
+    },
+    "rootPython": {
+      "passed": 838,
+      "skipped": 9,
+      "subtestsPassed": 75
+    },
+    "serviceEconomy": {
+      "passed": 398
+    },
+    "serviceTools": {
+      "passed": 389,
+      "skipped": 11,
+      "subtestsPassed": 75
+    },
+    "business": {
+      "passed": 75
+    }
+  },
+  "format": true,
+  "typecheck": true,
+  "build": true,
+  "compiledSmoke": true,
+  "rootPipCheck": true,
+  "wheelBuilt": true,
+  "sharedTemplateAndMigrationIsolation": true,
+  "foundationBrowser": {
+    "passed": true,
+    "profile": "demo",
+    "desktopAndPhone": true,
+    "realFormLoginCreateResumePause": true,
+    "operatorEventForm": true,
+    "workerHealth": true,
+    "pageErrors": []
+  },
+  "integratedBrowser": {
+    "passed": true,
+    "externalPayment": "explicit local PayPal protocol fixture; no actual payment",
+    "actualServices": [
+      "economy",
+      "tools",
+      "business"
+    ],
+    "persistentWorker": true,
+    "hardWorkerRestart": true,
+    "publicHeadquartersWired": true,
+    "publicFinancialRunPinned": true,
+    "browserCustomerAndOperator": true,
+    "customerIsolation": true,
+    "privateDelivery": true,
+    "artifact": "svg-graphic.svg",
+    "queuedCaptureAndRefundEvents": true,
+    "providerEffects": {
+      "orders": 1,
+      "captured": 1,
+      "refunds": 1
+    },
+    "financialBeforeRefund": {
+      "currency": "USD",
+      "openingCreditMicros": "5000000",
+      "postedMicros": "6900000",
+      "reservedMicros": "0",
+      "holdsMicros": "0",
+      "spendableMicros": "6900000",
+      "customerReceiptsMicros": "2000000",
+      "earnedRevenueMicros": "2000000",
+      "operatingChargesMicros": "0",
+      "ownerFundingMicros": "0",
+      "subsidiesMicros": "0",
+      "mode": "sandbox",
+      "asOf": "2026-10-29T17:11:08.642900+00:00",
+      "processorFeesMicros": "100000",
+      "refundsMicros": "0",
+      "adjustmentsMicros": "0"
+    },
+    "financial": {
+      "currency": "USD",
+      "openingCreditMicros": "5000000",
+      "postedMicros": "4900000",
+      "reservedMicros": "0",
+      "holdsMicros": "0",
+      "spendableMicros": "4900000",
+      "customerReceiptsMicros": "2000000",
+      "earnedRevenueMicros": "2000000",
+      "operatingChargesMicros": "0",
+      "ownerFundingMicros": "0",
+      "subsidiesMicros": "0",
+      "mode": "sandbox",
+      "asOf": "2026-10-29T17:11:10.370638+00:00",
+      "processorFeesMicros": "100000",
+      "refundsMicros": "2000000",
+      "adjustmentsMicros": "0"
+    }
+  },
+  "dependencyAdvisoryIds": [],
+  "browserObservation": "Concurrent foundation screenshot attempt timed out; isolated rerun passed with existing harness timeout.",
+  "liveProviderChecksPerformed": false,
+  "remoteCiVerified": false,
+  "scope": "All payment records are explicit local protocol fixtures. No real payment, live funding or deployment is claimed."
+}

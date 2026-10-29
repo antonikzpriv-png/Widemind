@@ -35,3 +35,5 @@ Payment records are explicitly local PayPal protocol fixtures. Real services, da
 ## Boundaries
 
 Live provider accounts, verified funding, hosting/domain/network configuration, automated PayPal dispute handling and optional browser/Docker tool prerequisites retain the limitations in [IMPLEMENTATION_AUDIT.md](IMPLEMENTATION_AUDIT.md). Passing local checks does not provision those dependencies. Existing database files were not converted or funded during validation.
+
+[Machine-readable qualification](evidence/merged-main-20261029/verification.json) identifies the exact validated merge source. The following evidence-only commit does not alter application code.
