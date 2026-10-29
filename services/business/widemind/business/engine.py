@@ -790,6 +790,7 @@ class Business(DiscoveryMixin):
         if effect["state"] == "succeeded":
             previous = json.loads(effect["result"] or "{}")
             if effect["action"] != "gmail.send":
+                self._enqueue_recovered_research(effect, 'completed:' + identity(action_id))
                 self._conversation_manager().recovered(effect)
                 return
             verified = self._validated_outcome(Outcome("succeeded", previous), "gmail.send")
@@ -804,12 +805,30 @@ class Business(DiscoveryMixin):
             (result.state, encode(result.data), result.reason[:1000], action_id))
         if effect["provider"] == "tools" and effect["action"] == "research.collect" and self._workflow_resumable(result):
             # Free reconciliation never executes a stage. A stable progress key
-            # schedules one future business step, with normal runtime gating.
-            self._enqueue("advance", effect["job_id"], "workflow:" + identity(action_id, result.data["progress_key"]))
+            # schedules the durable owning entity's normal authorized step.
+            # Prototype research is not a customer order; routing it to advance
+            # would strand recovered stages behind an unknown-order failure.
+            self._enqueue_recovered_research(effect, 'workflow:' + identity(action_id, result.data['progress_key']))
         if result.state != "unknown":
             self.store.memory(self.run_id, action_id, "reconciliation", {"state": result.state}, self.clock())
             if result.state == 'succeeded':
+                self._enqueue_recovered_research(effect, 'completed:' + identity(action_id))
                 self._conversation_manager().recovered(effect)
+
+    def _enqueue_recovered_research(self, effect, revision):
+        """Wake the existing owner without executing paid work in observation."""
+        if effect['provider']!='tools' or effect['action']!='research.collect':
+            return
+        entity=effect['job_id']
+        order=self.store.one('SELECT status FROM orders WHERE id=? AND run_id=?', (entity,self.run_id))
+        if order:
+            if order['status'] not in {'completed','failed','cancelled'}:
+                self._enqueue('advance',entity,revision)
+            return
+        experiment=self.store.one('SELECT state,deadline FROM discovery_experiments WHERE id=? AND run_id=?', (entity,self.run_id))
+        if (experiment and experiment['state'] in {'awaiting_start','running','unknown'}
+                and experiment['deadline']>self.clock()):
+            self._enqueue('experiment.step',entity,revision)
 
     def order(self, order_id):
         order = self.store.one("SELECT * FROM orders WHERE id=? AND run_id=?", (order_id, self.run_id))

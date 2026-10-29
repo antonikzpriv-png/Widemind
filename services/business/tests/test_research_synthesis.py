@@ -136,6 +136,22 @@ class ResearchSynthesisTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(h.business.order(job)['status'], 'funded')
 
+    def test_confirmed_completed_research_wakes_order_and_reuses_saved_receipt(self):
+        h = self.harness
+        job, effect, calls, gate = pending_research(h)
+        h.adapters.save(effect['id'], Outcome('succeeded', synthetic_research(h.scope)))
+        h.business._reconcile(effect['id'])
+        h.business._reconcile(effect['id'])
+        queued = h.store.all("SELECT * FROM events WHERE kind='advance' AND external_id LIKE '%completed:%'")
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(len(calls), 1, 'Observation must never replay generation')
+        self.assertTrue(h.business.tick())
+        self.assertEqual(h.business.order(job)['status'], 'ready')
+        self.assertEqual(len(calls), 1)
+        drain(h.business)
+        h.business._reconcile(effect['id'])
+        self.assertEqual(len(h.store.all("SELECT * FROM events WHERE kind='advance' AND external_id LIKE '%completed:%'")), 1)
+
     def test_stopped_runtime_can_observe_progress_but_cannot_execute_queued_resume(self):
         h = self.harness
         job, effect, calls, gate = pending_research(h)
