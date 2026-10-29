@@ -308,6 +308,26 @@ class Conversations:
             return ['What title and description should the '+('SVG graphic' if service == 'svg-graphic' else 'static HTML starter')+' use?']
         return ['Would you like a sourced research brief, a simple SVG graphic, or a static HTML software starter? What should it accomplish?']
 
+    @staticmethod
+    def _answer_question(body, proposal):
+        question = body.casefold()
+        seconds = proposal['turnaroundSeconds']
+        turnaround = f'{seconds//3600} hours' if seconds % 3600 == 0 else f'{seconds//60} minutes' if seconds % 60 == 0 else f'{seconds} seconds'
+        amount = int(proposal['priceMicros'])
+        if re.search(r'\b(paid|payment|invoice|receipt|refund)\b', question):
+            answer = 'A message or payment screenshot cannot confirm settlement or authorize a refund. Your private portal uses the payment service’s verified status.'
+        elif re.search(r'\b(when|turnaround|deadline|time|days?|hours?)\b', question):
+            answer = f'The proposed turnaround is {turnaround} after verified funding and operating authorization. Earlier delivery or additional scope is not included unless a new quote confirms it.'
+        elif re.search(r'\b(revisions?|changes?|edits?)\b', question):
+            answer = f'This quote includes {proposal["revisionAllowance"]} revisions. Changes after acceptance require review against that allowance before any extra work or charge is agreed.'
+        elif re.search(r'\b(exclusions?|hosting|deploy|accounts?|subscriptions?)\b', question):
+            answer = 'This quote excludes: '+'; '.join(proposal['exclusions'])+'.'
+        elif re.search(r'\b(price|cost|much|charge|budget)\b', question):
+            answer = f'The current quoted total is USD {amount//1000000}.{amount%1000000//10000:02d}. Nothing is charged merely by discussing or viewing the quote.'
+        else:
+            answer = 'The proposed deliverables are: '+'; '.join(proposal['deliverables'])+'. Please tell me which detail you would like clarified.'
+        return answer+f' This refers to quote {proposal["quoteId"]}, version {proposal["version"]}; review the complete terms in your private portal before accepting.'
+
     def _proposal(self, thread, service_name, scope, proposed_price):
         p = self.b.policy
         service = self.b.services.get(service_name)
@@ -394,6 +414,8 @@ class Conversations:
                                 f"Exclusions: {'; '.join(proposal['exclusions'])}.\nTurnaround: {proposal['turnaroundSeconds']} seconds after verified funding and operating authorization.\n"
                                 f"Included revisions: {proposal['revisionAllowance']}. Any post-acceptance change is reviewed against this allowance before work.\n"
                                 'Please review and accept this exact version in your private portal. A quote or a message saying you paid does not establish payment.')
+                    if intent == 'question':
+                        response = self._answer_question(msg['body'], proposal)
                     if msg['source'] == 'gmail' and hasattr(self.b, 'conversation_portal_link'):
                         access = self.s.one('SELECT revoked_at FROM host_requests WHERE run_id=? AND opportunity_id=?', (self.b.run_id, thread['opportunity_id']))
                         if not access:
