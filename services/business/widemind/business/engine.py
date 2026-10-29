@@ -127,6 +127,8 @@ class Business(DiscoveryMixin):
             raise ValueError("quote is not available for acceptance")
         if self._opted_out(quote["customer_id"]):
             raise ValueError("customer opted out")
+        if not self._contact_allowed(quote['opportunity_id']):
+            raise ValueError('request contact was opted out')
         open_count = self.store.one("SELECT COUNT(*) AS n FROM orders WHERE run_id=? AND status NOT IN ('completed','cancelled','failed')", (self.run_id,))["n"]
         if open_count >= self.policy.max_open_orders:
             raise ValueError("commitment capacity reached")
@@ -202,6 +204,16 @@ class Business(DiscoveryMixin):
 
     def _opted_out(self, customer_id):
         return bool(self.store.one("SELECT opted_out FROM customers WHERE id=? AND run_id=?", (customer_id, self.run_id))["opted_out"])
+
+    def _contact_allowed(self, entity):
+        stopped = self.store.one("""SELECT 1 FROM customer_threads t
+          WHERE t.run_id=? AND t.contact_allowed=0 AND
+          (t.id=? OR t.opportunity_id=? OR t.id IN
+            (SELECT p.conversation_id FROM conversation_proposals p
+             JOIN quotes q ON q.id=p.quote_id LEFT JOIN orders o ON o.quote_id=q.id
+             WHERE q.opportunity_id=? OR o.id=?)) LIMIT 1""",
+          (self.run_id, entity, entity, entity, entity))
+        return stopped is None
 
     def _effect(self, entity, step, provider, action, arguments, invoke, *, reconciliation=False):
         action_id = identity(self.run_id, entity, step)
@@ -297,6 +309,8 @@ class Business(DiscoveryMixin):
                                       (self.run_id, address.lower() if isinstance(address, str) else ''))
             if customer and customer['opted_out']:
                 return Outcome('failed', reason='Customer opted out before dispatch')
+            if not self._contact_allowed(request['job_id']):
+                return Outcome('failed', reason='Request opted out before dispatch')
         if not self._active():
             return Outcome('failed', reason='Runtime paused/stopped before dispatch')
         return self.tools.execute(**request)

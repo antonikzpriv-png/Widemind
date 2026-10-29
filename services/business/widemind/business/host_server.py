@@ -25,6 +25,8 @@ class PortalBusiness(Business):
         identifier=identity(self.run_id,entity,step,'portal')
         value=(self.run_id,customer_id,entity,step,subject,body,encode(artifact) if artifact else None)
         with self.store.transaction():
+            if self._opted_out(customer_id) or not self._contact_allowed(entity):
+                raise Deferred('request publication opted out')
             old=self.store.one('SELECT * FROM host_notifications WHERE id=?',(identifier,))
             if old:
                 if tuple(old[k] for k in ('run_id','customer_id','entity_id','purpose','subject','body','artifact'))!=value:raise ValueError('portal publication identity conflict')
@@ -208,8 +210,11 @@ class Host:
                         authenticated=True, opportunity_id=request['opportunity_id'])
                     return {'conversationId':conversation_id,'messageId':message_id,'queued':True}
                 if path=='/v1/opt-out':
-                    business.opt_out(request['email'], 'customer-portal:'+request['request_id'])
-                    return {'optedOut':True, **({'conversationId':conversation['id']} if conversation else {})}
+                    conversation_id = business.conversation_receive(source='customer-portal',
+                        external_id='opt-out:'+request['request_id'], thread_id='portal:'+request['request_id'],
+                        customer_email=request['email'], body='Stop', authenticated=True,
+                        opportunity_id=request['opportunity_id'])
+                    return {'optedOut':True, 'conversationId':conversation_id}
                 if path=='/v1/accept':
                     if conversation:
                         if payload.get('conversationId', conversation['id']) != conversation['id']:

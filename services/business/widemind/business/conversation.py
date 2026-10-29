@@ -40,6 +40,18 @@ class Conversations:
             raise ValueError('unknown conversation')
         return row
 
+    def _stopped(self, thread):
+        return self.b._opted_out(thread['customer_id']) or not self.b._contact_allowed(thread['id'])
+
+    def _stop_contact(self, thread, source):
+        # A portal capability proves ownership of one request, not of the email
+        # address supplied at public intake. Only verified mail has global scope.
+        if source == 'gmail':
+            self.s.db.execute('UPDATE customers SET opted_out=1 WHERE id=?', (thread['customer_id'],))
+            self.s.db.execute("UPDATE customer_threads SET contact_allowed=0,status='opted_out',intervention=NULL WHERE run_id=? AND customer_id=?", (self.b.run_id, thread['customer_id']))
+        else:
+            self.s.db.execute("UPDATE customer_threads SET contact_allowed=0,status='opted_out',intervention=NULL WHERE id=?", (thread['id'],))
+
     def receive(self, *, source, external_id, thread_id, customer_email, body, authenticated,
                 opportunity_id=None, reply_reference=None, reply_metadata=None, content_complete=True):
         if authenticated is not True or source not in {'gmail', 'customer-portal'}:
@@ -88,9 +100,10 @@ class Conversations:
             self.s.db.execute("INSERT INTO conversation_messages VALUES (?,?,?,?,?,'inbound',?,'queued',NULL,?,?)",
                               (mid, cid, self.b.run_id, source, external_id, body, encode(metadata), self.b.clock()))
             self.s.db.execute('UPDATE customer_threads SET inbound_count=inbound_count+1,revision=revision+1,last_message_at=? WHERE id=?', (self.b.clock(), cid))
-            if opted_out(body) or self.b._opted_out(customer):
-                self.s.db.execute('UPDATE customers SET opted_out=1 WHERE id=?', (customer,))
-                self.s.db.execute("UPDATE customer_threads SET status='opted_out',intervention=NULL WHERE run_id=? AND customer_id=?", (self.b.run_id, customer))
+            contact = self.thread(cid)
+            if opted_out(body) or self._stopped(contact):
+                if opted_out(body):
+                    self._stop_contact(contact, source)
                 self.s.db.execute("UPDATE conversation_messages SET status='opted_out' WHERE id=?", (mid,))
             else:
                 self.b._enqueue('conversation', mid, 'received')
@@ -136,7 +149,7 @@ class Conversations:
         thread = self.thread(cid)
         proposals = self.s.all('SELECT document,status FROM conversation_proposals WHERE conversation_id=? ORDER BY version DESC LIMIT 50', (cid,))
         return {key: thread[key] for key in ('id', 'customer_id', 'thread_id', 'opportunity_id', 'revision')} | {
-            'status': 'opted_out' if self.b._opted_out(thread['customer_id']) else thread['status'],
+            'status': 'opted_out' if self._stopped(thread) else thread['status'],
             'intervention': thread['intervention'], 'operatorHold': bool(thread['operator_hold']), 'currentQuote': self._current(thread),
             'proposals': [{**json.loads(row['document']), 'status': row['status']} for row in proposals],
             'messages': self.s.all('SELECT id,direction,body,status,created_at FROM conversation_messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 50', (cid,))[::-1]}
@@ -151,7 +164,7 @@ class Conversations:
             proposal = self._current(row)
             summary = {key: row[key] for key in ('id','customer_id','thread_id','opportunity_id','status','revision','intervention')}
             summary['operatorHold'] = bool(row['operator_hold'])
-            if self.b._opted_out(row['customer_id']): summary['status'] = 'opted_out'
+            if self._stopped(row): summary['status'] = 'opted_out'
             summary['currentQuote'] = {key: proposal[key] for key in ('quoteId','version','priceMicros','service','status','turnaroundSeconds','revisionAllowance','expiresAt')} if proposal else None
             result.append(summary)
         return result
@@ -173,7 +186,7 @@ class Conversations:
         if not reply or reply['status'] in {'accepted','published','suppressed'}:
             return
         thread = self.thread(reply['conversation_id'])
-        if self.b._opted_out(thread['customer_id']):
+        if self._stopped(thread):
             self.s.db.execute("UPDATE conversation_messages SET status='suppressed' WHERE id=?", (reply['id'],))
             return
         if not self.b._active():
@@ -202,7 +215,7 @@ class Conversations:
             try:
                 result = self.b._tool(thread['id'], 'reply:'+mid, 'gmail.send', arguments)
             except Exception:
-                if self.b._opted_out(thread['customer_id']):
+                if self._stopped(thread):
                     self.s.db.execute("UPDATE conversation_messages SET status='suppressed' WHERE id=?", (reply['id'],))
                     return
                 raise
@@ -229,7 +242,7 @@ class Conversations:
         thread = self.thread(msg['conversation_id'])
         if msg['status'] == 'applied':
             self._deliver(mid); return
-        if msg['status'] != 'queued' or self.b._opted_out(thread['customer_id']):
+        if msg['status'] != 'queued' or self._stopped(thread):
             return
         if not self.b._active():
             from .engine import Deferred
@@ -404,14 +417,13 @@ class Conversations:
             if encode(Policy(**json.loads(saved['document'])).document()) != encode(self.b.policy.document()):
                 from .engine import Deferred
                 raise Deferred('Operator policy changed; review the cached interpretation before recovery')
-            if current['revision'] != thread['revision'] or self.b._opted_out(thread['customer_id']):
+            if current['revision'] != thread['revision'] or self._stopped(thread):
                 self.s.db.execute("UPDATE conversation_messages SET status='superseded' WHERE id=?", (msg['id'],))
                 return
             facts = json.loads(thread['context'])
             intent = action['intent']
             if intent == 'opt_out':
-                self.s.db.execute('UPDATE customers SET opted_out=1 WHERE id=?', (thread['customer_id'],))
-                self._set_status(thread['id'], 'opted_out')
+                self._stop_contact(thread, msg['source'])
                 self.s.db.execute("UPDATE conversation_messages SET status='opted_out',interpretation=? WHERE id=?", (encode(action), msg['id']))
                 return
             accepted = self.s.one('SELECT id FROM orders WHERE run_id=? AND customer_id=? AND quote_id IN (SELECT quote_id FROM conversation_proposals WHERE conversation_id=?)', (self.b.run_id, thread['customer_id'], thread['id']))
@@ -494,7 +506,7 @@ class Conversations:
             if self.s.one("SELECT 1 FROM conversation_messages WHERE conversation_id=? AND direction='inbound' AND status='queued'", (conversation_id,)):
                 raise ValueError('A customer message is awaiting assessment; review the next confirmed quote')
             p = Policy(**json.loads(self.s.one('SELECT document FROM settings WHERE run_id=?', (self.b.run_id,))['document']))
-            if self.b._opted_out(thread['customer_id']) or not self.b._active() or terms['expiresAt'] <= self.b.clock():
+            if self._stopped(thread) or not self.b._active() or terms['expiresAt'] <= self.b.clock():
                 raise ValueError('quote expired or customer/runtime not available')
             service = self.b.services[terms['service']]
             plan = service.plan(terms['scope'], p.max_job_micro_usd)
@@ -540,7 +552,7 @@ class Conversations:
 
     def followup(self, cid):
         thread = self.thread(cid); p = self.b.policy
-        if not self.b._active() or self.b._opted_out(thread['customer_id']) or thread['status'] != 'quoted' or thread['followups_sent'] >= p.conversation_followups:
+        if not self.b._active() or self._stopped(thread) or thread['status'] != 'quoted' or thread['followups_sent'] >= p.conversation_followups:
             return
         proposal = self._current(thread)
         if not proposal or proposal['expiresAt'] <= self.b.clock(): return
@@ -556,7 +568,7 @@ class Conversations:
         with self.s.transaction():
             # Recheck the customer and thread under the lock before publication.
             fresh = self.thread(cid)
-            if fresh['revision'] != thread['revision'] or self.b._opted_out(thread['customer_id']): return
+            if fresh['revision'] != thread['revision'] or self._stopped(thread): return
             self._prepare(thread, mid, f"Would you like to continue with quote {proposal['quoteId']} version {proposal['version']}? Please use your private portal to review its exact terms. No payment or acceptance has been assumed. You can ask us to stop messages at any time.")
         self._deliver(mid)
         with self.s.transaction():
