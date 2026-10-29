@@ -49,7 +49,7 @@ Webhook event IDs deduplicate per provider/account/mode. Same ID with a differen
 
 `EconomyError(code, message, status=409)`; attributes `code`, `status`. Unknown IDs use 404; invalid integer/identity input uses 422; insufficient funds uses 409.
 
-Every new mutation appends an event in the same SQLite transaction: `{sequence, event_id, version: 1, type, run_id, occurred_at, data}`. `sequence` supports cursor polling without paid inference. Idempotent replays return the original result without repeating financial mutations. Balances also expose noncash `metrics.earned_revenue_micro_usd` and `metrics.infrastructure_subsidy_micro_usd`. Agent reads are limited to its configured run; operator/gateway reads are trusted. Private projections omit provider secrets and raw webhook bodies. Public publication is a future separate allowlist projection.
+Every new financial mutation appends an event in the same SQLite transaction: `{sequence, event_id, version: 1, type, run_id, occurred_at, data}`. `sequence` supports cursor polling without paid inference. Idempotent replays return the original result without repeating financial mutations. Balances also expose noncash `metrics.earned_revenue_micro_usd` and `metrics.infrastructure_subsidy_micro_usd`. Agent reads are limited to its configured run; operator/gateway reads are trusted. Private projections omit provider secrets and raw webhook bodies. Public publication is a future separate allowlist projection.
 
 ## Authorization boundary
 

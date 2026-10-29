@@ -225,3 +225,43 @@ def test_dead_letter_payment_cannot_starve_healthy_payment_rechecks(context):
         assert worker.run_once(limit=1)['completed'] == 1
     assert adapter.calls == ['cs_fixture'] + ['cs_good']*4
     assert queue.list_tasks('stripe',ACCOUNT,'test',state='dead_letter')[0]['payment_id'] == 'cs_fixture'
+
+
+def _claim_and_exit(database, wall_time, pipe):
+    """A real process claims work and exits without completing its provider read."""
+    queue=ReconciliationQueue(EconomyService(database),clock=lambda: wall_time)
+    claim=queue.claim('stripe',ACCOUNT,'test',lease_seconds=10)
+    pipe.send((claim['task_id'],claim['lease_token']))
+    pipe.close()
+
+
+def test_abandoned_process_lease_survives_exit_and_is_reclaimed(context):
+    import multiprocessing
+    service,queue,clock=context
+    queued=enqueue(queue)
+    ctx=multiprocessing.get_context('spawn')
+    parent,child=ctx.Pipe(duplex=False)
+    process=ctx.Process(target=_claim_and_exit,args=(str(service.path),clock[0],child))
+    try:
+        process.start()
+        child.close()
+        assert parent.poll(15)
+        task_id,old_token=parent.recv()
+        process.join(timeout=15)
+        assert process.exitcode == 0 and task_id == queued['task_id']
+        assert queue.task(task_id)['state'] == 'running'
+        assert queue.claim('stripe',ACCOUNT,'test') is None
+        clock[0]+=11
+        recovered=ReconciliationQueue(EconomyService(service.path),clock=lambda:clock[0])
+        next_claim=recovered.claim('stripe',ACCOUNT,'test')
+        assert next_claim['attempts'] == 2 and next_claim['lease_token'] != old_token
+        with pytest.raises(EconomyError,match='lease'):
+            recovered.complete(task_id,old_token)
+        recovered.complete(task_id,next_claim['lease_token'])
+        assert recovered.task(task_id)['state'] == 'completed'
+    finally:
+        parent.close()
+        child.close()
+        if process.pid and process.is_alive():
+            process.terminate()
+            process.join(timeout=5)

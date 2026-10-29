@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The economy module is implemented with Python 3.12+, FastAPI, HTTPX and SQLite, including a Stripe adapter, durable reconciliation worker and schema migrations through version 4. The worker, website and other tool integrations remain planned. Read docs/ECONOMY_CONTRACT.md and docs/ECONOMY_SETUP.md before integrating billable execution. Do not invent live payment verification, deployments, integrations or completed milestones.
+The economy module is implemented with Python 3.12+, FastAPI, HTTPX and SQLite, including a Stripe adapter, durable reconciliation worker and schema migrations through version 4. The autonomous agent worker, website and other tool integrations remain planned in this branch. Read docs/ECONOMY_CONTRACT.md and docs/ECONOMY_SETUP.md before integrating billable execution. Do not invent live payment verification, deployments, integrations or completed milestones.
 
 ## Working approach
 
