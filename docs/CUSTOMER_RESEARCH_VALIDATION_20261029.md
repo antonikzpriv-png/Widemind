@@ -1,6 +1,6 @@
 # Customer research validation — 2026-10-29
 
-Code revision: `a411a125af8905742a8a3d1824b3fc5b668284dc`. Started from
+Code revision: `822d9e76bfd705801c315d72a05fb2384a4a0e7d`. Started from
 `e70220f` and integrated main through `a7bfe22` before final verification,
 preserving its newly merged discovery and customer conversation features.
 This work selects integrated PayPal **service-v1**. The central Stripe
@@ -36,7 +36,7 @@ checks with an installation message. **Both checks ran in this validation.**
 | --- | --- |
 | Integrated tools | 528 passed, 81 subtests passed, 9 skipped; 54.98 seconds |
 | Service-v1 economy | 435 passed; 11.79 seconds; one upstream Starlette/httpx deprecation warning |
-| Integrated business | 216 passed; 34.33 seconds |
+| Integrated business | 223 passed; 33.99 seconds |
 | Node format, types, tests and build | Passed; 243 tests, zero failures |
 | Local PayPal integration smoke | Passed across actual economy, tools, business and persistent Node worker, including restart, private delivery, refund and exact financial totals |
 | Customer-specific offline demo | Two different reviewed Markdown documents, private manifests and independent generation receipts |
@@ -69,6 +69,13 @@ No live browser verification is claimed.
 - New main's discovery cost observations aggregate research child charges;
   a settled zero-cost parent cannot make unresolved child costs appear final.
   Native-ledger tests cover true-up, cancellation, overage and invalid membership.
+- Recovered research routes to its owning order or prototype. Confirmed completed
+  receipts wake artifact validation without replay; unknown children block
+  continuation, and runtime/operator stop and prototype deadlines remain enforced.
+
+The full tools/Node/smoke runs followed the merge of main's conversations. The
+subsequent business-only recovery-routing change passed the full 223-test business
+suite, including seven new recovery regressions.
 
 ## What this establishes
 
