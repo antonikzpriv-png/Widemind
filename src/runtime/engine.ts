@@ -419,6 +419,21 @@ export class AgentRuntime {
         }
         if (!reconciled.evidenceRef || row.attempts >= 3 || !canStart())
           return "waiting";
+        if (this.services.economy.confirmNotPerformed) {
+          const confirmation = await this.dependency(
+            "economy.confirmNotPerformed",
+            () =>
+              this.services.economy.confirmNotPerformed!(
+                reservation!,
+                reconciled.evidenceRef,
+              ),
+          );
+          if (confirmation.kind !== "renewed") {
+            this.unresolved(lease, action.actionId, confirmation.reason);
+            return "waiting";
+          }
+          if (!canStart()) return "waiting";
+        }
         this.store.fenced(lease, () => {
           this.store.db
             .prepare(

@@ -46,6 +46,7 @@ export interface BudgetLimit {
   maxDurationMs: number;
   maxOutputBytes: number;
 }
+/** Summary aggregates use canonical decimal strings, with at most 128 digits. */
 export interface FinancialSummary {
   currency: "USD";
   openingCreditMicros: Micros;
@@ -126,6 +127,11 @@ export interface Economy {
     tool: string;
     limit: BudgetLimit;
   }): Promise<Authorization>;
+  /** Rearm only after definitive, free evidence that no attempt was performed. */
+  confirmNotPerformed?(
+    reservation: Reservation,
+    evidenceRef: string,
+  ): Promise<{ kind: "renewed" } | { kind: "unavailable"; reason: string }>;
   /** Idempotent by actionId + provider/account/event ID; includes charged failures. */
   settle(
     reservation: Reservation,
