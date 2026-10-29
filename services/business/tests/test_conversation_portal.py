@@ -47,8 +47,13 @@ class ConversationPortalTests(unittest.TestCase):
         try:
             conversations = Conversations(business)
             with business.store.transaction():
-                return conversations._proposal(conversations.thread(conversation_id), 'svg-graphic',
-                                               {'title':title, 'description':'A simple bakery sign'}, 0)
+                result = conversations._proposal(conversations.thread(conversation_id), 'svg-graphic',
+                                                {'title':title, 'description':'A simple bakery sign'}, 0)
+                # This fixture represents a completed interpretation/quote turn,
+                # rather than an unassessed inbound request with a raw proposal.
+                business.store.db.execute("UPDATE conversation_messages SET status='applied' WHERE conversation_id=? AND direction='inbound' AND status='queued'", (conversation_id,))
+                business.store.db.execute("UPDATE customer_threads SET status='quoted' WHERE id=?", (conversation_id,))
+                return result
         finally:
             business.store.close()
 
@@ -114,6 +119,18 @@ class ConversationPortalTests(unittest.TestCase):
         self.assertTrue(result['optedOut'])
         self.assertEqual(self.customer()['conversation']['status'], 'opted_out')
         self.assertEqual(self.providers.creation_calls, 0)
+
+    def test_pending_customer_change_blocks_the_previous_quote(self):
+        created = self.request()
+        proposal = self.proposal(created['conversationId'])
+        self.host.handle('/v1/message', {'runId':'run-1','token':'x'*43,
+            'messageId':'change-after-quote','body':'Before I accept, change the sign to a different business.'})
+        with self.assertRaisesRegex(ValueError, 'awaiting assessment'):
+            self.host.handle('/v1/accept', {'runId':'run-1','token':'x'*43,
+                'conversationId':created['conversationId'],'quoteId':proposal['quoteId'],
+                'version':proposal['version'],'digest':proposal['digest']})
+        self.assertEqual(self.customer()['orders'], [])
+        self.assertEqual(self.providers.payments, [])
 
     def test_gmail_portal_access_is_private_single_issue_and_revocable(self):
         business = self.host.business('run-1')
