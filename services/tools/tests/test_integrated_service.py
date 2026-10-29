@@ -79,3 +79,15 @@ class ProvisionalIntegration(unittest.TestCase):
             tools=IntegratedTools(config,econ,adapters=[adapter],secrets=Secrets());a=action('fixture.paid');a['limit']['maximum']['micros']='10';econ.add(a)
             payload={'run_id':a['runId'],'action_id':a['actionId'],'job_id':'job-1','action':'fixture.paid','arguments':a['input'],'reservation_id':'reservation-1','maximum_micro_usd':10}
             result=tools.execute(payload);self.assertTrue(result['provisional']);self.assertEqual(econ.rows['reservation-1']['state'],'unknown');self.assertEqual(adapter.calls,1);self.assertEqual(tools.execute(payload),result);self.assertEqual(adapter.calls,1)
+
+class OwnerSecretIntegration(unittest.TestCase):
+    def test_environment_injection_requires_owner_mapping_and_persistent_rotation_wins(self):
+        import os
+        from unittest.mock import patch
+        from widemind.integrated_service import OwnerSecrets
+        with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{'WIDEMIND_FIXTURE_PROVIDER_KEY':'fixture-only-env-value'}):
+            secret=OwnerSecrets(directory,{'provider-key':'WIDEMIND_FIXTURE_PROVIDER_KEY'})
+            self.assertEqual(secret.get('provider-key'),'fixture-only-env-value')
+            self.assertIsNone(secret.get('WIDEMIND_FIXTURE_PROVIDER_KEY'))
+            secret.set('provider-key','fixture-only-rotated-value')
+            self.assertEqual(secret.get('provider-key'),'fixture-only-rotated-value')

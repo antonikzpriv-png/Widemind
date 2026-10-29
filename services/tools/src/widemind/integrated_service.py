@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import threading
@@ -72,6 +73,17 @@ class EconomyClient:
         return self.request('POST','/v1/reservations/'+urlquote(id,safe='')+'/settle',{'actual_micro_usd':integer(usage['actualCharge']['micros']),'provider':usage['provider'],'account':usage['accountRef'],'external_charge_id':usage['externalEventId'],'usage':usage,'outcome':'unknown' if usage['provisional'] else receipt['status']})
 
 
+class OwnerSecrets:
+    """Only owner-configured environment references may enter adapters."""
+    def __init__(self,directory,mapping=None):
+        self.store=SecretStore(directory);self.mapping=dict(mapping or {})
+        if any(not isinstance(key,str) or not isinstance(value,str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,127}',value) for key,value in self.mapping.items()):raise ToolError('configuration','Invalid owner secret environment mapping')
+    def get(self,name):
+        stored=self.store.get(name)
+        return stored if stored is not None else os.environ.get(self.mapping.get(name,''))
+    def set(self,name,value):self.store.set(name,value)
+
+
 class Journal:
     def __init__(self,directory):
         self.root=private_directory(Path(directory));self.path=self.root/'actions.sqlite3'
@@ -110,7 +122,7 @@ class Journal:
 class IntegratedTools:
     def __init__(self,config,economy,*,adapters=None,transport=None,secrets=None):
         self.config=config;self.economy=economy;self.account=os.environ.get('WIDEMIND_TOOLS_ACCOUNT','dedicated-tools')
-        self.journal=Journal(config['control_dir']);self.secrets=secrets or SecretStore(config['control_dir'])
+        self.journal=Journal(config['control_dir']);self.secrets=secrets or OwnerSecrets(config['control_dir'],config.get('secret_environment'))
         self.workspace=DedicatedWorkspace(config['workspace_dir'],**config.get('workspace_limits',{}))
         if self.workspace.root==self.journal.root or self.workspace.root in self.journal.root.parents or self.journal.root in self.workspace.root.parents:raise ToolError('configuration','Workspace must be disjoint from control data.')
         from .tools.workflows import GraphicWorkflow,SoftwareWorkflow,ResearchWorkflow
