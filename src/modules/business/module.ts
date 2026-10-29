@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ModuleDefinition } from "../registry.ts";
 import type {
   Json,
@@ -208,7 +208,7 @@ export const definition: ModuleDefinition = {
               body: { error: "Request limit reached; retry later" },
             };
           return {
-            status: name === "request" ? 202 : 200,
+            status: name === "request" || name === "message" ? 202 : 200,
             body: await handle(record(input.body), input.query),
           };
         } catch (error) {
@@ -296,6 +296,7 @@ export const definition: ModuleDefinition = {
               email: body.email,
               service: body.service,
               scope: body.scope,
+              ...(body.message !== undefined ? { message: body.message } : {}),
               ...(body.customerToken
                 ? { customerToken: token(body.customerToken) }
                 : {}),
@@ -304,9 +305,19 @@ export const definition: ModuleDefinition = {
           wake(runId, `request:${String(result.opportunityId)}`);
           return result;
         }),
-        ...(["customer", "accept", "delivery", "revoke"] as const).map((name) =>
+        ...(
+          [
+            "customer",
+            "accept",
+            "delivery",
+            "revoke",
+            "message",
+            "opt-out",
+          ] as const
+        ).map((name) =>
           route(name, "public", "POST", async (body) => {
             const runId = run(body.runId);
+            if (name === "message") identifier(body.messageId);
             const result = await client.request(`/v1/${name}`, {
               ...body,
               runId,
@@ -314,6 +325,18 @@ export const definition: ModuleDefinition = {
             });
             if (name === "accept")
               wake(runId, `accept:${identifier(body.quoteId)}`);
+            if (name === "message")
+              wake(
+                runId,
+                `message:${createHash("sha256")
+                  .update(
+                    JSON.stringify([
+                      record(result).conversationId,
+                      body.messageId,
+                    ]),
+                  )
+                  .digest("hex")}`,
+              );
             return result;
           }),
         ),
@@ -344,6 +367,15 @@ export const definition: ModuleDefinition = {
         ),
         route("status", "operator", "GET", async (_body, query) =>
           client.request("/v1/status", { runId: run(query.runId) }),
+        ),
+        route("conversations", "operator", "GET", async (_body, query) =>
+          client.request("/v1/conversations", { runId: run(query.runId) }),
+        ),
+        route("conversation", "operator", "GET", async (_body, query) =>
+          client.request("/v1/conversation", {
+            runId: run(query.runId),
+            conversationId: identifier(query.conversationId),
+          }),
         ),
         route("policy", "operator", "POST", async (body) => {
           const runId = run(body.runId);
