@@ -72,14 +72,26 @@ class ToolsClient:
     def execute(self,**request):
         try:
             result=self.http.request('/execute',request)
-            return self.outcome(result)
+            return self.outcome(result,action_id=request['action_id'],reservation_id=request.get('reservation_id'))
         except Exception: return Outcome('unknown',reason='tools service outcome unavailable; reconcile before retry')
     def reconcile(self,*,action_id):
-        try: return self.outcome(self.http.request('/reconcile',{'action_id':action_id}))
+        try: return self.outcome(self.http.request('/reconcile',{'action_id':action_id}),action_id=action_id)
         except Exception: return Outcome('unknown',reason='tools reconciliation unavailable')
     @staticmethod
-    def outcome(result):
-        if result.get('state') in {'succeeded','failed','unknown'}: return Outcome(result['state'],result.get('data',{}),result.get('reason',''))
+    def outcome(result,action_id=None,reservation_id=None):
+        if result.get('state') in {'succeeded','failed','unknown'}:
+            data=dict(result.get('data',{}));receipt=result.get('receipt')
+            # Model/tool output cannot supply its own accounting observations.
+            data.pop('_accounting',None)
+            if receipt is not None:
+                try:
+                    usage=receipt['usage'];charge=usage['actualCharge'];micros=charge['micros']
+                    if (receipt.get('version')!=1 or action_id is not None and receipt.get('actionId')!=action_id or
+                        charge.get('currency')!='USD' or not isinstance(micros,str) or not micros.isascii() or not micros.isdecimal() or
+                        str(int(micros))!=micros or not 0<=int(micros)<=9_000_000_000_000_000 or type(usage.get('provisional')) is not bool):raise ValueError('accounting')
+                    data['_accounting']={'action_id':receipt['actionId'],'reservation_id':reservation_id,'charged_micro_usd':int(micros),'provisional':usage['provisional']}
+                except (ValueError,KeyError,TypeError):return Outcome('unknown',reason='invalid tool charge observation; reconcile original action')
+            return Outcome(result['state'],data,result.get('reason',''))
         if result.get('kind')=='receipt':
             receipt=result['receipt'];return Outcome('succeeded' if receipt['status']=='succeeded' else 'failed',receipt.get('result',{}))
         return Outcome('unknown',reason='tools did not return a confirmed outcome')
@@ -100,6 +112,17 @@ class EconomyClient:
         # The reserve-effect ID and actual create-tool ID differ in the audited business journal.
         actual_action=identity(run_id,job_id,'create')
         result=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations',{'action_id':actual_action,'amount_micro_usd':maximum_micro_usd,'idempotency_key':action_id,'provider':plan['action'],'account':self.account,'limits':{'max_duration_ms':120000,'max_storage_bytes':1000000}})
+        return Outcome('succeeded',{'reservation_id':result['reservation_id']})
+    def reserve_action(self,*,run_id,job_id,action_id,tool_action_id,tool,maximum_micro_usd,max_tokens=None):
+        self.check_mode(run_id)
+        stage=self.store.one('SELECT * FROM creative_stages WHERE run_id=? AND order_id=? AND action_id=?',(run_id,job_id,tool_action_id))
+        if not stage or stage['tool']!=tool or stage['maximum_micro_usd']!=maximum_micro_usd:
+            return Outcome('failed',reason='frozen creative stage binding mismatch')
+        limits={'max_duration_ms':120000,'max_storage_bytes':1000000}
+        if max_tokens is not None:
+            if stage['kind']!='generate' or max_tokens!=2048:return Outcome('failed',reason='invalid frozen generation ceiling')
+            limits['max_tokens']=max_tokens
+        result=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations',{'action_id':tool_action_id,'amount_micro_usd':maximum_micro_usd,'idempotency_key':action_id,'provider':tool,'account':self.account,'limits':limits})
         return Outcome('succeeded',{'reservation_id':result['reservation_id']})
     def payment_link(self,*,run_id,job_id,action_id,amount_micro_usd,currency):
         if currency!='USD':return Outcome('failed',reason='unsupported currency')
@@ -122,6 +145,22 @@ class EconomyClient:
             document={key:snapshot[key] for key in ('run_id','job_id','status','currency','mode','receipts_micro_usd','refunds_micro_usd','fees_micro_usd','earned_micro_usd','operating_cost_micro_usd','costs_final')}
             document['_provider_revision']=snapshot['revision']
             document['status']={'partially_refunded':'partial','failed':'pending'}.get(document['status'],document['status'])
+            stages=self.store.all('SELECT * FROM creative_stages WHERE order_id=? AND run_id=?',(job_id,run_id))
+            if stages:
+                rows=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations')
+                by_id={row['reservation_id']:row for row in rows}
+                cost,final=0,True
+                for stage in stages:
+                    if not stage['reservation_id']:
+                        final=False;continue
+                    row=by_id.get(stage['reservation_id'])
+                    if not row or row.get('run_id')!=run_id or row.get('action_id')!=stage['action_id'] or row.get('provider')!=stage['tool'] or row.get('account')!=self.account:
+                        raise Unavailable('creative reservation observation is missing or mismatched')
+                    settled=row.get('state')=='settled';cancelled=row.get('state')=='cancelled'
+                    value=row.get('actual_micro_usd') if settled else row.get('provisional_micro_usd',0)
+                    if type(value) is not int or value<0:raise Unavailable('invalid creative reservation charge')
+                    cost+=value;final=final and (settled or cancelled)
+                document['operating_cost_micro_usd']=cost;document['costs_final']=final
         digest=hashlib.sha256(encode({key:value for key,value in document.items() if not key.startswith('_')}).encode()).hexdigest()
         with self.store.transaction():
             previous=self.store.one('SELECT * FROM host_payment_snapshots WHERE job_id=?',(job_id,))
@@ -157,6 +196,13 @@ class EconomyClient:
             if action=='reserve':
                 found=[r for r in self.http.request(f'/v1/runs/{quote(run,safe="")}/reservations') if r['action_id']==identity(run,job,'create')]
                 if len(found)==1:return Outcome('succeeded',{'reservation_id':found[0]['reservation_id']})
+            if action=='reserve_action':
+                original=json.loads(effect['request']);found=[r for r in self.http.request(f'/v1/runs/{quote(run,safe="")}/reservations') if r['action_id']==original['tool_action_id'] and r['provider']==original['tool'] and r['amount_micro_usd']==original['maximum_micro_usd']]
+                if len(found)==1:return Outcome('succeeded',{'reservation_id':found[0]['reservation_id']})
+            if action=='release':
+                reservation_id=json.loads(effect['request'])['reservation_id']
+                row=self.http.request(f'/v1/reservations/{quote(reservation_id,safe="")}')
+                if row.get('state')=='cancelled':return Outcome('succeeded',{'reservation_id':reservation_id})
             if action=='payment_link':
                 found=[c for c in self.http.request(f'/v1/runs/{quote(run,safe="")}/checkouts') if c['request_id']==action_id]
                 if len(found)==1 and found[0].get('url'):return Outcome('succeeded',{'url':found[0]['url'],'payment_id':found[0]['payment_id']})

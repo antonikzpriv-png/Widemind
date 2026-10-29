@@ -166,9 +166,14 @@ async function setup() {
         resolve("var/pip-cache"),
         "-e",
         resolve("services/" + name) +
-          (process.argv.includes("--with-tests") && name !== "business"
-            ? "[test]"
-            : ""),
+          (() => {
+            const extras = [];
+            if (process.argv.includes("--with-tests") && name !== "business")
+              extras.push("test");
+            if (process.argv.includes("--with-graphics") && name === "tools")
+              extras.push("graphics");
+            return extras.length ? "[" + extras.join(",") + "]" : "";
+          })(),
       ],
       { stdio: "inherit", env: isolatedPythonEnvironment() },
     );

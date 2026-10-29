@@ -58,6 +58,8 @@ Business workflows:
 
 Local compute, filesystem and network costs are disclosed as owner-supplied/unallocated, not claimed as profitable free infrastructure. The action still requires a genuine economy authorization even at zero direct tool charge.
 
+Enhanced `creative.graphics` and `creative.software` are separate explicitly enabled adapters; they do not change those template contracts. They use a separately reserved model stage, actual graphics checks or isolated JavaScript execution, and versioned private delivery. See [creative fulfillment setup](CREATIVE_FULFILLMENT.md).
+
 ## Verification
 
 Verified locally: editable isolated Python install; 352 Python tests passed with 11 optional-environment skips and 75 subtests; three Node adapter tests and type checking. Added cases execute actual files/SVG/HTML, reject reservation identity mismatch before effects, recover/replay without duplicate dispatch, enforce authenticated HTTP/private artifacts, and retain provisional paid liability. Provider tests use deterministic transports and controlled local endpoints. No Gmail delivery, actual model charge, payment, live publishing or deployed sandbox is claimed from fixture results.

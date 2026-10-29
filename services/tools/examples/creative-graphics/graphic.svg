@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600">
+<rect width="800" height="600" fill="#101820" />
+<rect x="36" y="40" width="12" height="520" fill="#ecac32" stroke="none" stroke-width="1" />
+<circle cx="700" cy="110" r="50" fill="#1cc1ae" stroke="none" stroke-width="1" />
+<line x1="84" y1="330" x2="728" y2="330" fill="#000000" stroke="#ecac32" stroke-width="2" />
+<text x="84" y="104" font-family="monospace" font-size="18" text-anchor="start" fill="#ffffff" stroke="none" stroke-width="1" textLength="114.0000" lengthAdjust="spacingAndGlyphs">FIELD NOTES</text>
+<text x="84" y="210" font-family="monospace" font-size="48" text-anchor="start" fill="#ffffff" stroke="none" stroke-width="1" textLength="316.0000" lengthAdjust="spacingAndGlyphs">BUILD SMALL.</text>
+<text x="84" y="295" font-family="monospace" font-size="48" text-anchor="start" fill="#ffffff" stroke="none" stroke-width="1" textLength="241.0000" lengthAdjust="spacingAndGlyphs">THINK BIG.</text>
+<text x="84" y="390" font-family="monospace" font-size="22" text-anchor="start" fill="#ffffff" stroke="none" stroke-width="1" textLength="404.0000" lengthAdjust="spacingAndGlyphs">A creative workshop for curious people.</text>
+<text x="84" y="470" font-family="monospace" font-size="16" text-anchor="start" fill="#ffffff" stroke="none" stroke-width="1" textLength="196.0000" lengthAdjust="spacingAndGlyphs">SATURDAY 14 NOVEMBER</text>
+<text x="84" y="510" font-family="monospace" font-size="16" text-anchor="start" fill="#ffffff" stroke="none" stroke-width="1" textLength="179.0000" lengthAdjust="spacingAndGlyphs">10:00 - 16:00 | STUDIO 12</text>
+</svg>

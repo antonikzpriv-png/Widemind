@@ -1,0 +1,182 @@
+{
+  "accepted_budget_micro_usd": 250000,
+  "artifact_version": 1,
+  "checks": {
+    "acceptance_cases": 3,
+    "boundaries_checked": 4,
+    "generated_javascript_executed": true,
+    "invalid_inputs_rejected": 22,
+    "isolated_execution": true,
+    "source_created": true
+  },
+  "cost_boundary": "Recorded direct tool/model charges; local compute/storage remain disclosed owner infrastructure. Provisional usage is not a final invoice.",
+  "created_at": 1793307164.0368626,
+  "creation_costs": [
+    {
+      "action_id": "baaf938e1cf7d2116ff7e10db30fe7a1d2ad9f48",
+      "attempt": 0,
+      "charged_micro_usd": 1,
+      "cost_status": "recorded",
+      "maximum_micro_usd": 62500,
+      "provisional": true,
+      "reservation_id": "b260ebe4-ef61-41df-bcc3-23cd222ab5d8",
+      "revision": 0,
+      "stage": "generate"
+    },
+    {
+      "action_id": "366b8a7a3d7d6ca9a219fc834f49926c1defb2de",
+      "attempt": 0,
+      "charged_micro_usd": 0,
+      "cost_status": "recorded",
+      "maximum_micro_usd": 0,
+      "provisional": false,
+      "reservation_id": "753ac377-0aef-481d-ae3a-0af9594735ca",
+      "revision": 0,
+      "stage": "verify"
+    },
+    {
+      "action_id": "e9c8d0bad57512b63b3c1a9ecf78b4505e8c2a9d",
+      "attempt": 1,
+      "charged_micro_usd": 1,
+      "cost_status": "recorded",
+      "maximum_micro_usd": 62500,
+      "provisional": true,
+      "reservation_id": "3654a749-4662-4bc4-b355-871e274d7f99",
+      "revision": 0,
+      "stage": "generate"
+    },
+    {
+      "action_id": "39ac6ccde26fe17185c321d0922e6df6c1c12e5f",
+      "attempt": 1,
+      "charged_micro_usd": 0,
+      "cost_status": "recorded",
+      "maximum_micro_usd": 0,
+      "provisional": false,
+      "reservation_id": "d02dc6b2-c7fb-4ccf-8972-704644d2c6bf",
+      "revision": 0,
+      "stage": "verify"
+    }
+  ],
+  "customer_review_notes": [],
+  "files": [
+    {
+      "encoding": "utf-8",
+      "filename": "index.html",
+      "media_type": "text/html",
+      "role": "original",
+      "sha256": "9cd8093bdf76c2ad2c90e0dafed16a37f518ee7e33b9caa2f56c07e71168de33",
+      "size": 5158
+    },
+    {
+      "encoding": "utf-8",
+      "filename": "calculator.js",
+      "media_type": "text/javascript",
+      "role": "source",
+      "sha256": "0709e8cc1a14978b53866913f18f21f8d3ec01d2aa0e9415bb0e740a72fe4ffd",
+      "size": 2250
+    },
+    {
+      "encoding": "utf-8",
+      "filename": "calculator.css",
+      "media_type": "text/css",
+      "role": "source",
+      "sha256": "d9a9ee343f61acb9abe16b9610ea0e06bc188bd388c8d61af8ea07a7197075bf",
+      "size": 1525
+    },
+    {
+      "encoding": "utf-8",
+      "filename": "README.md",
+      "media_type": "text/markdown",
+      "role": "instructions",
+      "sha256": "12248bf43b69cbdf93574be10d916c49fce5bdc667974722758b4d3121ac83fe",
+      "size": 1748
+    },
+    {
+      "encoding": "utf-8",
+      "filename": "scope.json",
+      "media_type": "application/json",
+      "role": "source",
+      "sha256": "130fe768b31ad58d3607cd18d42f2c9a7a478c52ec6e2dbff59836cc5aab7b48",
+      "size": 932
+    }
+  ],
+  "manifest_version": 1,
+  "order_id": "53cbb007ca57c9d74f2f6f0ddbca73741c0573fb",
+  "quality_boundary": "Automated checks verify observable geometry/rendering or calculator behavior. Arbitrary visual prose and subjective quality remain customer review.",
+  "revision_feedback": "",
+  "revision_history": [],
+  "run_id": "5c6ba51f-1682-408b-b4a9-c95a1ede703e",
+  "scope": {
+    "acceptance_cases": [
+      {
+        "expected": {
+          "estimate": 480
+        },
+        "inputs": {
+          "hours": 8,
+          "rate": 60
+        },
+        "name": "Eight-hour project",
+        "tolerance": 0
+      },
+      {
+        "expected": {
+          "estimate": 200
+        },
+        "inputs": {
+          "hours": 2.5,
+          "rate": 80
+        },
+        "name": "Fractional hours",
+        "tolerance": 1e-06
+      },
+      {
+        "expected": {
+          "estimate": 0
+        },
+        "inputs": {
+          "hours": 0,
+          "rate": 60
+        },
+        "name": "No hours",
+        "tolerance": 0
+      }
+    ],
+    "category": "calculator",
+    "description": "Calculate a project estimate from hours and a customer-supplied hourly rate.",
+    "inputs": [
+      {
+        "default": 8,
+        "id": "hours",
+        "label": "Project hours",
+        "max": 500,
+        "min": 0
+      },
+      {
+        "default": 60,
+        "id": "rate",
+        "label": "Hourly rate",
+        "max": 1000,
+        "min": 1
+      }
+    ],
+    "max_revisions": 1,
+    "outputs": [
+      {
+        "id": "estimate",
+        "label": "Estimated total"
+      }
+    ],
+    "requirements": [
+      "Calculate the agreed results",
+      "Update results when an input changes",
+      "Allow resetting inputs to their starting values",
+      "Reject invalid or out-of-range inputs",
+      "Work on narrow screens",
+      "Support keyboard entry"
+    ],
+    "title": "Harbor Studio project estimator"
+  },
+  "scope_sha256": "00b74307af1bbfdb0216388a554443066f52d21ea7c3b8a50a0217ca54c9a8bc",
+  "service": "interactive-calculator"
+}

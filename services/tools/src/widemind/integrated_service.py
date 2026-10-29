@@ -133,12 +133,30 @@ class IntegratedTools:
         self.workspace=DedicatedWorkspace(config['workspace_dir'],**config.get('workspace_limits',{}))
         if self.workspace.root==self.journal.root or self.workspace.root in self.journal.root.parents or self.journal.root in self.workspace.root.parents:raise ToolError('configuration','Workspace must be disjoint from control data.')
         from .tools.workflows import GraphicWorkflow,SoftwareWorkflow,ResearchWorkflow
-        self.transport=transport or HTTPTransport(config.get('policy',{}));self.adapters={a.spec.name:a for a in (adapters or default_adapters()+[GraphicWorkflow(),SoftwareWorkflow(),ResearchWorkflow()])}
+        from .tools.creative_graphics import CreativeGraphicsAdapter
+        from .tools.creative_software import CreativeSoftwareAdapter
+        self.transport=transport or HTTPTransport(config.get('policy',{}));self.adapters={a.spec.name:a for a in (adapters or default_adapters()+[GraphicWorkflow(),SoftwareWorkflow(),ResearchWorkflow(),CreativeGraphicsAdapter(),CreativeSoftwareAdapter()])}
+    def settings(self,name):
+        tools=self.config.get('tools',{});settings=dict(tools.get(name,{}))
+        if name=='creative.graphics':
+            native=tools.get('graphics',{})
+            for key,value in native.items():
+                if key=='enabled':continue
+                if key.startswith('max_') and key in settings and type(value) is int and type(settings[key]) is int:
+                    settings[key]=min(value,settings[key])
+                elif key not in settings:settings[key]=value
+        if name=='creative.software':
+            settings['code_settings']=dict(tools.get('code.execute',{}))
+        return settings
     def capabilities(self):
         result=[]
         for name,adapter in self.adapters.items():
-            settings=self.config.get('tools',{}).get(name,{})
-            if name not in {'files','graphics','graphics.create','software.create','code.execute'} and self.config.get('policy',{}).get('allow_external_effects') is not True:
+            settings=self.settings(name)
+            if name in {'creative.graphics','creative.software'}:
+                dependencies=['files','graphics'] if name=='creative.graphics' else ['files','code.execute']
+                if any(self.config.get('tools',{}).get(dep,{}).get('enabled') is not True for dep in dependencies):
+                    result.append({'id':name,'availability':{'available':False,'reason':'Enable the required existing file, graphics or code adapters first'}});continue
+            if name not in {'files','graphics','graphics.create','software.create','code.execute','creative.graphics','creative.software'} and self.config.get('policy',{}).get('allow_external_effects') is not True:
                 result.append({'id':name,'availability':{'available':False,'reason':'External network operations disabled in owner policy'}});continue
             try:
                 health=adapter.availability(settings,self.secrets) if settings.get('enabled') is True else {'available':False,'reason':'Disabled in owner configuration'}
@@ -171,7 +189,12 @@ class IntegratedTools:
     def owner_fingerprint(self,action):
         name=action['tool']
         if name.startswith('gmail.') and name in {'gmail.send','gmail.read','gmail.list','gmail.thread'}:name='gmail'
-        value={'tool_config':self.config.get('tools',{}).get(name,{}),'policy':self.config.get('policy',{}),'workspace':str(self.workspace.root),'adapter_version':self.adapters[name].spec.version if name in self.adapters else None}
+        value={'tool_config':self.settings(name),'policy':self.config.get('policy',{}),'workspace':str(self.workspace.root),'adapter_version':self.adapters[name].spec.version if name in self.adapters else None}
+        # Keep historical fingerprints byte-for-byte for existing adapters so
+        # interrupted template/provider operations remain reconcilable.
+        if name in {'creative.graphics','creative.software'}:
+            dependencies={'files','graphics'} if name=='creative.graphics' else {'files','code.execute'}
+            value['dependencies']={dep:self.config.get('tools',{}).get(dep,{}) for dep in dependencies}
         return hashlib.sha256(canonical(value).encode()).hexdigest()
     def runtime_stopped(self,run_id):
         path=os.environ.get('WIDEMIND_RUNTIME_DATABASE')
@@ -199,9 +222,12 @@ class IntegratedTools:
                     if exc.code!='not_found':raise
                     self.workspace.write_bytes(path,content)
                 args['attachments']=[{'path':path,'filename':attachment['filename']}]
-        if name not in {'files','graphics','graphics.create','software.create','code.execute'} and self.config.get('policy',{}).get('allow_external_effects') is not True:raise Unavailable('Enable external network operations in private owner policy first.')
+        if name not in {'files','graphics','graphics.create','software.create','code.execute','creative.graphics','creative.software'} and self.config.get('policy',{}).get('allow_external_effects') is not True:raise Unavailable('Enable external network operations in private owner policy first.')
         if name not in self.adapters:raise Unavailable('Requested workflow is not configured; use capability status.')
-        settings=dict(self.config.get('tools',{}).get(name,{}))
+        settings=self.settings(name)
+        if name in {'creative.graphics','creative.software'}:
+            dependencies=['files','graphics'] if name=='creative.graphics' else ['files','code.execute']
+            if any(self.config.get('tools',{}).get(dep,{}).get('enabled') is not True for dep in dependencies):raise Unavailable('A required existing adapter was disabled; completed stages remain recoverable.')
         if settings.get('enabled') is not True:raise Unavailable('Tool disabled in owner configuration.')
         cap=action['limit']['maxOutputBytes'];settings['max_output_bytes']=min(settings.get('max_output_bytes',cap),cap)
         if action['limit'].get('maxTokens') is not None:settings['max_output_tokens']=min(settings.get('max_output_tokens',action['limit']['maxTokens']),action['limit']['maxTokens'])

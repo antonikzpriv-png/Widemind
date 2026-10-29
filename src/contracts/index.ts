@@ -283,6 +283,8 @@ export interface ModuleRoute {
   path: string;
   method: "GET" | "POST";
   access: "public" | "operator";
+  /** Public POST previews only. Host supplies an opaque-origin, networkless sandbox CSP. */
+  responseKind?: "sandboxed-html";
   /** Fixed registered operator page for successful same-origin HTML form posts. */
   operatorRedirect?: string;
   handle(request: {

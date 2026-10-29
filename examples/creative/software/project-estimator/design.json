@@ -1,0 +1,21 @@
+{
+  "outputs": [
+    {
+      "id": "estimate",
+      "expression": {
+        "op": "multiply",
+        "args": [
+          {
+            "input": "hours"
+          },
+          {
+            "input": "rate"
+          }
+        ]
+      }
+    }
+  ],
+  "accent": "#b6ddd8",
+  "heading": "Price your next project",
+  "description": "An interactive estimator for Harbor Studio."
+}

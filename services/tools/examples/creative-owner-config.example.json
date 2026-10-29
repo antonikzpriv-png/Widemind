@@ -1,0 +1,33 @@
+{
+  "control_dir": "/srv/widemind/private/tools-control",
+  "workspace_dir": "/srv/widemind/agent-workspace",
+  "policy": { "profile": "sandbox", "allow_external_effects": false },
+  "secret_environment": { "openai-key": "WIDEMIND_OPENAI_API_KEY" },
+  "tools": {
+    "files": { "enabled": true },
+    "graphics": { "enabled": true, "max_width": 2048, "max_height": 2048, "max_pixels": 4000000 },
+    "graphics.create": { "enabled": true },
+    "software.create": { "enabled": true },
+    "creative.graphics": { "enabled": false },
+    "creative.software": { "enabled": false, "verification_runtime": "node" },
+    "code.execute": {
+      "enabled": false,
+      "image": "REPLACE_WITH_REVIEWED_LOCAL_SHA256_IMAGE_ID",
+      "owner_compute_subsidy": true,
+      "wall_seconds": 30,
+      "memory_bytes": 134217728,
+      "pids": 32
+    },
+    "ai.generate": {
+      "enabled": false,
+      "model": "REPLACE_WITH_OWNER_APPROVED_MODEL",
+      "secret_ref": "openai-key",
+      "model_context_tokens": 8192,
+      "max_output_tokens": 2048,
+      "max_input_bytes": 32000,
+      "max_output_bytes": 32000,
+      "maximum_microusd": 100000,
+      "tariff": { "input_microusd_per_million_tokens": 0, "output_microusd_per_million_tokens": 0 }
+    }
+  }
+}

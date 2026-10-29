@@ -141,6 +141,57 @@ export async function browserSession(directory, output) {
       evaluate,
       click,
       close,
+      // CDP can inspect the test frame without granting the application origin
+      // access to it. This helper never changes the iframe sandbox or its CSP.
+      async evaluateFrame(name, expression) {
+        const { root } = await send("DOM.getDocument");
+        const { nodeId } = await send("DOM.querySelector", {
+          nodeId: root.nodeId,
+          selector: "iframe[name=" + JSON.stringify(name) + "]",
+        });
+        if (!nodeId) throw new Error("Missing preview element");
+        const { node } = await send("DOM.describeNode", { nodeId });
+        const frameId = node.frameId;
+        if (!frameId) throw new Error("Missing preview frame ID");
+        let frameSession = sessionId;
+        const { targetInfos } = await send("Target.getTargets", {}, null);
+        const remote = targetInfos.find(
+          (target) => target.type === "iframe" && target.targetId === frameId,
+        );
+        if (remote) {
+          // Opaque frames can have a separate renderer process. Attach CDP to
+          // that test target; do not weaken site isolation or sandbox flags.
+          ({ sessionId: frameSession } = await send(
+            "Target.attachToTarget",
+            {
+              targetId: remote.targetId,
+              flatten: true,
+            },
+            null,
+          ));
+        }
+        const { executionContextId } = await send(
+          "Page.createIsolatedWorld",
+          {
+            frameId,
+            worldName: "widemind-ui-audit",
+          },
+          frameSession,
+        );
+        const result = await send(
+          "Runtime.evaluate",
+          {
+            expression,
+            contextId: executionContextId,
+            returnByValue: true,
+            awaitPromise: true,
+          },
+          frameSession,
+        );
+        if (result.exceptionDetails)
+          throw new Error("Preview evaluation failed");
+        return result.result.value;
+      },
       async fill(selector, text) {
         await click(selector);
         await send("Input.insertText", { text });

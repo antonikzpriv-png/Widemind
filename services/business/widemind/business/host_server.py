@@ -14,9 +14,12 @@ from .store import Store, encode, identity
 from .policy import Policy
 from .services import ResearchBrief
 from .host_services import LOCAL_SERVICES
+from .creative_services import CREATIVE_SERVICES
+from .creative_engine import CreativeFulfillment
+from . import creative_portal
 from .host_clients import EconomyClient, ToolsClient, RuntimeState
 
-class PortalBusiness(Business):
+class PortalBusiness(CreativeFulfillment, Business):
     """Actual private portal publication, never falsely described as Gmail delivery."""
     def _email(self,entity,step,customer_id,subject,body,*,artifact=None):
         if not self._active() or self._opted_out(customer_id): raise Deferred('portal publication disabled or opted out')
@@ -44,9 +47,9 @@ class Host:
         if not self.runtime.exists(run):raise ValueError('runtime run is unavailable')
         store=Store(self.path)
         if not store.one('SELECT document FROM settings WHERE run_id=?',(run,)):
-            policy=Policy(capabilities=('research','graphics','software'),prices={'research-brief':2000000,'svg-graphic':2000000,'software-starter':3000000},goal_weights={'research-brief':1,'svg-graphic':1,'software-starter':1})
+            policy=Policy(capabilities=('research','graphics','software'),prices={'research-brief':2000000,'svg-graphic':2000000,'software-starter':3000000,'custom-graphic':5000000,'interactive-calculator':8000000},goal_weights={'research-brief':1,'svg-graphic':1,'software-starter':1,'custom-graphic':1,'interactive-calculator':1})
             store.db.execute('INSERT OR IGNORE INTO settings VALUES (?,?)',(run,encode(policy.document())))
-        return PortalBusiness(store,run_id=run,economy=EconomyClient(self.env,store,self.mode),tools=ToolsClient(self.env,self.mode),runtime=self.runtime,mode=self.mode,services=[ResearchBrief(),*LOCAL_SERVICES])
+        return PortalBusiness(store,run_id=run,economy=EconomyClient(self.env,store,self.mode),tools=ToolsClient(self.env,self.mode),runtime=self.runtime,mode=self.mode,services=[ResearchBrief(),*LOCAL_SERVICES,*CREATIVE_SERVICES])
     def token_request(self,business,token):
         if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',token):raise ValueError('invalid customer authorization')
         hashed=hashlib.sha256(token.encode()).hexdigest()
@@ -66,7 +69,15 @@ class Host:
         row=business.store.one("SELECT id,CASE WHEN state='running' AND lease_until>due_at THEN lease_until ELSE due_at END AS due_at,attempts FROM events WHERE run_id=? AND state IN ('queued','running') ORDER BY due_at,id LIMIT 1",(business.run_id,))
         return {'eventId':row['id'] if row else None,'attempt':row['attempts'] if row else 0,'dueAt':row['due_at'] if row else None,'runtimeState':self.runtime.state(business.run_id)}
     def offerings(self,business):
-        return [{'id':s.name,'title':s.name.replace('-',' ').title(),'description':'Scoped work with private delivery and verified payment before fulfillment.','priceMicros':str(business.policy.prices.get(s.name,0)),'capability':s.capability,'available':s.capability in business.policy.capabilities and business.tools.available({'research':'research.collect','graphics':'graphics.create','software':'software.create'}[s.capability]),'reason':'Requires configured collection tools and funded runtime'} for s in business.services.values()]
+        result=[]
+        for service in business.services.values():
+            enhanced=getattr(service,'enhanced',False)
+            required=getattr(service,'required_tools',({'research':'research.collect','graphics':'graphics.create','software':'software.create'}[service.capability],))
+            available=service.capability in business.policy.capabilities and business.policy.prices.get(service.name,0)>0 and all(business.tools.available(tool) for tool in required)
+            title=getattr(service,'title',service.name.replace('-',' ').title()+(' · template' if service.name in {'svg-graphic','software-starter'} else ''))
+            description=getattr(service,'description','A bounded fixed template with customer text. No generated behavior is promised.' if service.name in {'svg-graphic','software-starter'} else 'Scoped work with private delivery and verified payment before fulfillment.')
+            result.append({'id':service.name,'title':title,'description':description,'priceMicros':str(business.policy.prices.get(service.name,0)),'capability':service.capability,'available':available,'enhanced':enhanced,'reason':'Requires the configured model, rendering/files, isolated verification and an approved service price' if enhanced else 'Requires configured tools and operator policy'})
+        return result
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
         try:
@@ -115,7 +126,7 @@ class Host:
                 actual=business.receive(source='customer-portal',external_id=request_id,service=payload['service'],scope=payload['scope'],customer_email=email)
                 if actual!=op:raise ValueError('opportunity identity mismatch')
                 return {'requestId':request_id,'opportunityId':op,'customerToken':token,'runId':run}
-            if path in {'/v1/customer','/v1/accept','/v1/delivery','/v1/revoke'}:
+            if path in {'/v1/customer','/v1/accept','/v1/delivery','/v1/revoke','/v1/manifest','/v1/change-request'}:
                 request=self.token_request(business,payload.get('token'))
                 quotes=business.store.all('SELECT * FROM quotes WHERE opportunity_id=?',(request['opportunity_id'],))
                 quote_ids=[q['id'] for q in quotes]
@@ -124,9 +135,19 @@ class Host:
                     if payload['quoteId'] not in quote_ids:raise ValueError('unknown quote')
                     return {'orderId':business.accept(payload['quoteId'],customer_email=request['email'],evidence_reference='customer-portal:'+identity(payload['token']))}
                 orders=business.store.all('SELECT * FROM orders WHERE quote_id IN (SELECT id FROM quotes WHERE opportunity_id=?)',(request['opportunity_id'],))
-                if path=='/v1/delivery':
+                if path in {'/v1/delivery','/v1/manifest','/v1/change-request'}:
                     matches=[o for o in orders if o['id']==payload['orderId']]
                     if len(matches)!=1:raise ValueError('unknown order')
+                    order=matches[0]
+                    if path=='/v1/change-request':
+                        if payload.get('kind')=='revision':
+                            if payload.get('scope') is not None:raise ValueError('included revisions cannot change the accepted scope')
+                            return business.request_revision(order['id'],request_id=payload['requestId'],feedback=payload['feedback'])
+                        if payload.get('kind')=='scope_change':return creative_portal.scope_change(business,request,order,payload)
+                        raise ValueError('invalid change request kind')
+                    if path=='/v1/manifest':return creative_portal.read_manifest(business,order,payload)
+                    if business._creative_service(order):return creative_portal.read_delivery(business,order,payload)
+                    if payload.get('version') is not None or payload.get('filename') is not None:raise ValueError('legacy delivery has no version/file selection')
                     published=business.store.one("SELECT artifact FROM host_notifications WHERE run_id=? AND entity_id=? AND purpose='delivery' AND artifact IS NOT NULL",(run,payload['orderId']))
                     if not published:raise ValueError('delivery is not available')
                     artifact=json.loads(published['artifact']);return {'filename':artifact['filename'],'mediaType':artifact['media_type'],'content':artifact['content']}
@@ -138,7 +159,7 @@ class Host:
                     checkout=None
                     for n in notices:
                         if n['entity_id']==o['id'] and n['purpose']=='payment_request':checkout=json.loads(n['body']).get('payment_url')
-                    return {'orderId':o['id'],'status':o['status'],'dueAt':o['delivery_due_at'],'checkoutUrl':checkout,'deliveryAvailable':bool(business.store.one("SELECT id FROM host_notifications WHERE entity_id=? AND purpose='delivery'",(o['id'],)))}
+                    return {'orderId':o['id'],'status':o['status'],'dueAt':o['delivery_due_at'],'checkoutUrl':checkout,'deliveryAvailable':bool(business.store.one("SELECT id FROM host_notifications WHERE entity_id=? AND purpose='delivery'",(o['id'],))),**creative_portal.order_details(business,o)}
                 return {'runId':run,'opportunityId':request['opportunity_id'],'status':op['status'],'mode':self.mode,'quotes':[{'quoteId':q['id'],'service':business.store.one('SELECT service FROM opportunities WHERE id=?',(request['opportunity_id'],))['service'],'scope':json.loads(q['scope']),'priceMicros':str(q['price_micro_usd']),'expiresAt':q['expires_at'],'status':q['status']} for q in quotes],'orders':[order_public(o) for o in orders],'notifications':[{'id':n['id'],'purpose':n['purpose'],'subject':n['subject'],'body':n['body'],'at':n['created_at']} for n in notices]}
             if path=='/v1/step':
                 action=payload['actionId'];event=payload['eventId']

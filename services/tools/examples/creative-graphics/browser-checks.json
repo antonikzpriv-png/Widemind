@@ -1,0 +1,59 @@
+{
+  "synthetic": true,
+  "providerCalls": 0,
+  "actual_svg_rendered": true,
+  "pageErrors": [],
+  "root": "svg",
+  "width": 800,
+  "height": 600,
+  "text": [
+    {
+      "text": "FIELD NOTES",
+      "x": 84,
+      "y": 87,
+      "width": 114,
+      "height": 21,
+      "inside": true
+    },
+    {
+      "text": "BUILD SMALL.",
+      "x": 84,
+      "y": 165,
+      "width": 316,
+      "height": 56,
+      "inside": true
+    },
+    {
+      "text": "THINK BIG.",
+      "x": 84,
+      "y": 250,
+      "width": 241,
+      "height": 56,
+      "inside": true
+    },
+    {
+      "text": "A creative workshop for curious people.",
+      "x": 84,
+      "y": 370,
+      "width": 404,
+      "height": 25,
+      "inside": true
+    },
+    {
+      "text": "SATURDAY 14 NOVEMBER",
+      "x": 84,
+      "y": 455,
+      "width": 196.37356567382812,
+      "height": 19,
+      "inside": true
+    },
+    {
+      "text": "10:00 - 16:00 | STUDIO 12",
+      "x": 84,
+      "y": 495,
+      "width": 179,
+      "height": 19,
+      "inside": true
+    }
+  ]
+}

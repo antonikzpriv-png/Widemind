@@ -1,0 +1,25 @@
+{
+  "title": "Field Notes workshop poster",
+  "description": "A customer-specific workshop poster with a strong typographic hierarchy and geometric accents.",
+  "width": 800,
+  "height": 600,
+  "required_text": [
+    "FIELD NOTES",
+    "BUILD SMALL. THINK BIG.",
+    "A creative workshop for curious people.",
+    "SATURDAY 14 NOVEMBER",
+    "10:00 - 16:00 | STUDIO 12"
+  ],
+  "palette": [
+    "#101820",
+    "#ffffff",
+    "#ecac32",
+    "#1cc1ae"
+  ],
+  "visual_requirements": [
+    "Strong typographic hierarchy",
+    "A mint circular accent",
+    "A warm gold left rule"
+  ],
+  "max_revisions": 1
+}

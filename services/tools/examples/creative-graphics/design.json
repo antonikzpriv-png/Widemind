@@ -1,0 +1,77 @@
+{
+  "background": "#101820",
+  "elements": [
+    {
+      "type": "rect",
+      "x": 36,
+      "y": 40,
+      "width": 12,
+      "height": 520,
+      "fill": "#ecac32"
+    },
+    {
+      "type": "circle",
+      "cx": 700,
+      "cy": 110,
+      "radius": 50,
+      "fill": "#1cc1ae"
+    },
+    {
+      "type": "line",
+      "x1": 84,
+      "y1": 330,
+      "x2": 728,
+      "y2": 330,
+      "stroke": "#ecac32",
+      "stroke_width": 2
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 104,
+      "text": "FIELD NOTES",
+      "font_size": 18,
+      "fill": "#ffffff"
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 210,
+      "text": "BUILD SMALL.",
+      "font_size": 48,
+      "fill": "#ffffff"
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 295,
+      "text": "THINK BIG.",
+      "font_size": 48,
+      "fill": "#ffffff"
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 390,
+      "text": "A creative workshop for curious people.",
+      "font_size": 22,
+      "fill": "#ffffff"
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 470,
+      "text": "SATURDAY 14 NOVEMBER",
+      "font_size": 16,
+      "fill": "#ffffff"
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 510,
+      "text": "10:00 - 16:00 | STUDIO 12",
+      "font_size": 16,
+      "fill": "#ffffff"
+    }
+  ]
+}

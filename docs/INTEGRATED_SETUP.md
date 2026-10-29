@@ -52,6 +52,10 @@ Build Node with `npm run build`, migrate with all old processes stopped, and sup
 
 SQLite databases and WAL must persist on the same host and be backed up consistently. Do not run mixed application versions on the same databases. The example web/worker units remain templates; they do not claim a deployed host/domain or certificate.
 
+## Enhanced fulfillment
+
+See [creative fulfillment](CREATIVE_FULFILLMENT.md) for customer-specific SVG/PNG designs, functional calculators with actual isolated execution checks, bounded paid repairs/revisions, private versioned manifests and sandboxed previews. Install with `npm run services:setup -- --with-tests --with-graphics` for PNG support; enhanced software also requires the documented reviewed local Python+Node image. Existing template offerings remain labeled.
+
 ## Verification and scope
 
 Use `npm run check`, `npm run smoke`, and `npm run browser:smoke` for the foundation and frontend. `npm run services:test` runs the independently installed Python suites (install with --with-tests). `npm run integration:smoke` starts all real local services and the persistent worker, uses an explicitly local PayPal protocol fixture, and verifies quote, acceptance, signature verification, capture, authorization, artifact delivery and exact financial totals. `npm run integration:browser` runs the same workflow with Chromium using the actual customer request/accept/download screens, phone layout and authenticated operator integration screen. It writes synthetic screenshots under ignored `var/integration-browser`. Neither command posts invented live customer revenue. Tests distinguish local artifacts, sandbox accounting and external-provider fixtures from live behavior.

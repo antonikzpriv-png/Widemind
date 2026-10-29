@@ -161,6 +161,13 @@ export function registerModules(
       )
         throw new Error("Invalid module route");
       if (
+        route.responseKind !== undefined &&
+        (route.responseKind !== "sandboxed-html" ||
+          route.access !== "public" ||
+          route.method !== "POST")
+      )
+        throw new Error("Sandboxed HTML requires a public POST route");
+      if (
         route.operatorRedirect !== undefined &&
         (route.method !== "POST" ||
           route.access !== "operator" ||

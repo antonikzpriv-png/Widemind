@@ -1,4 +1,5 @@
 import { commercePage, commerceScript, integrationsPage } from "./commerce.ts";
+import { creativePortalCss } from "./creative-portal.ts";
 import { callDependency, DependencyTimeout } from "../runtime/dependencies.ts";
 import { RequestError } from "./errors.ts";
 import { createServer } from "node:http";
@@ -75,7 +76,7 @@ export function webServer(context: {
       response.setHeader("X-Frame-Options", "DENY");
       response.setHeader(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; frame-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       );
       const send = (
         status: number,
@@ -105,7 +106,7 @@ export function webServer(context: {
           return;
         }
         if (method === "GET" && path === "/style.css") {
-          send(200, css, "text/css");
+          send(200, css + creativePortalCss, "text/css");
           return;
         }
         if (method === "GET" && path === "/healthz") {
@@ -183,6 +184,13 @@ export function webServer(context: {
           (route) => route.path === path && route.method === method,
         );
         if (moduleRoute) {
+          if (
+            moduleRoute.responseKind === "sandboxed-html" &&
+            request.headers.origin !== config.publicOrigin
+          ) {
+            send(403, { error: "Same-origin preview request required" });
+            return;
+          }
           if (moduleRoute.access === "operator" && !session) {
             send(401, { error: "Operator authentication required" });
             return;
@@ -264,6 +272,33 @@ export function webServer(context: {
             result.status > 599
           )
             throw new Error("Invalid module response");
+          if (
+            moduleRoute.responseKind === "sandboxed-html" &&
+            result.status >= 200 &&
+            result.status < 300
+          ) {
+            const preview = result.body;
+            if (
+              !preview ||
+              typeof preview !== "object" ||
+              Array.isArray(preview) ||
+              typeof preview.html !== "string" ||
+              Buffer.byteLength(preview.html, "utf8") > 1_000_000
+            )
+              throw new Error("Invalid bounded preview document");
+            response.setHeader(
+              "Content-Security-Policy",
+              "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'; frame-ancestors 'self'; base-uri 'none'; object-src 'none'; child-src 'none'",
+            );
+            response.setHeader("X-Frame-Options", "SAMEORIGIN");
+            response.setHeader("Referrer-Policy", "no-referrer");
+            response.setHeader(
+              "Permissions-Policy",
+              "camera=(), microphone=(), geolocation=(), payment=(), usb=(), clipboard-read=(), clipboard-write=()",
+            );
+            send(result.status, preview.html, "text/html");
+            return;
+          }
           if (
             moduleRoute.access === "operator" &&
             method === "POST" &&

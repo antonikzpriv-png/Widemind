@@ -1,0 +1,96 @@
+{
+  "accepted_budget_micro_usd": 250000,
+  "artifact_version": 1,
+  "checks": {
+    "height": 600,
+    "no_clipping_or_overflow": true,
+    "palette": true,
+    "png_rendered": true,
+    "required_text": true,
+    "svg_parsed": true,
+    "visible_text": true,
+    "width": 800
+  },
+  "cost_boundary": "Recorded direct tool/model charges; local compute/storage remain disclosed owner infrastructure. Provisional usage is not a final invoice.",
+  "created_at": 1793307313.6465788,
+  "creation_costs": [
+    {
+      "action_id": "0870da31c1bbfc30f3f42879a0dd81c4f9c6ef76",
+      "attempt": 0,
+      "charged_micro_usd": 1,
+      "cost_status": "recorded",
+      "maximum_micro_usd": 62500,
+      "provisional": true,
+      "reservation_id": "c1cc58ed-d836-43bb-b442-02f6fa76bbf9",
+      "revision": 0,
+      "stage": "generate"
+    },
+    {
+      "action_id": "4e9598ebd9e860b7027482a526bc52729e5f9b1e",
+      "attempt": 0,
+      "charged_micro_usd": 0,
+      "cost_status": "recorded",
+      "maximum_micro_usd": 0,
+      "provisional": false,
+      "reservation_id": "ea1d75b9-6013-4372-a009-384c6ca2c133",
+      "revision": 0,
+      "stage": "verify"
+    }
+  ],
+  "customer_review_notes": [
+    "Strong typographic hierarchy",
+    "A mint circular accent",
+    "A warm gold left rule"
+  ],
+  "files": [
+    {
+      "encoding": "utf-8",
+      "filename": "graphic.svg",
+      "media_type": "image/svg+xml",
+      "role": "original",
+      "sha256": "703c59a8764c9f8d3740fcd6ebdb72b3122e915eee7a71994dbe8f1a72ed6dcb",
+      "size": 1657
+    },
+    {
+      "encoding": "base64",
+      "filename": "graphic.png",
+      "media_type": "image/png",
+      "role": "preview",
+      "sha256": "6decd25f8f4b0e617e6a9805714284d0537bef4b4d81f92a7094577dc56109bb",
+      "size": 25134
+    }
+  ],
+  "manifest_version": 1,
+  "order_id": "2fe9e5a7a59f28bac68eef67412b0a5d594e9418",
+  "quality_boundary": "Automated checks verify observable geometry/rendering or calculator behavior. Arbitrary visual prose and subjective quality remain customer review.",
+  "revision_feedback": "",
+  "revision_history": [],
+  "run_id": "7598b4fb-f687-4fdc-a693-23e5951b803e",
+  "scope": {
+    "description": "A customer-specific workshop poster with a strong typographic hierarchy and geometric accents.",
+    "height": 600,
+    "max_revisions": 1,
+    "palette": [
+      "#101820",
+      "#ffffff",
+      "#ecac32",
+      "#1cc1ae"
+    ],
+    "required_text": [
+      "FIELD NOTES",
+      "BUILD SMALL. THINK BIG.",
+      "A creative workshop for curious people.",
+      "SATURDAY 14 NOVEMBER",
+      "10:00 - 16:00 | STUDIO 12"
+    ],
+    "title": "Field Notes workshop poster",
+    "visual_requirements": [
+      "Strong typographic hierarchy",
+      "A mint circular accent",
+      "A warm gold left rule"
+    ],
+    "width": 800
+  },
+  "scope_sha256": "f74454be51b3f5ff744858ed84e7e9ec95daae58d343b1d93d0569e745774b6c",
+  "service": "custom-graphic"
+}

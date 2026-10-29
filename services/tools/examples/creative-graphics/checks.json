@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "synthetic": true,
+  "design_source": "Explicit deterministic test fixture, not a claimed live model/customer run.",
+  "checks": {
+    "required_text": true,
+    "no_clipping_or_overflow": true,
+    "palette": true,
+    "visible_text": true,
+    "svg_parsed": true,
+    "png_rendered": true,
+    "width": 800,
+    "height": 600
+  },
+  "files": [
+    {
+      "filename": "graphic.svg",
+      "media_type": "image/svg+xml",
+      "encoding": "utf-8",
+      "sha256": "703c59a8764c9f8d3740fcd6ebdb72b3122e915eee7a71994dbe8f1a72ed6dcb",
+      "size": 1657,
+      "role": "original"
+    },
+    {
+      "filename": "graphic.png",
+      "media_type": "image/png",
+      "encoding": "base64",
+      "sha256": "6decd25f8f4b0e617e6a9805714284d0537bef4b4d81f92a7094577dc56109bb",
+      "size": 25134,
+      "role": "preview"
+    }
+  ],
+  "local_render_charge_microusd": 0,
+  "cost_disclosure": {
+    "local_compute_storage": "owner-provided; excluded from this tool charge",
+    "allocated_cost_microusd": null
+  },
+  "qualitative_review_notes": [
+    "Strong typographic hierarchy",
+    "A mint circular accent",
+    "A warm gold left rule"
+  ]
+}

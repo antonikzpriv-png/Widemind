@@ -19,6 +19,11 @@ class Outcome:
 
 
 class Economy(Protocol):
+    def reserve_action(self, *, run_id: str, job_id: str, action_id: str,
+                       tool_action_id: str, tool: str, maximum_micro_usd: int,
+                       max_tokens: int | None = None) -> Outcome:
+        """Bind one immutable creative stage to an existing authoritative reservation."""
+        ...
     def reserve(self, *, run_id: str, job_id: str, action_id: str,
                 maximum_micro_usd: int) -> Outcome: ...
     def payment_link(self, *, run_id: str, job_id: str, action_id: str,

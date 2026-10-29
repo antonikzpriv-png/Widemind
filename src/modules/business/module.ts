@@ -40,6 +40,61 @@ const token = (value: unknown) => {
     throw new Error("Invalid customer token");
   return value;
 };
+const artifactVersion = (value: Json | undefined) => {
+  if (value === undefined || value === "") return undefined;
+  const parsed =
+    typeof value === "string" && /^[0-9]{1,3}$/.test(value)
+      ? Number(value)
+      : value;
+  if (
+    typeof parsed !== "number" ||
+    !Number.isInteger(parsed) ||
+    parsed < 1 ||
+    parsed > 100
+  )
+    throw new Error("Invalid artifact version");
+  return parsed;
+};
+function previewDocument(value: Json): Json {
+  const artifact = record(value);
+  if (
+    typeof artifact.content !== "string" ||
+    Buffer.byteLength(artifact.content) > 1_500_000
+  )
+    throw new Error("Preview unavailable");
+  const encoding = artifact.encoding ?? "utf-8";
+  if (encoding !== "utf-8" && encoding !== "base64")
+    throw new Error("Invalid artifact encoding");
+  if (
+    encoding === "base64" &&
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      artifact.content,
+    )
+  )
+    throw new Error("Invalid artifact encoding");
+  const bytes = Buffer.from(
+    artifact.content,
+    encoding === "base64" ? "base64" : "utf8",
+  );
+  if (bytes.length > 1_000_000) throw new Error("Preview exceeds bound");
+  if (artifact.mediaType === "text/html") {
+    return { html: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };
+  }
+  if (
+    artifact.mediaType !== "image/svg+xml" &&
+    artifact.mediaType !== "image/png"
+  )
+    throw new Error("This artifact has no visual preview");
+  const html =
+    '<!doctype html><html lang="en"><meta charset="utf-8"><title>Private artwork preview</title><style>html,body{margin:0;min-height:100%;background:#111}body{display:grid;place-items:center}img{display:block;max-width:100%;height:auto}</style><img alt="Your private graphic preview" src="data:' +
+    artifact.mediaType +
+    ";base64," +
+    bytes.toString("base64") +
+    '"></html>';
+  if (Buffer.byteLength(html) > 1_000_000)
+    throw new Error("Preview exceeds bound");
+  return { html };
+}
 function receipt(
   action: ToolAction,
   step: Step,
@@ -182,10 +237,12 @@ export const definition: ModuleDefinition = {
         body: Record<string, Json>,
         query: Record<string, string>,
       ) => Promise<Json>,
+      responseKind?: "sandboxed-html",
     ) => ({
       path: `/api/modules/business/${name}`,
       access,
       method,
+      ...(responseKind ? { responseKind } : {}),
       handle: async (input: {
         body: Json;
         query: Record<string, string>;
@@ -260,7 +317,15 @@ export const definition: ModuleDefinition = {
             return {
               kind: "wait",
               reason: "Business event scheduled",
-              wakeAt: new Date(state.dueAt * 1000).toISOString(),
+              // Payment reconciliation completes in its separate service. Keep
+              // free observation bounded even when an older delivery has a
+              // distant deadline and no new webhook reaches this worker.
+              wakeAt: new Date(
+                Math.min(state.dueAt * 1000, Date.now() + 30000),
+              ).toISOString(),
+              acknowledgeEventIds: snapshot.events.map(
+                (event) => event.eventId,
+              ),
             };
           return {
             kind: "work",
@@ -304,19 +369,69 @@ export const definition: ModuleDefinition = {
           wake(runId, `request:${String(result.opportunityId)}`);
           return result;
         }),
-        ...(["customer", "accept", "delivery", "revoke"] as const).map((name) =>
+        ...(
+          ["customer", "accept", "delivery", "manifest", "revoke"] as const
+        ).map((name) =>
           route(name, "public", "POST", async (body) => {
             const runId = run(body.runId);
             const result = await client.request(`/v1/${name}`, {
               ...body,
               runId,
               token: token(body.token),
+              ...(body.version !== undefined
+                ? { version: artifactVersion(body.version) }
+                : {}),
             });
             if (name === "accept")
               wake(runId, `accept:${identifier(body.quoteId)}`);
             return result;
           }),
         ),
+        route(
+          "preview",
+          "public",
+          "POST",
+          async (body) => {
+            const result = await client.request<Json>("/v1/delivery", {
+              runId: run(body.runId, true),
+              token: token(body.token),
+              orderId: identifier(body.orderId),
+              ...(body.filename !== undefined
+                ? { filename: identifier(body.filename) }
+                : {}),
+              ...(body.version !== undefined
+                ? { version: artifactVersion(body.version) }
+                : {}),
+            });
+            return previewDocument(result);
+          },
+          "sandboxed-html",
+        ),
+        route("change-request", "public", "POST", async (body) => {
+          const runId = run(body.runId, true);
+          if (body.kind !== "revision" && body.kind !== "scope_change")
+            throw new Error("Invalid change request");
+          if (
+            typeof body.feedback !== "string" ||
+            !body.feedback.trim() ||
+            body.feedback.length > 2000
+          )
+            throw new Error("Change request needs bounded feedback");
+          const requestId = identifier(body.requestId);
+          const result = await client.request<Json>("/v1/change-request", {
+            runId,
+            token: token(body.token),
+            orderId: identifier(body.orderId),
+            requestId,
+            kind: body.kind,
+            feedback: body.feedback,
+            ...(body.kind === "scope_change"
+              ? { scope: record(body.scope ?? null) }
+              : {}),
+          });
+          wake(runId, `change:${requestId}`);
+          return result;
+        }),
         ...(["reconcile", "retry"] as const).map((name) =>
           route(name, "operator", "POST", async (body) => {
             const runId = run(body.runId);
