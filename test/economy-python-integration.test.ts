@@ -422,6 +422,23 @@ test(
           (await f.services.economy.summary(runId))!.reservedMicros,
           "0",
         );
+        const actionRow = f.store.actions(runId)[0]!;
+        const observed = JSON.parse(actionRow.receipt_json!) as ToolReceipt;
+        observed.usage.externalEventId = `${observed.actionId}:fresh-final-observation`;
+        observed.usage.evidenceRef = "fresh-synthetic-provider-observation";
+        assert.equal(
+          (
+            await f.services.economy.settle(
+              JSON.parse(actionRow.reservation_json!),
+              observed,
+            )
+          ).kind,
+          "settled",
+        );
+        assert.equal(
+          (await f.services.economy.summary(runId))!.postedMicros,
+          String(5000000n - BigInt(cost)),
+        );
         await f.runtime.tick();
         assert.equal(calls, 1);
         const rows = (await (
