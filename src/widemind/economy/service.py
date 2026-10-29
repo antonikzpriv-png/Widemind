@@ -545,6 +545,8 @@ class EconomyService:
         key = (payment['provider'], payment['account'], payment['mode'], payment['payment_id'])
         net = self._payment_posted_net(db, key)
         amount = max(0, net - payment['released_micro_usd'], payment['pending_liability_micro_usd'] if pending is None else pending)
+        if amount > MAX_MONEY:
+            raise EconomyError('payment_projection_limit', 'Cumulative hold for one payment exceeds the supported int64 projection; reconcile with the operator', 422)
         self._hold(db, payment['run_id'], self._payment_hold_id(*key), amount, 'customer', 'Unfulfilled customer funds or pending refund/dispute exposure')
 
     def apply_payment_snapshot(self, snapshot, event_id=None, event_digest=None):
@@ -637,6 +639,8 @@ class EconomyService:
             def action():
                 net = self._payment_posted_net(db, key)
                 released = max(payment['released_micro_usd'], net, 0)
+                if released > MAX_MONEY:
+                    raise EconomyError('payment_projection_limit', 'Cumulative release for one payment exceeds the supported int64 projection; reconcile with the operator', 422)
                 db.execute('UPDATE payments SET released_micro_usd=?,revision=revision+1 WHERE provider=? AND account=? AND mode=? AND payment_id=?', (released, *key))
                 # A fulfillment decision cannot release a currently disputed exposure.
                 if payment['status'] == 'disputed':
