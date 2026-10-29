@@ -449,6 +449,27 @@ export class EconomyClient implements Economy {
       reason: "Economy settlement requires reconciliation",
     };
   }
+  async confirmNotPerformed(
+    reservation: Reservation,
+    evidenceRef: string,
+  ): Promise<{ kind: "renewed" } | { kind: "unavailable"; reason: string }> {
+    try {
+      const response = object(
+        await this.#rpc("not-performed", {
+          reservation: validateReservation(reservation),
+          evidenceRef: boundedString(evidenceRef, 2048),
+        }),
+      );
+      if (response.kind === "renewed") return { kind: "renewed" };
+    } catch {
+      /* No proof of a renewed permit: keep the action unresolved. */
+    }
+    return {
+      kind: "unavailable",
+      reason:
+        "Economy authorization renewal requires definitive reconciliation",
+    };
+  }
   async seed(
     runId: string,
     mode: "sandbox" | "live",

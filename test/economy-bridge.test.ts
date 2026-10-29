@@ -502,3 +502,36 @@ test("bounded accounting envelope retains a known overage when optional Unicode 
   );
   assert(Buffer.byteLength(JSON.stringify(calls[0]?.body)) <= 16384);
 });
+
+test("definitive not-performed renewal is explicit and fails closed if the backend does not renew", async (t) => {
+  let permitted = true;
+  const { client, calls } = await rpc(t, (path, body, auth, res) => {
+    assert.equal(path, "/v1/runtime/not-performed");
+    assert.equal(auth, `Bearer ${gateway}`);
+    assert.deepEqual(body, {
+      reservation: reservation(),
+      evidenceRef: "provider:definitive-no-effect",
+    });
+    json(
+      res,
+      permitted
+        ? { kind: "renewed" }
+        : { kind: "unavailable", reason: "private-provider-canary" },
+    );
+  });
+  assert.deepEqual(
+    await client.confirmNotPerformed(
+      reservation(),
+      "provider:definitive-no-effect",
+    ),
+    { kind: "renewed" },
+  );
+  permitted = false;
+  const result = await client.confirmNotPerformed(
+    reservation(),
+    "provider:definitive-no-effect",
+  );
+  assert.equal(result.kind, "unavailable");
+  assert(!JSON.stringify(result).includes("private-provider-canary"));
+  assert.equal(calls.length, 2);
+});
