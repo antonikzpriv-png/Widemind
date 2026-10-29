@@ -123,10 +123,10 @@ class Host:
             if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,)),'conversations':business.conversation_list()}
             if path=='/v1/conversations':return {'conversations':business.conversation_list()}
             if path=='/v1/conversation':return {'conversation':business.conversation_view(payload['conversationId'])}
-            if path=='/v1/recovery':
             if path=='/v1/conversation-resolve':
                 business.conversation_resolve(conversation_id=payload['conversationId'], evidence_reference=payload['evidenceReference'])
                 return {'resolved':True,'requiresFreshAssessment':True}
+            if path=='/v1/recovery':
                 effect=business.store.one('SELECT * FROM effects WHERE id=? AND run_id=?',(payload['actionId'],run))
                 if not effect:raise ValueError('unknown effect')
                 mode=payload.get('mode','reconcile');reference=payload.get('evidenceReference') or 'operator:'+secrets.token_hex(16)

@@ -163,13 +163,13 @@ class ConversationScenarios(unittest.TestCase):
         self.fail('Conversation scheduled an unbounded due-work loop.')
 
     def send(self, body, response=None, *, thread='portal:request-one', email=CUSTOMER,
-             message_id=None, process=True):
+             message_id=None, process=True, opportunity_id=None):
         self.sequence += 1
         if response is not None:
             self.tools.responses.append(response)
         cid = self.business.conversation_receive(source='customer-portal',
             external_id=message_id or f'message-{self.sequence}', thread_id=thread,
-            customer_email=email, body=body, authenticated=True)
+            customer_email=email, body=body, authenticated=True, opportunity_id=opportunity_id)
         if process:
             self.drain()
         return cid
@@ -609,6 +609,86 @@ class ConversationScenarios(unittest.TestCase):
         self.now += 86400
         self.drain()
         self.assertEqual([call for call in self.tools.calls if call['action'] == 'gmail.send'], [])
+
+    def _legacy_structured_quote(self):
+        scope = {'title': 'Community garden', 'description': 'A green plant and a clear readable title.'}
+        op = self.business.receive(source='fixture-structured-portal', external_id='legacy-request',
+            service='svg-graphic', scope=scope, customer_email=CUSTOMER)
+        self.drain()
+        quote = self.store.one('SELECT * FROM quotes WHERE opportunity_id=?', (op,))
+        self.assertIsNotNone(quote)
+        self.assertEqual(quote['status'], 'offered')
+        return op, quote
+
+    def test_structured_quote_bootstraps_an_ordinary_question_without_losing_scope_or_terms(self):
+        op, legacy = self._legacy_structured_quote()
+        cid = self.send('What file and price did you propose?', interpretation('question'),
+            thread='portal:legacy-question', opportunity_id=op)
+        current = self.business.conversation_view(cid)['currentQuote']
+        self.assertIsNotNone(current)
+        self.assertEqual(current['version'], 1)
+        self.assertEqual(current['quoteId'], legacy['id'])
+        self.assertEqual(current['scope'], json.loads(legacy['scope']))
+        self.assertEqual(current['priceMicros'], str(legacy['price_micro_usd']))
+        self.assertEqual(current['turnaroundSeconds'], legacy['turnaround_seconds'])
+        self.assertEqual(current['expiresAt'], legacy['expires_at'])
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM conversation_proposals')['n'], 1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM quotes')['n'], 1)
+        self.assertEqual(self.store.one('SELECT * FROM quotes WHERE id=?', (legacy['id'],)), legacy)
+        prompt = json.loads(self.model_calls()[0]['arguments']['prompt'])
+        self.assertEqual(prompt['thread_context']['facts']['scope'], json.loads(legacy['scope']))
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM orders')['n'], 0)
+
+    def test_revised_structured_quote_accepts_once_despite_the_existing_core_quote(self):
+        op, legacy = self._legacy_structured_quote()
+        cid = self.send('Please change the title to Seed library.',
+            interpretation('change', 'svg-graphic', {'title': 'Seed library'}),
+            thread='portal:legacy-revision', opportunity_id=op)
+        view = self.business.conversation_view(cid)
+        revised = view['currentQuote']
+        self.assertEqual(revised['version'], 2)
+        self.assertEqual(revised['scope']['title'], 'Seed library')
+        self.assertEqual(revised['scope']['description'], json.loads(legacy['scope'])['description'])
+        old = next(quote for quote in view['proposals'] if quote['version'] == 1)
+        with self.assertRaises(ValueError):
+            self.accept(cid, old)
+        order_id = self.accept(cid, revised)
+        self.assertEqual(self.accept(cid, revised), order_id)
+        order = self.business.order(order_id)
+        self.assertEqual(order['quote_id'], revised['quoteId'])
+        self.assertEqual(json.loads(order['scope']), revised['scope'])
+        materialized = self.store.one('SELECT * FROM quotes WHERE id=?', (revised['quoteId'],))
+        self.assertNotEqual(materialized['opportunity_id'], op)
+        child = self.store.one('SELECT * FROM opportunities WHERE id=?', (materialized['opportunity_id'],))
+        self.assertEqual(child['customer_id'], order['customer_id'])
+        self.assertEqual(child['run_id'], self.business.run_id)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM orders')['n'], 1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM quotes')['n'], 2)
+        self.assertEqual(self.store.one('SELECT * FROM quotes WHERE id=?', (legacy['id'],)), legacy)
+
+    def test_already_accepted_structured_order_stays_frozen_in_ordinary_conversation(self):
+        op, legacy = self._legacy_structured_quote()
+        order_id = self.business.accept(legacy['id'], customer_email=CUSTOMER,
+            evidence_reference='fixture-legacy-authenticated-acceptance')
+        self.drain()
+        order_before = self.business.order(order_id)
+        cid = self.send('Could you remind me what you will deliver?', interpretation('question'),
+            thread='portal:legacy-accepted', opportunity_id=op)
+        current = self.business.conversation_view(cid)['currentQuote']
+        self.assertEqual(current['version'], 1)
+        self.assertEqual(current['quoteId'], legacy['id'])
+        self.assertEqual(current['status'], 'accepted')
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM conversation_proposals')['n'], 1)
+        self.send('Please change it into a whole website with hosting.',
+            interpretation('change', 'software-starter', {'title': 'Whole website'}),
+            thread='portal:legacy-accepted', opportunity_id=op)
+        view = self.business.conversation_view(cid)
+        self.assertEqual(view['status'], 'needs_operator')
+        self.assertTrue(self.store.one('SELECT operator_hold FROM customer_threads WHERE id=?', (cid,))['operator_hold'])
+        self.assertEqual(len(view['proposals']), 1)
+        after = self.business.order(order_id)
+        for key in ('quote_id', 'scope', 'price_micro_usd', 'plan', 'payment'):
+            self.assertEqual(after[key], order_before[key])
 
 
 if __name__ == '__main__':
