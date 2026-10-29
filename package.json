@@ -7,13 +7,13 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --watch src/web/main.ts",
-    "worker:dev": "node --env-file-if-exists=.env --watch src/runtime/main.ts",
-    "migrate": "node --env-file-if-exists=.env src/db/migrate-main.ts",
-    "operator:hash": "node --env-file-if-exists=.env src/auth/hash-main.ts",
+    "dev": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env --watch src/web/main.ts",
+    "worker:dev": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env --watch src/runtime/main.ts",
+    "migrate": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env src/db/migrate-main.ts",
+    "operator:hash": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env src/auth/hash-main.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node --env-file-if-exists=.env dist/web/main.js",
-    "worker": "node --env-file-if-exists=.env dist/runtime/main.js",
+    "start": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env dist/web/main.js",
+    "worker": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env dist/runtime/main.js",
     "test": "node --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc -p tsconfig.test.json",
     "check": "npm run format:check && npm run typecheck && npm test && npm run build",
@@ -21,7 +21,13 @@
     "format:check": "prettier --check src test scripts *.json",
     "smoke": "node scripts/smoke.mjs",
     "browser:smoke": "node scripts/browser-smoke.mjs",
-    "status": "node --env-file-if-exists=.env src/runtime/status-main.ts"
+    "status": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env src/runtime/status-main.ts",
+    "services:configure": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env scripts/services.mjs configure",
+    "services:setup": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env scripts/services.mjs setup",
+    "services:start": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env scripts/services.mjs start",
+    "services:status": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env scripts/services.mjs status",
+    "dev:all": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env scripts/services.mjs all",
+    "pilot:init": "node --env-file-if-exists=var/integration.env --env-file-if-exists=.env scripts/pilot-init.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

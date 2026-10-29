@@ -161,6 +161,10 @@ export class AgentRuntime {
         );
         return true;
       }
+      if (this.services.tools.refresh)
+        await this.dependency("tools.capabilities", () =>
+          this.services.tools.refresh!(),
+        );
       // Recover/settle recorded effects even while paused, stopped or exhausted.
       const outstanding = this.store
         .actions(run.id)
@@ -196,10 +200,6 @@ export class AgentRuntime {
         );
         return true;
       }
-      if (this.services.tools.refresh)
-        await this.dependency("tools.capabilities", () =>
-          this.services.tools.refresh!(),
-        );
       const financial = await this.dependency("economy.summary", () =>
         this.services.economy.summary(run.id),
       );
@@ -396,6 +396,28 @@ export class AgentRuntime {
       );
     }
     validateReservation(reservation, action);
+    if (receipt?.usage.provisional && row.state === "unresolved") {
+      const refreshed = await this.dependency("tools.provisionalUsage", () =>
+        this.services.tools.reconcile(action, reservation!),
+      );
+      if (refreshed.kind !== "receipt") {
+        this.unresolved(
+          lease,
+          action.actionId,
+          "Provisional cost awaits confirmed usage; reservation retained",
+        );
+        return "waiting";
+      }
+      validateReceipt(refreshed.receipt, action);
+      if (
+        refreshed.receipt.usage.provider !== receipt.usage.provider ||
+        refreshed.receipt.usage.accountRef !== receipt.usage.accountRef ||
+        refreshed.receipt.usage.externalEventId !==
+          receipt.usage.externalEventId
+      )
+        throw new Error("Reconciled receipt changed charge identity");
+      receipt = refreshed.receipt;
+    }
     if (!receipt && (row.state === "running" || row.state === "unresolved")) {
       const reconciled = await this.dependency("tools.reconcile", () =>
         this.services.tools.reconcile(action, reservation!),

@@ -48,3 +48,7 @@ Thumbs.db
 var/
 *.sqlite-shm
 *.sqlite-wal
+
+# Isolated integration services
+.venvs/
+*.egg-info/
