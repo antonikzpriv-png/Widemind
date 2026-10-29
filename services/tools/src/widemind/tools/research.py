@@ -5,7 +5,7 @@ import hashlib
 import ipaddress
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from html.parser import HTMLParser
 from typing import Any, Mapping
 from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
@@ -23,6 +23,24 @@ _CREDENTIAL_KEY = re.compile(
 _MAX_URL = 4096
 _DEFAULT_MAX_BYTES = 2_000_000
 _TEXT_TYPES = {"text/html", "application/xhtml+xml", "text/plain", "text/csv", "application/json"}
+_ISO_PAGE_DATE = re.compile(
+    r"\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:[Zz]|[+-]\d{2}:\d{2})?)?\Z"
+)
+
+
+def _page_date(value: Any) -> str | None:
+    """Validate a bounded page-provided date without inventing its timezone."""
+    if not isinstance(value, str) or len(value) > 80:
+        return None
+    value = value.strip()
+    if not _ISO_PAGE_DATE.fullmatch(value):
+        return None
+    try:
+        if len(value) == 10:
+            return date.fromisoformat(value).isoformat()
+        return datetime.fromisoformat(value.replace("t", "T").replace("z", "Z").replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        return None
 
 
 def _integer(value: Any, name: str, default: int, low: int, high: int) -> int:
@@ -229,6 +247,11 @@ def _content_type(response: HTTPResponse) -> tuple[str, str]:
 class _TextParser(HTMLParser):
     _SKIP = {"script", "style", "noscript", "template", "svg", "canvas", "iframe", "object"}
     _BREAK = {"p", "br", "div", "li", "tr", "section", "article", "h1", "h2", "h3", "h4", "pre"}
+    _PUBLICATION_META = {
+        "article:published_time": 1, "datepublished": 1, "date_published": 1,
+        "publication_date": 1, "pubdate": 1, "publishdate": 1,
+        "dc.date.issued": 2, "dcterms.issued": 2, "dc.date": 3, "date": 3,
+    }
 
     def __init__(self, url: str, policy: URLPolicy, limits: ReadLimits):
         super().__init__(convert_charrefs=True)
@@ -242,6 +265,12 @@ class _TextParser(HTMLParser):
         self.seen: set[str] = set()
         self.link: dict | None = None
         self.truncated = False
+        self.publication_date: tuple[int, str, str] | None = None
+
+    def _record_date(self, value: Any, basis: str, priority: int) -> None:
+        parsed = _page_date(value)
+        if parsed is not None and (self.publication_date is None or priority < self.publication_date[0]):
+            self.publication_date = (priority, parsed, basis)
 
     def _append(self, text: str) -> None:
         clean = re.sub(r"\s+", " ", text)
@@ -257,6 +286,16 @@ class _TextParser(HTMLParser):
             self.skip.append(tag)
         if self.skip:
             return
+        if tag == "meta":
+            attributes = dict(attrs)
+            for field in ("property", "name", "itemprop"):
+                name = (attributes.get(field) or "").strip().lower()
+                if name in self._PUBLICATION_META:
+                    self._record_date(attributes.get("content"), "html_meta:" + name, self._PUBLICATION_META[name])
+        elif tag == "time":
+            # A generic time element is weaker evidence and may describe an
+            # event date; keep its distinct basis rather than asserting truth.
+            self._record_date(dict(attrs).get("datetime"), "html_time_datetime", 4)
         if tag == "title":
             self.in_title = True
         if tag in self._BREAK:
@@ -312,9 +351,13 @@ def extract_response(response: HTTPResponse, policy: URLPolicy, limits: ReadLimi
             ctx.check()
             parser.feed(text[start:start + 16_384])
         parser.close()
-        return {"title": re.sub(r"\s+", " ", parser.title).strip(),
-                "text": "".join(parser.parts).strip(), "links": parser.links,
-                "truncated": parser.truncated, "content_type": media}
+        extracted = {"title": re.sub(r"\s+", " ", parser.title).strip(),
+                     "text": "".join(parser.parts).strip(), "links": parser.links,
+                     "truncated": parser.truncated, "content_type": media}
+        if parser.publication_date:
+            _, published_date, date_basis = parser.publication_date
+            extracted.update(published_date=published_date, date_basis=date_basis)
+        return extracted
     return {"title": "", "text": text[:limits.text_chars], "links": [],
             "truncated": len(text) > limits.text_chars, "content_type": media}
 

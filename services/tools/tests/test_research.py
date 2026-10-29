@@ -137,3 +137,47 @@ def test_interrupted_read_never_claims_proof_of_nonexecution(tmp_path, fixture_s
     origin, _ = fixture_site
     ctx, _ = context(tmp_path, origin)
     assert ResearchAdapter().reconcile({"url": origin + "/page"}, ctx).outcome == "uncertain"
+
+
+@pytest.mark.parametrize("markup,expected,basis", [
+    ('<meta property="article:published_time" content="2026-10-27T12:30:00Z">',
+     "2026-10-27T12:30:00+00:00", "html_meta:article:published_time"),
+    ('<meta itemprop="datePublished" content="2026-10-27">', "2026-10-27", "html_meta:datepublished"),
+    ('<meta name="date" content="2026-10-27">', "2026-10-27", "html_meta:date"),
+    ('<meta name="DCTERMS.issued" content="2026-10-27T10:00:00-04:00">',
+     "2026-10-27T10:00:00-04:00", "html_meta:dcterms.issued"),
+    ('<time datetime="2026-10-26">Event date</time>', "2026-10-26", "html_time_datetime"),
+    ('<time datetime="2026-10-26"></time><meta property="article:published_time" content="2026-10-27">',
+     "2026-10-27", "html_meta:article:published_time"),
+    ('<meta property="article:published_time" content="2026-02-30"><meta name="date" content="2026-10-27">',
+     "2026-10-27", "html_meta:date"),
+])
+def test_page_publication_metadata_is_validated_and_has_explicit_basis(tmp_path, fixture_site, markup, expected, basis):
+    origin, _ = fixture_site
+    ctx, _ = context(tmp_path, origin)
+    body = ("<html><head><title>Publication evidence</title>" + markup + "</head><body>Evidence</body></html>").encode()
+    response = HTTPResponse(200, {"content-type": "text/html", "last-modified": "Wed, 28 Oct 2026 09:00:00 GMT"}, body, origin + "/page")
+    ctx.transport.request = lambda *args, **kwargs: response
+    result = ResearchAdapter().execute({"url": origin + "/page"}, ctx)
+    assert result.data["published_date"] == expected
+    assert result.data["date_basis"] == basis
+    assert result.trust == "untrusted"
+    assert result.references[0]["sha256"] == hashlib.sha256(body).hexdigest()
+
+
+@pytest.mark.parametrize("markup", [
+    "", '<meta property="article:modified_time" content="2026-10-27">',
+    '<meta name="last-modified" content="2026-10-27">',
+    '<meta name="date" content="10/27/2026">', '<time datetime="2026-02-30">Invalid</time>',
+    '<meta name="date" content="' + "2026-10-27" * 20 + '">',
+    '<script><meta name="date" content="2026-10-27"></script>',
+    '<template><meta name="date" content="2026-10-27"></template>',
+])
+def test_modified_headers_invalid_dates_and_inert_markup_are_not_publication_metadata(tmp_path, fixture_site, markup):
+    origin, _ = fixture_site
+    ctx, _ = context(tmp_path, origin)
+    body = ("<html><head>" + markup + "</head><body>Evidence</body></html>").encode()
+    ctx.transport.request = lambda *args, **kwargs: HTTPResponse(
+        200, {"content-type": "text/html", "last-modified": "Wed, 28 Oct 2026 09:00:00 GMT"}, body, origin + "/page")
+    result = ResearchAdapter().execute({"url": origin + "/page"}, ctx)
+    assert "published_date" not in result.data and "date_basis" not in result.data
