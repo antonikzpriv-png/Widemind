@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS economy_actions (
  kind TEXT NOT NULL, request TEXT NOT NULL, state TEXT NOT NULL,
  result TEXT NOT NULL DEFAULT '{}', reason TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL
 );
+CREATE INDEX IF NOT EXISTS economy_job_actions ON economy_actions(run_id,job_id,kind,state);
 CREATE TABLE IF NOT EXISTS stripe_events (
  provider_scope TEXT NOT NULL, event_id TEXT NOT NULL, digest TEXT NOT NULL,
  state TEXT NOT NULL, jobs TEXT NOT NULL DEFAULT '[]', created_at REAL NOT NULL,
@@ -383,10 +384,28 @@ class EconomyService:
             raise ValueError("Stripe USD quotes must be positive exact cents")
         request = {"amount_micro_usd":amount_micro_usd,"currency":currency}
         with self.transaction():
-            self._job(run_id,job_id,price=amount_micro_usd)
+            job = self._job(run_id,job_id,price=amount_micro_usd)
             previous = self._previous(action_id,"payment_link",run_id,job_id,request)
             if previous and previous["state"] in {"succeeded","failed"}:
                 return self._outcome(previous)
+            if not previous:
+                # The job owns its Checkout, independently of the caller's action
+                # ID. This transaction also excludes concurrent distinct intents
+                # before either can issue a second provider POST.
+                owner = self.one("""SELECT * FROM economy_actions WHERE run_id=? AND job_id=?
+                    AND kind='payment_link' AND state IN ('succeeded','unknown')
+                    ORDER BY CASE state WHEN 'succeeded' THEN 0 ELSE 1 END,created_at,action_id LIMIT 1""",
+                    (run_id,job_id))
+                if owner:
+                    outcome = self._outcome(owner)
+                    if owner["state"] != "succeeded" or outcome.data.get("id") != job["session_id"]:
+                        outcome = Outcome("failed",reason="job already has an unresolved Checkout intent; reconcile its original action")
+                    self._action(action_id,"payment_link",run_id,job_id,request,outcome)
+                    return outcome
+                if job["session_id"]:
+                    outcome = Outcome("failed",reason="job already has an attached financial session; operator reconciliation required")
+                    self._action(action_id,"payment_link",run_id,job_id,request,outcome)
+                    return outcome
             if self.stripe is None:
                 return Outcome("failed",reason="Stripe is not configured")
             if not previous:
@@ -420,7 +439,11 @@ class EconomyService:
                     url = _text(outcome.data.get("url"),"payment URL",2048)
                     if not url.startswith("https://"):
                         raise ValueError("payment URL must be HTTPS")
-                    self.db.execute("UPDATE economy_jobs SET session_id=? WHERE run_id=? AND job_id=?", (session_id,intent["run_id"],intent["job_id"]))
+                    attached = self.db.execute("""UPDATE economy_jobs SET session_id=?
+                        WHERE run_id=? AND job_id=? AND (session_id IS NULL OR session_id=?)""",
+                        (session_id,intent["run_id"],intent["job_id"],session_id))
+                    if attached.rowcount != 1:
+                        raise ValueError("job financial session cannot be replaced")
                 except (ValueError,sqlite3.IntegrityError):
                     outcome = Outcome("unknown",reason="invalid or conflicting Stripe session evidence")
             self.db.execute("UPDATE economy_actions SET state=?,result=?,reason=? WHERE action_id=?",
@@ -478,7 +501,7 @@ class EconomyService:
         canonical = self.stripe.inspect_checkout(session_id=job["session_id"])
         with self.transaction():
             fresh = self.one("SELECT * FROM economy_jobs WHERE run_id=? AND job_id=?", (run_id,job_id))
-            if fresh["canonical"] != job["canonical"]:
+            if fresh["revision"] != job["revision"] or fresh["session_id"] != job["session_id"]:
                 raise ValueError("concurrent payment refresh superseded this provider read; requery")
             self._apply_payment(fresh,canonical)
 

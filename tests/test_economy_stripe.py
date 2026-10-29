@@ -236,7 +236,7 @@ class StripeTests(unittest.TestCase):
             "status": "succeeded", "balance_transaction": {"id": "txn_refund", "currency": "usd", "fee": -10}}]
         self.transport.add("GET", "/v1/disputes", {"object": "list", "data": [{"id": "dp_fixture", "currency": "usd",
             "charge": "ch_fixture", "amount": 100, "status": "lost", "balance_transactions": [
-                {"id": "txn_dispute", "currency": "usd", "fee": 1500}]}], "has_more": False})
+                {"id": "txn_dispute", "currency": "usd", "amount": -100, "fee": 1500}]}], "has_more": False})
         result = self.inspect()
         self.assertEqual(result["fees_micro_usd"], (36 - 10 + 1500) * 10000)
         self.assertEqual(result["refunds_micro_usd"], 2000000)

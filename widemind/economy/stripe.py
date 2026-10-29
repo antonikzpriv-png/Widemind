@@ -485,7 +485,7 @@ class StripeClient:
         # never invent a completed refund from the aggregate alone.
         if not refunded <= aggregate_refund <= refunded + pending_refunds:
             raise StripeError("Stripe refund aggregate is inconsistent; reconcile later")
-        lost, disputed = 0, 0
+        lost, disputed, dispute_exposure, dispute_debits = 0, 0, 0, 0
         seen_disputes = set()
         for dispute in self._pages("/v1/disputes", {"charge": charge["id"]}):
             self._mode(dispute)
@@ -500,24 +500,37 @@ class StripeClient:
             if not isinstance(balances, list) or len(balances) > 30:
                 raise StripeError("invalid Stripe dispute balance records")
             seen_balances = set()
+            principal = 0
             for value in balances:
                 balance = self._expanded(value, "balance_transactions", "txn_")
                 if balance["id"] in seen_balances or balance.get("currency") != "usd":
                     raise StripeError("invalid duplicate/currency dispute balance")
                 seen_balances.add(balance["id"])
                 fees += _integer(balance.get("fee"), "dispute fee", signed=True)
+                principal += _integer(balance.get("amount"), "dispute balance amount", signed=True)
+            if principal > 0:
+                raise StripeError("Stripe dispute principal credit exceeds its recorded debit")
             status = dispute.get("status")
+            # Dispute transactions move cash before a verdict. Post their net
+            # principal now, including reversals after a win, instead of treating
+            # an already-debited amount as both cash and an outstanding hold.
+            # A verified lost dispute still establishes its liability when Stripe
+            # omits expanded principal records.
+            debit = -principal if balances else amount if status == "lost" else 0
+            dispute_debits += debit
             if status == "lost":
                 lost += amount
             elif status in {"needs_response", "under_review", "warning_needs_response", "warning_under_review"}:
                 disputed += amount
+                dispute_exposure += max(0,amount-debit)
             elif status not in {"won", "warning_closed"}:
                 raise StripeError("unknown Stripe dispute status")
         if fees < 0:
             raise StripeError("Stripe net fee credit requires explicit reconciliation")
-        reversals = refunded + lost  # Disjoint provider liabilities; never cap/hide double debits.
+        reversals = refunded + dispute_debits  # Disjoint cash debits; never cap/hide overlapping liabilities.
         native.update({"refund_cents": refunded, "lost_dispute_cents": lost,
                        "active_dispute_cents": disputed, "pending_refund_cents": pending_refunds,
+                       "dispute_debit_cents": dispute_debits, "active_dispute_exposure_cents": dispute_exposure,
                        "fee_cents": fees})
         if disputed:
             status = "disputed"
@@ -529,6 +542,6 @@ class StripeClient:
             status = "settled"
         result.update(status=status, receipts_micro_usd=captured * 10_000,
                       refunds_micro_usd=reversals * 10_000, fees_micro_usd=fees * 10_000,
-                      disputed_micro_usd=disputed * 10_000,
+                      disputed_micro_usd=dispute_exposure * 10_000,
                       pending_refunds_micro_usd=pending_refunds * 10_000)
         return result
