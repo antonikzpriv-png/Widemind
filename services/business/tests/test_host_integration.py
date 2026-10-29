@@ -5,13 +5,14 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
 from widemind.business.host_server import Host
 
 class FixtureServices:
     def __init__(self):
-        self.payments=[];self.reservations=[];self.earned=0;self.creation_calls=0;self.settled=False
+        self.payments=[];self.reservations=[];self.earned=0;self.metric_reference=None;self.metric_job=None;self.creation_calls=0;self.settled=False;self.source_revision=1;self.unknown_creation=False;self.reconciled=False;self.hold_release_pending=False
         parent=self
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*_args):pass
@@ -26,22 +27,29 @@ class FixtureServices:
         if path=='/execute':
             assert body['reservation_id']==self.reservations[0]['reservation_id'];assert body['action_id']==self.reservations[0]['action_id'];self.creation_calls+=1
             self.reservations[0]['state']='settled'
-            return {'state':'succeeded','data':{'filename':'graphic.svg','media_type':'image/svg+xml','content':'<svg xmlns="http://www.w3.org/2000/svg"><text>Fixture requested graphic</text></svg>','checks':{'valid_svg':True}}}
+            if self.unknown_creation:return {'state':'unknown','reason':'fixture response lost after accepted creation'}
+            return self.created()
+        if path=='/reconcile':return self.created() if self.reconciled else {'state':'unknown','reason':'fixture outcome not yet verified'}
         if path.endswith('/balance'):return {'run_id':'run-1','mode':'test'}
         if path.endswith('/payments'):return self.payments
         if path.endswith('/checkout'):
             row={'payment_id':'fixture-paypal-order','job_id':body['job_id'],'request_id':body['request_id'],'url':'https://www.sandbox.paypal.com/checkoutnow?token=fixture-order','status':'pending'};self.payments=[row];return row
         if '/snapshot' in path:
-            return {'run_id':'run-1','job_id':self.payments[0]['job_id'],'revision':2 if self.settled else 1,'mode':'test','currency':'USD','status':'settled' if self.settled else 'pending','receipts_micro_usd':2000000 if self.settled else 0,'refunds_micro_usd':0,'fees_micro_usd':0,'earned_micro_usd':self.earned,'operating_cost_micro_usd':0,'costs_final':bool(self.reservations and self.reservations[0]['state']=='settled')}
+            return {'run_id':'run-1','job_id':self.payments[0]['job_id'],'revision':self.source_revision+(1 if self.settled else 0),'mode':'test','currency':'USD','status':'settled' if self.settled else 'pending','receipts_micro_usd':2000000 if self.settled else 0,'refunds_micro_usd':0,'fees_micro_usd':0,'earned_micro_usd':self.earned,'operating_cost_micro_usd':0,'costs_final':bool(self.reservations and self.reservations[0]['state']=='settled')}
         if path.endswith('/reservations') and body is not None:
             if not self.reservations:self.reservations=[{**body,'reservation_id':'reservation-1','state':'reserved'}]
             return self.reservations[0]
         if path.endswith('/reservations'):return self.reservations
-        if path.endswith('/earned-revenue'):self.earned=body['amount_micro_usd'];return {'recorded':True}
-        if path.endswith('/release-hold'):return {'released':True}
-        if path.endswith('/ledger'):return []
+        if path.endswith('/earned-revenue'):self.earned=body['amount_micro_usd'];self.metric_reference=body['reference'];self.metric_job=body['job_id'];return {'recorded':True}
+        if path.endswith('/release-hold'):
+            if self.hold_release_pending:return {'released_micro_usd':0,'pending_liability_micro_usd':2000000}
+            self.payments[0]['released_micro_usd']=2000000;return {'released_micro_usd':2000000,'pending_liability_micro_usd':0}
+        if path.endswith('/ledger'):return [{'kind':'earned_revenue','category':'earned_revenue','reference':self.metric_reference,'metadata':{'job_id':self.metric_job,'reported_micro_usd':self.earned}}] if self.metric_reference else []
         if path.endswith('/charges'):return []
         raise AssertionError(path)
+
+    @staticmethod
+    def created():return {'state':'succeeded','data':{'filename':'graphic.svg','media_type':'image/svg+xml','content':'<svg xmlns="http://www.w3.org/2000/svg"><text>Fixture requested graphic</text></svg>','checks':{'valid_svg':True}}}
 
 class HostTests(unittest.TestCase):
     def setUp(self):
@@ -59,7 +67,7 @@ class HostTests(unittest.TestCase):
         customer=self.host.handle('/v1/customer',{'runId':'run-1','token':token});self.assertEqual(customer['quotes'][0]['status'],'offered')
         order=self.host.handle('/v1/accept',{'runId':'run-1','token':token,'quoteId':customer['quotes'][0]['quoteId']})['orderId'];self.step(3);self.step(4)
         self.assertEqual(self.fixture.creation_calls,0)
-        self.fixture.settled=True;self.host.handle('/v1/notify',{'runId':'run-1','event':{'source':'fixture-verified-payment','external_id':'paid-1','kind':'payment.changed','payload':{'id':order}}})
+        self.fixture.settled=True # work-state observes authoritative local snapshot without a notification
         for i in range(5,15):self.step(i)
         customer=self.host.handle('/v1/customer',{'runId':'run-1','token':token});self.assertEqual(customer['orders'][0]['status'],'completed');self.assertEqual(self.fixture.creation_calls,1);self.assertEqual(self.fixture.earned,2000000)
         delivery=self.host.handle('/v1/delivery',{'runId':'run-1','token':token,'orderId':order});self.assertIn('<svg',delivery['content'])
@@ -87,5 +95,51 @@ class HostTests(unittest.TestCase):
         self.request()
         with sqlite3.connect(self.runtime) as db:db.execute("UPDATE runtime_runs SET desired='stop',state='stopped'")
         self.assertEqual(self.host.handle('/v1/customer',{'runId':'run-1','token':'x'*43})['status'],'received');self.assertFalse(self.step(1)['processed'])
+
+    def test_higher_unrelated_source_revisions_do_not_create_busy_payment_wakeups(self):
+        self.test_complete_portal_order_uses_verified_payment_and_one_authorized_creation()
+        for i in range(10):
+            self.fixture.source_revision+=1
+            work=self.host.handle('/v1/work-state',{'runId':'run-1'})
+            self.assertTrue(work['eventId'] is None or work['dueAt']>time.time())
+        self.assertEqual(self.fixture.creation_calls,1)
+    def test_unknown_creation_recovers_observationally_without_repeating_the_tool(self):
+        created=self.request();token=created['customerToken'];self.step(1);self.step(2)
+        quote=self.host.handle('/v1/customer',{'runId':'run-1','token':token})['quotes'][0]
+        self.host.handle('/v1/accept',{'runId':'run-1','token':token,'quoteId':quote['quoteId']});self.step(3);self.step(4);self.fixture.settled=True;self.fixture.unknown_creation=True
+        for i in range(5,16):self.step(i)
+        status=self.host.handle('/v1/status',{'runId':'run-1'});effect=next(item for item in status['effects'] if item['action']=='graphics.create')
+        self.assertEqual(effect['state'],'unknown');self.assertEqual(self.fixture.creation_calls,1)
+        with self.assertRaises(ValueError):self.host.handle('/v1/recovery',{'runId':'run-1','actionId':effect['id'],'mode':'retry','evidenceReference':'cannot-retry-unknown'})
+        self.fixture.reconciled=True;self.host.handle('/v1/recovery',{'runId':'run-1','actionId':effect['id'],'mode':'reconcile','evidenceReference':'fixture-provider-now-confirmed'})
+        self.step(20);time.sleep(1.05)
+        for i in range(21,30):self.step(i)
+        self.assertEqual(self.fixture.creation_calls,1)
+        self.assertEqual(self.host.handle('/v1/customer',{'runId':'run-1','token':token})['orders'][0]['status'],'completed')
+    def test_earned_metric_alone_does_not_finish_when_customer_hold_release_is_unresolved(self):
+        created=self.request();token=created['customerToken'];self.step(1);self.step(2)
+        quote=self.host.handle('/v1/customer',{'runId':'run-1','token':token})['quotes'][0]
+        self.host.handle('/v1/accept',{'runId':'run-1','token':token,'quoteId':quote['quoteId']});self.step(3);self.step(4);self.fixture.settled=True;self.fixture.hold_release_pending=True
+        for i in range(5,20):self.step(i)
+        customer=self.host.handle('/v1/customer',{'runId':'run-1','token':token});self.assertEqual(customer['orders'][0]['status'],'delivered');self.assertEqual(self.fixture.earned,2000000)
+        self.assertEqual(self.fixture.creation_calls,1)
+        effect=next(item for item in self.host.handle('/v1/status',{'runId':'run-1'})['effects'] if item['action']=='record_fulfillment');self.assertEqual(effect['state'],'unknown')
+    def test_internal_service_redirects_never_forward_bearer_credentials(self):
+        from widemind.business.host_clients import HTTP
+        calls=[]
+        class Target(BaseHTTPRequestHandler):
+            def log_message(self,*_args):pass
+            def do_GET(self):calls.append(self.headers.get('Authorization'));self.send_response(200);self.end_headers()
+        target=ThreadingHTTPServer(('127.0.0.1',0),Target);thread=threading.Thread(target=target.serve_forever,daemon=True);thread.start()
+        location=f'http://127.0.0.1:{target.server_port}/stolen'
+        class Redirect(BaseHTTPRequestHandler):
+            def log_message(self,*_args):pass
+            def do_GET(self):self.send_response(302);self.send_header('Location',location);self.end_headers()
+        redirect=ThreadingHTTPServer(('127.0.0.1',0),Redirect);rt=threading.Thread(target=redirect.serve_forever,daemon=True);rt.start()
+        try:
+            client=HTTP(f'http://127.0.0.1:{redirect.server_port}','fixture-dedicated-service-bearer')
+            with self.assertRaises(urllib.error.HTTPError):client.request('/redirect')
+            self.assertEqual(calls,[])
+        finally:redirect.shutdown();redirect.server_close();rt.join();target.shutdown();target.server_close();thread.join()
 
 if __name__=='__main__':unittest.main()

@@ -132,9 +132,15 @@ class EconomyClient:
         snapshot=self.payment(run_id=run_id,job_id=job_id)
         amount=max(0,min(order['price_micro_usd'],snapshot['receipts_micro_usd']-snapshot['refunds_micro_usd']))
         self.http.request(f'/v1/runs/{quote(run_id,safe="")}/earned-revenue',{'amount_micro_usd':amount,'job_id':job_id,'reference':delivery_reference,'idempotency_key':action_id})
+        ledger=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/ledger')
+        if not any(row.get('category',row.get('kind'))=='earned_revenue' and row.get('reference')==delivery_reference and row.get('metadata',{}).get('job_id')==job_id and row.get('metadata',{}).get('reported_micro_usd')==amount for row in ledger):return Outcome('unknown',reason='earned metric observation requires reconciliation')
         payments=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/payments')
-        for payment in payments:
-            if payment.get('job_id')==job_id:self.http.request(f'/v1/payments/{quote(payment["payment_id"],safe="")}/release-hold',{'idempotency_key':action_id+':release'})
+        matching=[payment for payment in payments if payment.get('job_id')==job_id]
+        if len(matching)!=1:return Outcome('unknown',reason='payment mapping requires review')
+        for payment in matching:
+            released=self.http.request(f'/v1/payments/{quote(payment["payment_id"],safe="")}/release-hold',{'idempotency_key':action_id+':release'})
+            expected=max(0,snapshot['receipts_micro_usd']-snapshot['refunds_micro_usd']-snapshot['fees_micro_usd'])
+            if released.get('released_micro_usd',-1)<expected or released.get('pending_liability_micro_usd',0)>0:return Outcome('unknown',reason='customer hold release remains unresolved')
         return Outcome('succeeded',{'delivery_reference':delivery_reference})
     def release(self,*,run_id,job_id,action_id,reservation_id):
         self.http.request(f'/v1/reservations/{quote(reservation_id,safe="")}/cancel',{})
@@ -152,7 +158,7 @@ class EconomyClient:
                 if len(found)==1 and found[0].get('url'):return Outcome('succeeded',{'url':found[0]['url'],'payment_id':found[0]['payment_id']})
             if action=='record_fulfillment':
                 ledger=self.http.request(f'/v1/runs/{quote(run,safe="")}/ledger')
-                if any(row['kind']=='earned_revenue' and row.get('metadata',{}).get('job_id')==job for row in ledger):
+                if any(row.get('category',row.get('kind'))=='earned_revenue' and row.get('reference')==json.loads(effect['request'])['reference'] and row.get('metadata',{}).get('job_id')==job for row in ledger):
                     return self.record_fulfillment(run_id=run,job_id=job,action_id=action_id,delivery_reference=json.loads(effect['request'])['reference'])
         except Exception: pass
         return Outcome('unknown',reason='authoritative economy outcome requires reconciliation')
