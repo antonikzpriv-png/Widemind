@@ -218,6 +218,47 @@ class StripeDisputeCashTests(unittest.TestCase):
         with self.assertRaises(StripeError):
             self.inspect(balances=[incomplete])
 
+    def test_refund_cash_debit_is_posted_before_original_receipt_becomes_available(self):
+        charge = self.session["payment_intent"]["latest_charge"]
+        charge["balance_transaction"]["status"] = "pending"
+        charge["amount_refunded"] = 200
+        charge["refunds"]["data"] = [{"id": "re_early", "currency": "usd", "charge": "ch_fixture",
+            "amount": 200, "status": "succeeded", "balance_transaction": {
+                "id": "txn_early_refund", "currency": "usd", "status": "available", "amount": -200, "fee": 0}}]
+        canonical = self.inspect(status="warning_closed")
+        self.assertEqual(canonical["status"], "pending")
+        self.assertEqual(canonical["receipts_micro_usd"], 0)
+        self.assertEqual(canonical["refunds_micro_usd"], 2_000_000)
+        self.assertEqual(canonical["fees_micro_usd"], 0)
+        with tempfile.TemporaryDirectory() as directory:
+            service = EconomyService(Path(directory) / "economy.sqlite3", mode="test", stripe=self.client)
+            try:
+                service.create_run("run-fixture", evidence_reference="offline fixture")
+                with service.transaction():
+                    job = service._job("run-fixture", "job-fixture", price=2_000_000)
+                    service._apply_payment(job, canonical)
+                self.assertEqual(service.balance(run_id="run-fixture")["posted_micro_usd"], 3_000_000)
+                reserve = service.reserve(run_id="run-fixture", job_id="other", action_id="cannot-spend-refund",
+                                          maximum_micro_usd=4_000_000)
+                self.assertEqual(reserve.state, "failed")
+                charge["balance_transaction"]["status"] = "available"
+                canonical = self.inspect(status="warning_closed")
+                with service.transaction():
+                    job = service._job("run-fixture", "job-fixture")
+                    service._apply_payment(job, canonical)
+                self.assertEqual(service.balance(run_id="run-fixture")["posted_micro_usd"], 4_640_000)
+            finally:
+                service.close()
+
+    def test_dispute_debit_is_posted_before_original_receipt_becomes_available(self):
+        self.session["payment_intent"]["latest_charge"]["balance_transaction"]["status"] = "pending"
+        canonical = self.inspect(balances=[self.debit()])
+        self.assertEqual(canonical["status"], "disputed")
+        self.assertEqual(canonical["receipts_micro_usd"], 0)
+        self.assertEqual(canonical["refunds_micro_usd"], 2_000_000)
+        self.assertEqual(canonical["fees_micro_usd"], 15_000_000)
+        self.assertEqual(canonical["disputed_micro_usd"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

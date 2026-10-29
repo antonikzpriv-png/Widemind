@@ -449,9 +449,14 @@ class StripeClient:
             raise StripeError("Stripe captured/balance amount mismatch")
         native.update({"charge_id": charge["id"], "balance_transaction_id": transaction["id"],
                        "balance_status": transaction.get("status"), "gross_cents": captured})
-        if transaction.get("status") != "available":
-            return result
-        fees = _integer(transaction.get("fee"), "balance fee", signed=True)
+        if transaction.get("status") not in {"available","pending"}:
+            raise StripeError("unknown Stripe receipt balance status")
+        receipt_available = transaction["status"] == "available"
+        # Receipt availability gates credit, never independent debits. A refund
+        # or chargeback can consume existing available funds before this receipt
+        # settles, and must still reduce the operating wallet immediately.
+        receipt_fee = _integer(transaction.get("fee"), "balance fee", signed=True)
+        fees = receipt_fee if receipt_available else 0
         refund_data = charge.get("refunds")
         if isinstance(refund_data, dict) and refund_data.get("has_more") is False and isinstance(refund_data.get("data"), list):
             refunds = refund_data["data"]
@@ -534,13 +539,15 @@ class StripeClient:
                        "fee_cents": fees})
         if disputed:
             status = "disputed"
+        elif not receipt_available:
+            status = "pending"
         elif reversals >= captured:
             status = "refunded"
         elif reversals or pending_refunds:
             status = "partial"
         else:
             status = "settled"
-        result.update(status=status, receipts_micro_usd=captured * 10_000,
+        result.update(status=status, receipts_micro_usd=captured * 10_000 if receipt_available else 0,
                       refunds_micro_usd=reversals * 10_000, fees_micro_usd=fees * 10_000,
                       disputed_micro_usd=dispute_exposure * 10_000,
                       pending_refunds_micro_usd=pending_refunds * 10_000)

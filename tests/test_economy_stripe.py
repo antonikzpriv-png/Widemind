@@ -95,7 +95,7 @@ class StripeTests(unittest.TestCase):
         self.assertEqual(result["status"], "pending")
         self.assertEqual(result["receipts_micro_usd"], 0)
         self.assertEqual(result["fees_micro_usd"], 0)
-        self.assertEqual(len(self.transport.calls), 1)
+        self.assertEqual(len(self.transport.calls), 2)  # Independent disputes must still be checked.
 
     def test_available_balance_retains_gross_fees_and_native_reference(self):
         result = self.inspect()
