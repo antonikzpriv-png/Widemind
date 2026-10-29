@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The business module now provides a Python/SQLite implementation and explicit offline demonstration. Read [docs/BUSINESS.md](docs/BUSINESS.md) and `widemind/business/contracts.py` before integrating economy, tools, runtime, or website work. Do not invent live integrations, deployment URLs, financial outcomes, or completed milestones.
+The app now provides a Python/SQLite business/economy/runtime implementation, real Gmail/OpenAI/Stripe client code, an authored public/private UI and an explicit offline demonstration. Read [docs/OPERATIONS.md](docs/OPERATIONS.md), [docs/COMPLETION_STATUS.md](docs/COMPLETION_STATUS.md), [docs/BUSINESS.md](docs/BUSINESS.md) and `widemind/business/contracts.py` before integrating economy, tools, runtime, or website work. Do not invent live integrations, deployment URLs, financial outcomes, or completed milestones.
 
 ## Working approach
 
@@ -57,7 +57,7 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-Run `python -m unittest discover -s tests -v` and `python -m widemind demo --directory /tmp/widemind-business-demo`. Runtime Python dependencies are standard library only; packaging uses `pyproject.toml`. Keep fixtures restricted to explicit demo/test modes. Run the demonstration twice against the same directory when changing recovery or idempotency.
+Run `python -m unittest discover -s tests -v` and `python -m widemind demo --directory /tmp/widemind-business-demo`. For UI changes also run `node --check widemind/web/static/app.js` and `python tests/ui_browser.py` with optional Playwright installed. `tests/ui_integrated_browser.py` qualifies a running explicit demo only. Runtime Python dependencies are standard library only; packaging uses `pyproject.toml`. Keep fixtures restricted to explicit demo/test modes. Run the demonstration twice against the same directory when changing recovery or idempotency.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.

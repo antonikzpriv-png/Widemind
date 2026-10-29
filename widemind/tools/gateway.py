@@ -182,9 +182,10 @@ class LiveTools:
             if used >= ceiling:
                 self.db.execute("ROLLBACK")
                 return Outcome("failed", reason="configured daily tool quota exhausted")
-            self.db.execute("""INSERT INTO tool_actions(action_id,run_id,job_id,action,request,state,created_at,rfc_message_id)
-              VALUES (?,?,?,?,?,'running',?,?)""", (action_id, run_id, job_id, action, request, self.clock(),
-                rfc_message_id(action_id) if action == "gmail.send" else None))
+            self.db.execute("""INSERT INTO tool_actions(action_id,run_id,job_id,action,request,state,created_at,rfc_message_id,context)
+              VALUES (?,?,?,?,?,'running',?,?,?)""", (action_id, run_id, job_id, action, request, self.clock(),
+                rfc_message_id(action_id) if action == "gmail.send" else None,
+                encode({"mail_stage": "preflight", "version": 1}) if action == "gmail.send" else None))
             self.db.execute("COMMIT")
         except sqlite3.IntegrityError:
             self.db.execute("ROLLBACK")
@@ -197,7 +198,11 @@ class LiveTools:
         before_dispatch = lambda: self._allow(run_id, action, generation)
         try:
             if action == "gmail.send":
-                result = self.gmail.send(action_id, arguments, before_dispatch=before_dispatch)
+                def mail_dispatch_guard():
+                    before_dispatch()
+                    self.db.execute("UPDATE tool_actions SET context=? WHERE action_id=?",
+                        (encode({"mail_stage": "dispatching", "version": 1}), action_id))
+                result = self.gmail.send(action_id, arguments, before_dispatch=mail_dispatch_guard)
                 outcome = Outcome(result["state"], result.get("data", {}), result.get("reason", ""))
                 return self._save(action_id, outcome)
             if action == "gmail.read":
@@ -232,8 +237,13 @@ class LiveTools:
             result = self.research.run(action_id, arguments, maximum_micro_usd, prepared=prepared, before_dispatch=paid_dispatch_guard)
             return self._finish_research(action_id, result)
         except Exception:
+            # Credential/identity/preparation failures before the durable send
+            # boundary cannot have sent mail. Legacy NULL contexts stay uncertain.
+            row = self._row(action_id)
+            if action == "gmail.send" and json.loads(row["context"] or "{}").get("mail_stage") == "preflight":
+                return self._save(action_id, Outcome("failed", reason="Gmail setup or preflight failed before send dispatch"))
             # Never erase provider charge evidence if settlement itself failed.
-            if self._row(action_id)["settlement_pending"]:
+            if row["settlement_pending"]:
                 return Outcome("unknown", reason="provider completed; financial settlement requires reconciliation")
             return self._save(action_id, Outcome("unknown", reason="provider outcome uncertain; reconcile without repeating"))
 
@@ -277,6 +287,9 @@ class LiveTools:
         request = json.loads(row["request"])
         try:
             if row["action"] == "gmail.send":
+                context = json.loads(row["context"] or "{}")
+                if context.get("version") == 1 and context.get("mail_stage") == "preflight":
+                    return self._save(action_id, Outcome("failed", reason="interrupted before Gmail send dispatch"))
                 result = self.gmail.reconcile_send(action_id)
                 return self._save(action_id, Outcome(result["state"], result.get("data", {}), result.get("reason", "")))
             if row["action"] == "gmail.read":

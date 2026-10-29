@@ -37,4 +37,4 @@ The follow-up audit reproduced failures against the original implementation befo
 | Cancelled/delivered work could receive false overdue failures | Check actual obligation state; distinguish missing confirmation from proven unfinished delivery |
 | Mail metadata and source URLs admitted controls or invalid ports | Validate single-line addresses, attachment metadata, provider IDs, and URL syntax |
 
-Remaining integration limitations are explicit: no visual UI, production economy/tools/Gmail/runtime clients, live-provider evidence, or automatic budgeted paid rework. These are not concealed by the fixture demonstration. GitHub API access remains subject to the cloud network policy.
+At that audit revision, the visual UI and provider/runtime clients were outstanding. The subsequent full build implements those modules; current evidence and remaining live prerequisites are tracked in [COMPLETION_STATUS.md](COMPLETION_STATUS.md). Live-provider evidence and automatic budgeted paid rework still require additional work. These are not concealed by the fixture demonstration. GitHub API access remains subject to the cloud network policy.

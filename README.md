@@ -8,11 +8,11 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
-The first runnable **business and fulfillment module** is implemented: durable opportunities, scoped quotes, conditional orders, event-driven fulfillment, recovery, private memory, an operator API, and a redacted activity projection.
+WideMind now has a responsive public website and private operator console, a durable business/fulfillment worker, exact-money economy, Stripe Checkout and signed webhooks, dedicated Gmail OAuth/read/send, bounded sourced OpenAI research, and persistent runtime controls. The UI follows WideClarity's monochrome visual style.
 
-Economy enforcement, live tools/Gmail, production runtime controls, and payment processing remain host integrations. The included offline demonstration uses **explicit fixtures only** and claims no real customers, payments, mail, or revenue. See [Business setup and integration](docs/BUSINESS.md).
+The production clients are implemented. Live operation still requires the owner's configured credentials, controlled accounts, approved network access and deployment isolation. Local provider tests use explicit offline transports; no independent paying customer or real earnings are claimed. See [completion evidence and remaining setup](docs/COMPLETION_STATUS.md).
 
-Start with [AGENTS.md](AGENTS.md) for developer instructions and [the roadmap](docs/ROADMAP.md) for implementation milestones.
+Start with [AGENTS.md](AGENTS.md), [the build plan](docs/BUILD_PLAN.md), and [operations](docs/OPERATIONS.md).
 
 ## What WideMind should be able to do
 
@@ -57,23 +57,27 @@ Public activity uses a deliberately selected projection of events. Customer conv
 | [Economy](docs/ECONOMY.md) | Budget, reservations, payments, costs, and exhaustion |
 | [Roadmap](docs/ROADMAP.md) | Build sequence, acceptance criteria, and five-agent work allocation |
 
-## Run the business demonstration
+## Run the website and demonstration
 
-Requires Python 3.11+; no runtime dependencies.
+Python 3.11+ is required; production runtime uses the standard library.
 
 ```sh
 python -m unittest discover -s tests -v
-python -m widemind demo --directory /tmp/widemind-business-demo
+python -m widemind serve-demo --directory /tmp/widemind-demo --seed --token-file /tmp/widemind-demo-operator-token --port 8080
 ```
 
-The demo produces a labelled research brief and persisted request-to-delivery history. Run it again against the same directory to verify idempotency. The business service registry also supports other injected services; a writing-service test exercises that extension point.
+Open the local public page and `/console`. The demo creates its operator token in the requested owner-only file; enter it in the console. It stays in browser memory only. All demo mail, payments and research are labelled fixtures. A separate worker advances work even with the browser closed.
 
-See [Business setup and integration](docs/BUSINESS.md) for migrations, API contracts, worker setup, recovery, and live-operation prerequisites.
+For the noninteractive demonstration:
 
-The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
+```sh
+python -m widemind demo --directory /tmp/widemind-batch-demo
+```
 
-The initial technical demonstration may use one service. The product remains an open-ended business agent.
+Repeat against the same directory to verify idempotency. Existing pre-audit databases need the documented one-time run-mode adoption in [BUSINESS.md](docs/BUSINESS.md).
+
+For production or controlled provider-test setup, use [.env.example](.env.example), [operations](docs/OPERATIONS.md), [economy](docs/LIVE_ECONOMY.md), and [tools](docs/LIVE_TOOLS.md). `python -m widemind check-config` prints missing configuration **names**, never secret values. `python -m widemind initialize --evidence-reference YOUR_REVIEW_REFERENCE` explicitly creates a paused run with labelled opening credit. API and worker construction never grant funds or resume it.
 
 ## Decisions still open
 
-The business module uses Python and SQLite. Hosting, domain/path, model provider, Gmail account, payment processor, production control-plane clients, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+Python/SQLite, Stripe and OpenAI are selected. Dedicated Gmail and real-provider clients are implemented. Actual credentials, dedicated accounts, live hosting/domain, source permissions, verified model prices, provider qualification and any additional graphics/software/publishing adapters remain owner configuration or future service work.

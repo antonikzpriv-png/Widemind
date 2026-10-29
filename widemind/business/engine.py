@@ -253,6 +253,7 @@ class Business:
                 claimed = self.store.db.execute("UPDATE effects SET state='running' WHERE id=? AND state='planned'", (action_id,))
                 if claimed.rowcount != 1:
                     raise Deferred("effect claimed by another worker")
+                existing = {**existing, "state": "running"}
                 try:
                     outcome = invoke(action_id)
                 except Exception:
@@ -275,14 +276,24 @@ class Business:
             except Exception:
                 outcome = Outcome("unknown", reason="adapter exception; reconcile before retry")
         outcome = self._validated_outcome(outcome, action)
-        result = encode(outcome.data)
-        self.store.db.execute("UPDATE effects SET state=?,result=?,reason=? WHERE id=?",
-                              (outcome.state, result, outcome.reason[:1000], action_id))
+        expected = existing or {"state": "running", "result": None, "reason": None}
+        outcome = self._write_effect(action_id, outcome, expected)
         if outcome.state == "unknown":
             raise Deferred("external outcome uncertain; explicit reconciliation required")
         if outcome.state == "failed":
             raise Deferred(f"confirmed action failure: {outcome.reason[:200]}")
         return outcome.data
+
+    def _write_effect(self, action_id, outcome, expected):
+        """An observer with stale evidence must not downgrade a concurrent owner."""
+        changed = self.store.db.execute("""UPDATE effects SET state=?,result=?,reason=?
+            WHERE id=? AND state=? AND result IS ? AND reason IS ?""",
+            (outcome.state, encode(outcome.data), outcome.reason[:1000], action_id,
+             expected["state"], expected["result"], expected["reason"]))
+        if changed.rowcount:
+            return outcome
+        current = self.store.one("SELECT * FROM effects WHERE id=?", (action_id,))
+        return self._validated_outcome(Outcome(current["state"], json.loads(current["result"] or "{}"), current["reason"] or ""), current["action"])
 
     @staticmethod
     def _validated_outcome(outcome, action):
@@ -665,6 +676,10 @@ class Business:
         elif command.get("type") == "opt_out":
             self.opt_out(sender, message_id)
             reference = message_id
+        elif command.get("type") == "acknowledge":
+            # Gateway independently verifies recipient/thread proof and emits
+            # delivery_updates. The raw command alone never completes anything.
+            reference = message_id
         else:
             # Preserve a reference for operator clarification, never pretend we
             # understood an arbitrary free-form message as accepted commercial terms.
@@ -791,8 +806,7 @@ class Business:
         result = self._validated_outcome(client.reconcile(action_id=action_id), effect["action"])
         # A transport 'succeeded' response can initially only mean mail accepted.
         # Reconciliation can replace it with confirmed delivery/bounce evidence.
-        self.store.db.execute("UPDATE effects SET state=?,result=?,reason=? WHERE id=?",
-            (result.state, encode(result.data), result.reason[:1000], action_id))
+        result = self._write_effect(action_id, result, effect)
         if result.state != "unknown":
             self.store.memory(self.run_id, action_id, "reconciliation", {"state": result.state}, self.clock())
 

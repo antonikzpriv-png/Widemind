@@ -252,8 +252,36 @@ class ToolsTests(unittest.TestCase):
 
     def test_oauth_identity_mismatch_never_sends(self):
         self.transport.profile_email = "unrelated@example.invalid"
-        self.assertEqual(self.mail().state, "unknown")
+        self.assertEqual(self.mail().state, "failed")
         self.assertFalse(any(url.endswith("/messages/send") for _, url, _ in self.transport.requests))
+
+    def test_oauth_failure_is_a_known_unsent_failure_and_can_retry_after_fix(self):
+        original = self.transport.request
+        def bad_oauth(method, url, **kwargs):
+            if url == GmailClient.TOKEN:
+                return response({"error":"invalid_grant"},status=401)
+            return original(method,url,**kwargs)
+        self.transport.request = bad_oauth
+        self.assertEqual(self.mail("OAUTH_FAILURE").state,"failed")
+        self.assertFalse(any(url.endswith("/messages/send") for _,url,_ in self.transport.requests))
+        self.transport.request = original
+        self.assertEqual(self.mail("EXPLICIT_NEW_ATTEMPT").state,"succeeded")
+        self.assertEqual(sum(url.endswith("/messages/send") for _,url,_ in self.transport.requests),1)
+
+    def test_death_before_mail_dispatch_is_reconciled_without_send_or_search(self):
+        original = self.transport.request
+        def interrupted(method,url,**kwargs):
+            if url == GmailClient.API + "/profile":
+                raise KeyboardInterrupt("explicit process-death fixture during preflight")
+            return original(method,url,**kwargs)
+        self.transport.request = interrupted
+        with self.assertRaises(KeyboardInterrupt):
+            self.mail("INTERRUPTED_MAIL_PREFLIGHT")
+        self.transport.request = original
+        before = len(self.transport.requests)
+        result = self.tools.reconcile(action_id="INTERRUPTED_MAIL_PREFLIGHT")
+        self.assertEqual(result.state,"failed")
+        self.assertEqual(len(self.transport.requests),before)
 
     def test_sender_authentication_does_not_trust_bare_from_or_injected_lower_auth_results(self):
         good = normalize_message(inbox_message())

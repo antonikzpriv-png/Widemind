@@ -77,14 +77,14 @@ def main():
             check('No public completion events' not in page.locator('#public-activity').inner_text(), 'seeded actual completion appears in selected public activity')
             page.get_by_role('button', name='Discuss a request', exact=False).first.click()
             page.locator('input[name="topic"]').fill('Explicit public composer fixture')
-            page.locator('textarea[name="source_urls"]').fill('https://docs.python.org/3/library/sqlite3.html')
+            page.locator('textarea[name="source_urls"]').fill('https://docs.python.org/3/library/sqlite3.html\nhttps://www.sqlite.org/lang_transaction.html')
             page.get_by_role('button', name='Prepare email draft', exact=True).click()
             draft = page.locator('a[href^="mailto:"]').get_attribute('href')
             from urllib.parse import parse_qs, unquote
             command = json.loads(parse_qs(urlsplit(draft).query)['body'][0])
             check(unquote(urlsplit(draft).path) == public['contact_email'], 'actual public composer targets configured WideMind mailbox')
             check(command['type'] == 'request' and command['service'] == 'research-brief', 'actual public draft matches normalized Gmail intake contract')
-            check(command['scope']['source_urls'] == ['https://docs.python.org/3/library/sqlite3.html'], 'public request preserves structured source URLs')
+            check(command['scope']['source_urls'] == ['https://docs.python.org/3/library/sqlite3.html', 'https://www.sqlite.org/lang_transaction.html'], 'public request preserves structured source URLs')
             page.locator('#close-dialog').click()
             for width in [1440, 1024, 390, 320]:
                 page.set_viewport_size({'width': width, 'height': 950})
@@ -144,12 +144,12 @@ def main():
             topic = 'EXPLICIT UI FIXTURE ' + uuid.uuid4().hex[:10]
             page.locator('input[name="customer_email"]').fill(customer)
             page.locator('input[name="topic"]').fill(topic)
-            page.locator('textarea[name="source_urls"]').fill('https://docs.python.org/3/library/sqlite3.html')
+            page.locator('textarea[name="source_urls"]').fill('https://docs.python.org/3/library/sqlite3.html\nhttps://www.sqlite.org/lang_transaction.html')
             page.get_by_role('button', name='Record opportunity', exact=True).click()
             page.locator('#detail-dialog').wait_for(state='hidden')
             opportunity = next(item for item in private()['opportunities'] if item['scope'].get('topic') == topic)
             check(opportunity['status'] == 'received', 'paused worker leaves new opportunity durably queued')
-            check(opportunity['scope']['source_urls'] == ['https://docs.python.org/3/library/sqlite3.html'], 'source URLs survive real intake storage')
+            check(opportunity['scope']['source_urls'] == ['https://docs.python.org/3/library/sqlite3.html', 'https://www.sqlite.org/lang_transaction.html'], 'source URLs survive real intake storage')
             runtime('Resume')
             check(private()['runtime_state'] == 'active', 'resume persists through actual runtime adapter')
             def wait_for(predicate, description, limit=38):

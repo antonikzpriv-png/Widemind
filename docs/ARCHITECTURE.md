@@ -2,9 +2,9 @@
 
 ## Status
 
-The business/fulfillment slice is implemented in Python 3.11+ with SQLite, a standard-library WSGI integration API, and an independent event worker. See [BUSINESS.md](BUSINESS.md) for actual commands, storage, and version 1 host contracts.
+Business, protected economy, runtime controls, a standard-library WSGI API, and an independent worker are implemented in Python 3.11+ with SQLite; authored HTML/CSS/JavaScript provides the public/private UI. See [BUSINESS.md](BUSINESS.md) for actual commands, storage, and version 1 host contracts.
 
-The wider component boundaries below remain the product architecture. Production runtime controls, economy enforcement, live tool adapters, hosting, payment processing, and model providers are not implemented/configured by the business slice. Its external-dependency demonstration is explicitly simulated.
+The wider component boundaries below remain the product architecture. Real Gmail/OpenAI/Stripe clients and logical enforcement boundaries are implemented; production credentials, deployment isolation, hosting, provider access and live qualification remain external prerequisites. See OPERATIONS.md and COMPLETION_STATUS.md for actual evidence. The offline demonstration remains explicitly simulated.
 
 ## Product requirements
 

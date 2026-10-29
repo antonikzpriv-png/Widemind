@@ -18,3 +18,18 @@ jobs:
       - run: python -m pip install .
       - run: python -m widemind demo --directory "${{ runner.temp }}/widemind-business-demo"
       - run: python -m widemind demo --directory "${{ runner.temp }}/widemind-business-demo"
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install '.[dev]'
+      - run: python -m playwright install --with-deps chromium
+      - run: node --check widemind/web/static/app.js
+      - run: python tests/ui_browser.py

@@ -1,6 +1,6 @@
 # WideMind completion plan
 
-Target window: 2026-10-29 16:47 to 2026-10-30 04:47 Europe/Warsaw (12 hours).
+Target window: 2026-10-29 15:47 to 2026-10-30 03:47 Europe/Warsaw (12 hours).
 
 The owner requested all four outstanding items: visual UI, live Gmail/tools/economy/payments integration, real-world validation, and a pull request. Stripe and OpenAI were selected alongside dedicated Gmail. This target is not evidence that external account provisioning or live verification has happened.
 

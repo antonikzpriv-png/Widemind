@@ -178,6 +178,56 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.business.store.one("SELECT COUNT(*) AS n FROM quotes")["n"], 0)
         self.assertFalse(any(action == "gmail.send" for _, action in self.adapters.calls))
 
+    def test_late_reconciliation_cannot_downgrade_concurrent_completion(self):
+        self.adapters.unknown_actions.add("gmail.send")
+        self.business.receive(source="test", external_id="late-effect", service="research-brief", scope=self.scope,
+                              customer_email="private-customer@example.invalid")
+        drain(self.business)
+        effect = self.business.store.one("SELECT * FROM effects WHERE state='unknown'")
+        confirmed = {"message_id": "confirmed-provider-reference", "delivery_state": "confirmed"}
+        def race(**kwargs):
+            self.business.store.db.execute("UPDATE effects SET state='succeeded',result=?,reason='' WHERE id=?", (encode(confirmed), effect["id"]))
+            return Outcome("unknown", reason="stale in-progress observer")
+        self.adapters.reconcile = race
+        self.business._reconcile(effect["id"])
+        result = self.business.store.one("SELECT state,result FROM effects WHERE id=?", (effect["id"],))
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(json.loads(result["result"]), confirmed)
+
+    def test_demo_reseed_never_targets_an_unrelated_customer_order(self):
+        from widemind.demo import demonstrate, make_demo
+        from widemind.business.store import identity
+        directory = self.root / "multi-order-demo"
+        original = demonstrate(directory)
+        business, adapter = make_demo(directory)
+        try:
+            seed_quote = business.store.one("SELECT id FROM quotes")["id"]
+            for number in range(1000):
+                external = f"other-customer-{number}"
+                opp = identity(business.run_id, "operator", external)
+                quote = identity(business.run_id, "quote", opp)
+                order = identity(business.run_id, "order", quote)
+                if quote < seed_quote and order < original["order_id"]:
+                    break
+            else:
+                self.fail("could not construct deterministic ordering regression")
+            business.receive(source="operator",external_id=external,service="research-brief",scope=self.scope,
+                             customer_email="other-customer@example.invalid")
+            drain(business)
+            other = business.accept(quote,customer_email="other-customer@example.invalid",evidence_reference="explicit fixture acceptance")
+            drain(business)
+            self.assertEqual(business.order(other)["status"],"awaiting_payment")
+        finally:
+            business.close()
+        repeated = demonstrate(directory)
+        self.assertEqual(repeated["order_id"],original["order_id"])
+        business, adapter = make_demo(directory)
+        try:
+            self.assertEqual(json.loads(business.order(other)["payment"])["receipts_micro_usd"],0)
+            self.assertEqual(business.order(other)["status"],"awaiting_payment")
+        finally:
+            business.close()
+
     def test_research_scope_carries_real_source_urls_without_changing_service(self):
         scope = {**self.scope, "source_urls": ["https://example.com/source", "https://example.org/source"]}
         plan = ResearchBrief().plan(scope, 250000)

@@ -112,7 +112,7 @@ function publicRequestDialog(offer, contact) {
         if (!sections.length || sections.length > 8 || new Set(sections).size !== sections.length || sections.some(value => value.length > 100)) throw new Error('Use one to eight unique section headings of up to 100 characters.');
         if (sources.length > 10) throw new Error('Use at most ten source URLs.');
         for (const value of sources) { const parsed = new URL(value); if (parsed.protocol !== 'https:' || parsed.username || parsed.password || /[\s\x00-\x1f\x7f]/.test(value)) throw new Error('Source URLs must be valid HTTPS addresses without credentials.'); }
-        const minimum = integerValue(form, 'min_sources', 1); if (minimum > 10) throw new Error('Use at most ten minimum sources.');
+        const minimum = integerValue(form, 'min_sources', 1); if (minimum > 10) throw new Error('Use at most ten minimum sources.'); if (sources.length && sources.length < minimum) throw new Error('Provide at least the agreed minimum number of source URLs, or leave sources empty for configured research.');
         scope = { topic: form.elements.topic.value.trim(), sections, min_sources: minimum, ...(sources.length ? { source_urls: sources } : {}) };
       } else {
         scope = JSON.parse(form.elements.custom_scope.value);
@@ -318,7 +318,7 @@ function opportunityDialog() {
     const values = form.elements;
     let scope;
     if (values.custom_scope.value.trim()) { scope = JSON.parse(values.custom_scope.value); if (!scope || typeof scope !== 'object' || Array.isArray(scope)) throw new Error('Custom scope must be a JSON object.'); }
-    else { scope = { topic: values.topic.value.trim(), sections: textLines(values.sections.value), min_sources: integerValue(form, 'min_sources', 1) }; const urls = textLines(values.source_urls.value); if (urls.length) scope.source_urls = urls; }
+    else { scope = { topic: values.topic.value.trim(), sections: textLines(values.sections.value), min_sources: integerValue(form, 'min_sources', 1) }; const urls = textLines(values.source_urls.value); if (urls.length) { if (urls.length < scope.min_sources) throw new Error('Source URLs must meet the minimum source count.'); scope.source_urls = urls; } }
     const payload = { source: 'operator-console', external_id: requestId, service: values.service.value, scope, origin: values.origin.value, priority: integerValue(form, 'priority'), source_reference: values.source_reference.value.trim(), customer_email: values.customer_email.value.trim() || null };
     await mutate('/api/v1/opportunities', payload); closeFormDialog(form); message('Opportunity recorded. The independent worker will assess it when the run permits work.', 'success');
   }); });

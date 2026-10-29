@@ -4,18 +4,20 @@
 
 The repository contains the product foundation plus a runnable business/fulfillment slice. [BUSINESS.md](BUSINESS.md) documents the Python/SQLite implementation, real local commands, version 1 integration interfaces, and an offline research-brief demonstration. A writing-service test verifies extensibility.
 
-Live Gmail, payments, enforced economy, autonomous model/tool execution, production controls, and a deployed website remain unimplemented/unconfigured. The local business scheduler and operator API do not establish completion of those full milestones.
+The current build implements the public/private UI, protected exact-money economy, Stripe Checkout/webhooks, Gmail OAuth/communications, bounded sourced OpenAI research, durable runtime controls and real host composition. Tests include actual adapter classes with offline HTTP transports and a real API/worker browser flow. See [COMPLETION_STATUS.md](COMPLETION_STATUS.md).
 
-The full milestones below remain unchecked because their integrated/live acceptance criteria are not yet satisfied. Local business behavior is verified by the reproducible tests and fixture demonstration; do not mark a production milestone complete from that evidence alone.
+Credentials/accounts, approved network access, deployment isolation, live-provider qualification, and an independent paid pilot remain external prerequisites. Additional browser/code/graphics/publishing capabilities require their own configured adapters; the business service interfaces remain extensible.
+
+The milestones below describe the full product acceptance criteria. Implemented local slices are recorded in COMPLETION_STATUS.md; production/live criteria remain unchecked until their actual evidence exists. Test fixtures never establish live earnings.
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 
 ## 1. Runnable foundation
 
-- [ ] Select and document the application stack, configuration, migrations, and actual development commands.
-- [ ] Implement a persistent worker and minimal website/API.
-- [ ] Persist runs, actions, results, and errors.
-- [ ] Add explicit active, waiting, paused, exhausted, and failed states.
+- [x] Select and document the application stack, configuration, migrations, and actual development commands.
+- [x] Implement a persistent worker and minimal website/API.
+- [x] Persist runs, actions, results, and errors.
+- [x] Add explicit active, waiting, paused, exhausted, and failed states.
 
 **Deliverable:** A locally runnable website and worker using a deterministic demonstration task.
 

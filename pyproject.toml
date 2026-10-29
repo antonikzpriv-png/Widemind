@@ -9,6 +9,9 @@ description = "Durable WideMind business workflows with injected economy and too
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+dev = ["playwright>=1.50,<2"]
+
 [project.scripts]
 widemind = "widemind.__main__:main"
 

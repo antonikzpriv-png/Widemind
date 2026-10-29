@@ -6,7 +6,7 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below define the required economy implementation. The business module now consumes an injected `Economy` interface for reservations, payment links, verified snapshots, fulfillment recognition, release, and reconciliation; see [BUSINESS.md](BUSINESS.md). It implements no ledger or live payment integration. Demo/test payment values are explicitly scripted fixtures and cannot fund live work.
+The rules below define the required economy implementation. The business module now consumes an injected `Economy` interface for reservations, payment links, verified snapshots, fulfillment recognition, release, and reconciliation; see [BUSINESS.md](BUSINESS.md). The separate protected economy now implements the ledger, atomic reservations, holds, actual usage posting, Stripe Checkout, verified settlement/refund queries and signed webhook processing; see [LIVE_ECONOMY.md](LIVE_ECONOMY.md). No actual provider funds are claimed by fixture tests. Demo/test payment values are explicitly scripted fixtures and cannot fund live work.
 
 ## Units
 

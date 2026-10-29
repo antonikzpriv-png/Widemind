@@ -46,8 +46,8 @@ class ResearchBrief:
         arguments = {"topic": topic, "sections": headings, "min_sources": minimum}
         if "source_urls" in scope:
             urls = scope["source_urls"]
-            if not isinstance(urls, list) or not 1 <= len(urls) <= 10:
-                raise ValueError("source_urls must contain 1–10 URLs")
+            if not isinstance(urls, list) or not minimum <= len(urls) <= 10:
+                raise ValueError("source_urls must meet the agreed minimum source count (up to 10)")
             arguments["source_urls"] = [web_url(url) for url in urls]
             if len(set(arguments["source_urls"])) != len(urls):
                 raise ValueError("source URLs must be unique")

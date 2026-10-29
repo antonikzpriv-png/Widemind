@@ -8,7 +8,7 @@ import sqlite3
 from pathlib import Path
 from .business.contracts import Outcome
 from .business.engine import Business
-from .business.store import Store, encode
+from .business.store import Store, encode, identity
 
 
 class DemoAdapters:
@@ -159,14 +159,15 @@ def demonstrate(directory):
         adapters.messages = [request]
         business.notify(source="demo", external_id="inbox-1", kind="gmail.sync", payload={})
         drain(business)
-        quote = business.store.one("SELECT id FROM quotes")
+        opportunity_id = identity(business.run_id, "gmail", "demo-request-1")
+        quote = business.store.one("SELECT id FROM quotes WHERE opportunity_id=?", (opportunity_id,))
         if not quote:
             raise RuntimeError("demo did not produce a quote")
         adapters.messages = [{"message_id": "demo-accept-1", "thread_id": "demo-thread-1", "from": "customer@example.invalid", "sender_verified": True,
                               "command": {"type": "accept", "quote_id": quote["id"]}}]
         business.notify(source="demo", external_id="inbox-2", kind="gmail.sync", payload={})
         drain(business)
-        order = business.store.one("SELECT id FROM orders")
+        order = business.store.one("SELECT id FROM orders WHERE quote_id=? AND run_id=?", (quote["id"], business.run_id))
         if not order:
             raise RuntimeError("demo did not produce an order")
         adapters.set_payment(order["id"], run_id="demo-run")
