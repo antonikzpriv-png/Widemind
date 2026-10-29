@@ -89,6 +89,38 @@ class ConversationConsentTests(unittest.TestCase):
         self.assertEqual(self.f.customer('y'*43)['conversation']['status'], 'opted_out')
         self.assertNotEqual(first['conversationId'], second['conversationId'])
 
+    def test_later_gmail_message_cannot_upgrade_a_portal_stop_without_fresh_opt_out(self):
+        business = self.f.host.business('run-1')
+        try:
+            gmail = business.conversation_receive(source='gmail', external_id='initial-gmail-request',
+                thread_id='existing-gmail-thread', customer_email='controlled-customer@example.test',
+                body='Please help with a controlled SVG request.', authenticated=True)
+            with business.store.transaction():
+                business.conversation_portal_link(gmail, 'g'*43)
+        finally:
+            business.store.close()
+        independent = self.f.request('independent-request', 'y'*43)
+        self.f.host.handle('/v1/opt-out', {'runId':'run-1', 'token':'g'*43})
+        business = self.f.host.business('run-1')
+        try:
+            business._gmail_message({
+                'message_id':'later-gmail-question', 'thread_id':'existing-gmail-thread',
+                'from':'controlled-customer@example.test', 'sender_verified':True,
+                'body':'What is the status of that request?', 'rfc_message_id':'<later@example.test>'})
+            self.assertEqual(business.store.one('SELECT opted_out FROM customers')['opted_out'], 0)
+            self.assertEqual(business.conversation_view(gmail)['status'], 'opted_out')
+            self.assertEqual(business.conversation_view(independent['conversationId'])['status'], 'collecting')
+            self.assertEqual(business.store.all('SELECT * FROM conversation_allocations'), [])
+            self.assertEqual(business.store.all('SELECT * FROM effects'), [])
+            business._gmail_message({
+                'message_id':'fresh-explicit-gmail-stop', 'thread_id':'existing-gmail-thread',
+                'from':'controlled-customer@example.test', 'sender_verified':True,
+                'body':'Unsubscribe.', 'rfc_message_id':'<unsubscribe@example.test>'})
+            self.assertEqual(business.store.one('SELECT opted_out FROM customers')['opted_out'], 1)
+            self.assertEqual(business.conversation_view(independent['conversationId'])['status'], 'opted_out')
+        finally:
+            business.store.close()
+
     def test_local_opt_out_survives_restart_recovery_followup_and_operator_resolution(self):
         own = self.f.request()
         self.f.proposal(own['conversationId'])
