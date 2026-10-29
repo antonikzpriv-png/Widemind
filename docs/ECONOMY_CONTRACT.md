@@ -16,7 +16,7 @@ The fetched foundation is documentation-only (`fc6df21`). This task selects Pyth
 - `record_funding(run_id, amount_micro_usd, category, reference, idempotency_key)`: operator-only owner funding/test funding; test funds prohibited in live runs.
 - `record_subsidy(run_id, amount_micro_usd, reference, idempotency_key)`: noncash infrastructure support, does not increase available credit. Signed metric entries permit compensating corrections.
 - `record_earned_revenue(run_id, amount_micro_usd, job_id, reference, idempotency_key)`: performance metric, does not increase cash. Signed metric entries permit compensating corrections.
-- `correct_entry(run_id, entry_id, amount_micro_usd, reason, idempotency_key)`: operator-only append-only compensating cash correction; noncash metric originals are rejected and use signed metric corrections instead.
+- `correct_entry(run_id, entry_id, amount_micro_usd, reason, idempotency_key)`: operator-only append-only compensating cash correction; noncash metric originals are rejected and use signed metric corrections instead. Active provisional operating charges (including correction chains) must be finalized with the provider total before a separate cash correction.
 
 ## Payment adapter boundary
 
@@ -43,7 +43,7 @@ Each balance transaction is immutable and idempotent by provider/account/mode/tr
 
 Webhook event IDs deduplicate per provider/account/mode. Same ID with a different digest conflicts. Unknown payment mapping fails closed for retry/reconciliation. Complete authoritative snapshots reconcile payment/hold projections. Positive receipt net automatically receives a customer hold; an operator fulfillment decision releases it via `release_payment_hold(provider, account, mode, payment_id, idempotency_key)`. Later refunds/disputes still post and may make the wallet negative. Pending exposure remains held. No money is granted by earned revenue, pending invoices, payment-link creation or checkout-completed events.
 
-`payment(provider, account, mode, payment_id)` reads payment status. `record_checkout(run_id, provider, account, mode, request_id, job_id, amount_micro_usd, details)` durably claims a checkout request (same parameters on retry); `finish_checkout(..., request_id, payment_id, url)` persists result and registers the payment; `checkout(...)` reads it. The adapter uses the persisted request ID as its provider idempotency key and retrieves session state after uncertainty.
+`payment(provider, account, mode, payment_id)` reads payment status. `record_checkout(run_id, provider, account, mode, request_id, job_id, amount_micro_usd, details)` durably claims a checkout request (same parameters on retry); `finish_checkout(..., request_id, payment_id, url)` persists result and registers the payment; `checkout(...)` reads it. The adapter uses the persisted request ID as its provider idempotency key. `StripePayments.recover_checkout(request_id)` reads and verifies existing sessions after uncertainty, including completed sessions with `url=None`; it never creates another session or posts receipt credit. `finish_checkout` preserves an established payment binding and any known URL.
 
 ## Error and event shapes
 
@@ -54,3 +54,11 @@ Every new mutation appends an event in the same SQLite transaction: `{sequence, 
 ## Authorization boundary
 
 The economy database, service code and credentials stay outside the agent workspace. Separate constant-time bearer identities: operator (funding, corrections, fulfillment, checkout and reconciliation), gateway (reserve/start/settle for trusted provider adapters), agent (private balance/status reads and reserve only). Webhooks require raw-body signature verification. No HTTP route permits arbitrary journal writes. Single-host SQLite service owns all accounting writes, with WAL and BEGIN IMMEDIATE; multiple service processes coordinate through the same local database, not separate copies or NFS.
+
+## Durable operations extension
+
+`ReconciliationQueue(service)` durably admits minimal already-verified webhook descriptors; the HTTP raw-body signature is checked before enqueue. Duplicate event/account/mode/digest returns the same task without Stripe reads. The separate `ReconciliationWorker(queue, adapter)` performs bounded authenticated provider reads, applies existing payment snapshots idempotently, and records completion. An HTTP 202 queue response grants no money. See [operations](ECONOMY_OPERATIONS.md) for the task states, account-scoped operator APIs, worker CLI, finite backoff/dead-letter recovery and periodic polling. SQLite migrations 2–4 add this queue, scheduling index and immutable-authorization/numeric-projection guards without rewriting the version-1 journal.
+
+Every trusted `BoundedAdapter` must declare immutable `provider`, `account` and `mode` (`test` or `live`). `PaidGateway` keys registration and dispatch by all three, checks the run's persisted mode and rejects a changed adapter profile before execution. Test funds cannot authorize a live adapter. Known authoritative charge amounts are recorded even when optional usage diagnostics are invalid or too large; an explicit omission reason replaces those diagnostics. Unknown effects remain unknown, never free by inference.
+
+`public_summary(service, run_id)` produces a fixed redacted financial allowlist; `audit_integrity(service, run_id)` checks bounded local journal/projection consistency in one read-only snapshot. The HTTP accessors are operator-only. They do not publish the website, prove external-provider completeness or repair history. Projection corruption or legacy provisional-correction damage is reported rather than silently erased.
