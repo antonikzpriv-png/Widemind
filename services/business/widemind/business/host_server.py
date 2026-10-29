@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import quote, urlsplit
 from .engine import Business, Deferred
 from .store import Store, encode, identity
 from .policy import Policy
@@ -18,6 +19,7 @@ from .creative_services import CREATIVE_SERVICES
 from .creative_engine import CreativeFulfillment
 from . import creative_portal
 from .host_clients import EconomyClient, ToolsClient, RuntimeState
+from .conversation_poll import schedule_inbox
 
 class PortalBusiness(CreativeFulfillment, Business):
     """Actual private portal publication, never falsely described as Gmail delivery."""
@@ -26,11 +28,38 @@ class PortalBusiness(CreativeFulfillment, Business):
         identifier=identity(self.run_id,entity,step,'portal')
         value=(self.run_id,customer_id,entity,step,subject,body,encode(artifact) if artifact else None)
         with self.store.transaction():
+            if self._opted_out(customer_id) or not self._contact_allowed(entity):
+                raise Deferred('request publication opted out')
             old=self.store.one('SELECT * FROM host_notifications WHERE id=?',(identifier,))
             if old:
                 if tuple(old[k] for k in ('run_id','customer_id','entity_id','purpose','subject','body','artifact'))!=value:raise ValueError('portal publication identity conflict')
             else:self.store.db.execute('INSERT INTO host_notifications VALUES (?,?,?,?,?,?,?,?,?)',(identifier,*value,self.clock()))
         return identifier
+    def conversation_portal_link(self, conversation_id, token):
+        """Called within durable outbound preparation, never as a public grant."""
+        origin = getattr(self, 'public_origin', None)
+        if not origin:
+            return None
+        if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}', token):
+            raise ValueError('invalid generated customer token')
+        thread = self.store.one('''SELECT t.opportunity_id,t.customer_id,c.email
+            FROM customer_threads t JOIN customers c ON c.id=t.customer_id
+            WHERE t.id=? AND t.run_id=? AND c.run_id=?''',
+            (conversation_id, self.run_id, self.run_id))
+        if not thread:
+            raise ValueError('unknown customer conversation')
+        request_id = identity(self.run_id, 'conversation-access', conversation_id)
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        previous = self.store.one('SELECT * FROM host_requests WHERE request_id=?', (request_id,))
+        if previous:
+            if (previous['revoked_at'] or previous['token_hash'] != digest
+                    or previous['opportunity_id'] != thread['opportunity_id']
+                    or previous['email'] != thread['email']):
+                raise ValueError('private access was already issued or revoked')
+        else:
+            self.store.db.execute('INSERT INTO host_requests VALUES (?,?,?,?,?,?,NULL)',
+                (request_id, self.run_id, thread['opportunity_id'], thread['email'], digest, self.clock()))
+        return origin+'/commerce#customer='+quote(token, safe='')+'&runId='+quote(self.run_id, safe='')
 
 class Host:
     def __init__(self,env=None):
@@ -38,6 +67,13 @@ class Host:
         self.path=self.env.get('WIDEMIND_BUSINESS_DB','./var/business.sqlite3')
         self.token=self.env.get('WIDEMIND_BUSINESS_TOKEN','')
         self.mode=self.env.get('WIDEMIND_BUSINESS_MODE','test')
+        self.public_origin = self.env.get('WIDEMIND_PUBLIC_ORIGIN') or None
+        if self.public_origin:
+            parsed = urlsplit(self.public_origin)
+            if (parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path
+                    or not parsed.hostname or parsed.port == 0
+                    or (parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1','localhost','::1'}))):
+                raise ValueError('business public origin must be an exact HTTPS or loopback HTTP origin')
         if len(self.token)<32 or not self.token.isascii() or any(c.isspace() for c in self.token):raise ValueError('dedicated business bearer token >=32 characters required')
         if self.mode not in {'test','live'}:raise ValueError('business mode must be test or live')
         self.runtime=RuntimeState(self.env.get('WIDEMIND_RUNTIME_DATABASE',''),self.mode)
@@ -49,13 +85,23 @@ class Host:
         if not store.one('SELECT document FROM settings WHERE run_id=?',(run,)):
             policy=Policy(capabilities=('research','graphics','software'),prices={'research-brief':2000000,'svg-graphic':2000000,'software-starter':3000000,'custom-graphic':5000000,'interactive-calculator':8000000},goal_weights={'research-brief':1,'svg-graphic':1,'software-starter':1,'custom-graphic':1,'interactive-calculator':1})
             store.db.execute('INSERT OR IGNORE INTO settings VALUES (?,?)',(run,encode(policy.document())))
-        return PortalBusiness(store,run_id=run,economy=EconomyClient(self.env,store,self.mode),tools=ToolsClient(self.env,self.mode),runtime=self.runtime,mode=self.mode,services=[ResearchBrief(),*LOCAL_SERVICES,*CREATIVE_SERVICES])
+        business = PortalBusiness(store,run_id=run,economy=EconomyClient(self.env,store,self.mode),tools=ToolsClient(self.env,self.mode),runtime=self.runtime,mode=self.mode,services=[ResearchBrief(),*LOCAL_SERVICES,*CREATIVE_SERVICES])
+        business.public_origin = self.public_origin
+        return business
     def token_request(self,business,token):
         if not isinstance(token,str) or not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',token):raise ValueError('invalid customer authorization')
         hashed=hashlib.sha256(token.encode()).hexdigest()
         row=business.store.one('SELECT * FROM host_requests WHERE token_hash=? AND run_id=? AND revoked_at IS NULL',(hashed,business.run_id))
         if not row:raise ValueError('invalid customer authorization')
         return row
+    @staticmethod
+    def request_conversation(business, request):
+        """Resolve through the token-owned request, never a caller's thread ID."""
+        conversation = business.conversation_for_opportunity(request['opportunity_id'])
+        if conversation and (conversation['opportunity_id'] != request['opportunity_id']
+                             or conversation['customer_id'] != identity(business.run_id, request['email'])):
+            raise ValueError('conversation/customer mismatch')
+        return conversation
     def observe_payments(self,business):
         # Cheap local authoritative snapshot polling, never provider inference.
         # Scope to existing recent commitments; authenticated provider hints can
@@ -81,14 +127,34 @@ class Host:
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
         try:
-            if path=='/v1/work-state':self.observe_payments(business);return self.work(business)
+            # Discovery configuration only records bounded work. The Node runtime
+            # selects the same durable event queue and authorizes business.step;
+            # opening the operator page never performs research or starts work.
+            if path=='/v1/discovery-status':return business.discovery_status(offset=payload.get('offset',0),limit=payload.get('limit',100))
+            if path=='/v1/discovery-configure':
+                business.configure_discovery(payload['config']);return {'saved':True}
+            if path=='/v1/discovery-wake':
+                result=business.schedule_discovery(payload['marketId'],payload['requestId']);return {**result,**({'eventId':result['event_id']} if result.get('event_id') else {})}
+            if path=='/v1/experiment-start':
+                experiment=business.start_experiment(payload['opportunityId'],payload['spec'],payload['requestId']);return {'experimentId':experiment,'scheduled':True}
+            if path=='/v1/experiment-stop':
+                business.stop_experiment(payload['experimentId'],payload['reason']);return {'recorded':True}
+            if path=='/v1/experiment-link-order':
+                business.link_experiment_order(payload['experimentId'],payload['orderId'],payload['evidenceReference']);return {'recorded':True}
+            if path=='/v1/experiment-artifact':return business.experiment_artifact(payload['experimentId'])
+            if path=='/v1/work-state':schedule_inbox(business,self.env);self.observe_payments(business);return self.work(business)
             if path=='/v1/offerings':return {'available':True,'offerings':self.offerings(business)}
             if path=='/v1/public':
                 return {'availability':{'available':True},'offerings':[{key:item[key] for key in ('id','title','description')} for item in self.offerings(business) if item['available']],
                         'activity':[{'id':identity(run,'public',item['kind'],item['service'],item['at_utc_epoch']),
                                      'at':datetime.fromtimestamp(item['at_utc_epoch'],timezone.utc).isoformat(),
                                      'text':f"Completed {item['service'].replace('-',' ')} work."} for item in business.public_activity()]}
-            if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,))}
+            if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,)),'conversations':business.conversation_list()}
+            if path=='/v1/conversations':return {'conversations':business.conversation_list()}
+            if path=='/v1/conversation':return {'conversation':business.conversation_view(payload['conversationId'])}
+            if path=='/v1/conversation-resolve':
+                business.conversation_resolve(conversation_id=payload['conversationId'], evidence_reference=payload['evidenceReference'])
+                return {'resolved':True,'requiresFreshAssessment':True}
             if path=='/v1/recovery':
                 effect=business.store.one('SELECT * FROM effects WHERE id=? AND run_id=?',(payload['actionId'],run))
                 if not effect:raise ValueError('unknown effect')
@@ -100,6 +166,13 @@ class Host:
                 else:raise ValueError('invalid recovery mode')
                 if business.store.one('SELECT id FROM orders WHERE id=? AND run_id=?',(effect['job_id'],run)):
                     business.notify(source='operator-recovery',external_id=reference+':advance',kind='advance',payload={'id':effect['job_id']},due_at=time.time()+1)
+                elif mode=='reconcile':
+                    experiment=business.store.one("SELECT id FROM discovery_experiments WHERE id=? AND run_id=? AND state IN ('awaiting_start','running','unknown')",(effect['job_id'],run))
+                    if experiment:
+                        # Only re-inspect the original effect after reconciliation.
+                        # The frozen plan, action IDs, allowance and deadline still
+                        # fence dispatch; unknown effects are never retried here.
+                        business.notify(source='operator-recovery',external_id=reference+':experiment:'+experiment['id'],kind='experiment.step',payload={'id':experiment['id']},due_at=time.time()+1)
                 return {'scheduled':True,'actionId':action}
             if path=='/v1/resolve-hold':business.resolve_hold(payload['orderId'],decision=payload['decision'],evidence_reference=payload['evidenceReference']);return {'recorded':True}
             if path=='/v1/reconsider':business.reconsider(payload['opportunityId'],evidence_reference=payload['evidenceReference'],scope=payload.get('scope'),customer_email=payload.get('email'));return {'scheduled':True}
@@ -123,18 +196,47 @@ class Host:
                     if previous and (previous['revoked_at'] or previous['token_hash']!=hashed or previous['email']!=email.lower()):return {'error':'request already exists; use original private access','statusCode':409}
                     if used and used['request_id']!=key:return {'error':'use a new token for each request','statusCode':409}
                     business.store.db.execute('INSERT OR IGNORE INTO host_requests VALUES (?,?,?,?,?,?,NULL)',(key,run,op,email.lower(),hashed,time.time()))
-                actual=business.receive(source='customer-portal',external_id=request_id,service=payload['service'],scope=payload['scope'],customer_email=email)
-                if actual!=op:raise ValueError('opportunity identity mismatch')
-                return {'requestId':request_id,'opportunityId':op,'customerToken':token,'runId':run}
-            if path in {'/v1/customer','/v1/accept','/v1/delivery','/v1/revoke','/v1/manifest','/v1/change-request'}:
+                conversation_id = None
+                if 'message' in payload:
+                    conversation_id = business.conversation_receive(source='customer-portal', external_id=request_id,
+                        thread_id='portal:'+key, customer_email=email.lower(), body=payload['message'],
+                        authenticated=True, opportunity_id=op)
+                else:
+                    actual=business.receive(source='customer-portal',external_id=request_id,service=payload['service'],scope=payload['scope'],customer_email=email)
+                    if actual!=op:raise ValueError('opportunity identity mismatch')
+                return {'requestId':request_id,'opportunityId':op,'customerToken':token,'runId':run,
+                        **({'conversationId':conversation_id} if conversation_id else {})}
+            if path in {'/v1/customer','/v1/accept','/v1/delivery','/v1/revoke','/v1/message','/v1/opt-out','/v1/manifest','/v1/change-request'}:
                 request=self.token_request(business,payload.get('token'))
                 quotes=business.store.all('SELECT * FROM quotes WHERE opportunity_id=?',(request['opportunity_id'],))
                 quote_ids=[q['id'] for q in quotes]
                 if path=='/v1/revoke':business.store.db.execute('UPDATE host_requests SET revoked_at=? WHERE request_id=?',(time.time(),request['request_id']));return {'revoked':True}
+                conversation = self.request_conversation(business, request)
+                if path=='/v1/message':
+                    message_id = payload['messageId']
+                    if not isinstance(message_id, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,199}', message_id):
+                        raise ValueError('invalid message identity')
+                    conversation_id = business.conversation_receive(source='customer-portal', external_id=message_id,
+                        thread_id='portal:'+request['request_id'], customer_email=request['email'], body=payload['body'],
+                        authenticated=True, opportunity_id=request['opportunity_id'])
+                    return {'conversationId':conversation_id,'messageId':message_id,'queued':True}
+                if path=='/v1/opt-out':
+                    conversation_id = business.conversation_receive(source='customer-portal',
+                        external_id='opt-out:'+request['request_id'], thread_id='portal:'+request['request_id'],
+                        customer_email=request['email'], body='Stop', authenticated=True,
+                        opportunity_id=request['opportunity_id'])
+                    return {'optedOut':True, 'conversationId':conversation_id}
                 if path=='/v1/accept':
+                    if conversation:
+                        if payload.get('conversationId', conversation['id']) != conversation['id']:
+                            raise ValueError('quote/conversation mismatch')
+                        return {'orderId':business.conversation_accept(conversation_id=conversation['id'],
+                            quote_id=payload['quoteId'],version=payload['version'],digest=payload['digest'],
+                            customer_email=request['email'],evidence_reference='customer-portal:'+identity(payload['token']))}
                     if payload['quoteId'] not in quote_ids:raise ValueError('unknown quote')
                     return {'orderId':business.accept(payload['quoteId'],customer_email=request['email'],evidence_reference='customer-portal:'+identity(payload['token']))}
-                orders=business.store.all('SELECT * FROM orders WHERE quote_id IN (SELECT id FROM quotes WHERE opportunity_id=?)',(request['opportunity_id'],))
+                visible_quote_ids = list(dict.fromkeys([*quote_ids, *[proposal['quoteId'] for proposal in conversation['proposals']]])) if conversation else quote_ids
+                orders=business.store.all('SELECT * FROM orders WHERE run_id=? AND quote_id IN ('+','.join('?' for _ in visible_quote_ids)+')', (run,*visible_quote_ids)) if visible_quote_ids else []
                 if path in {'/v1/delivery','/v1/manifest','/v1/change-request'}:
                     matches=[o for o in orders if o['id']==payload['orderId']]
                     if len(matches)!=1:raise ValueError('unknown order')
@@ -160,7 +262,7 @@ class Host:
                     for n in notices:
                         if n['entity_id']==o['id'] and n['purpose']=='payment_request':checkout=json.loads(n['body']).get('payment_url')
                     return {'orderId':o['id'],'status':o['status'],'dueAt':o['delivery_due_at'],'checkoutUrl':checkout,'deliveryAvailable':bool(business.store.one("SELECT id FROM host_notifications WHERE entity_id=? AND purpose='delivery'",(o['id'],))),**creative_portal.order_details(business,o)}
-                return {'runId':run,'opportunityId':request['opportunity_id'],'status':op['status'],'mode':self.mode,'quotes':[{'quoteId':q['id'],'service':business.store.one('SELECT service FROM opportunities WHERE id=?',(request['opportunity_id'],))['service'],'scope':json.loads(q['scope']),'priceMicros':str(q['price_micro_usd']),'expiresAt':q['expires_at'],'status':q['status']} for q in quotes],'orders':[order_public(o) for o in orders],'notifications':[{'id':n['id'],'purpose':n['purpose'],'subject':n['subject'],'body':n['body'],'at':n['created_at']} for n in notices]}
+                return {'runId':run,'opportunityId':request['opportunity_id'],'status':conversation['status'] if conversation else op['status'],'mode':self.mode,'quotes':conversation['proposals'] if conversation else [{'quoteId':q['id'],'service':business.store.one('SELECT service FROM opportunities WHERE id=?',(request['opportunity_id'],))['service'],'scope':json.loads(q['scope']),'priceMicros':str(q['price_micro_usd']),'expiresAt':q['expires_at'],'status':q['status']} for q in quotes],'orders':[order_public(o) for o in orders],'notifications':[{'id':n['id'],'purpose':n['purpose'],'subject':n['subject'],'body':n['body'],'at':n['created_at']} for n in notices],'conversation':conversation}
             if path=='/v1/step':
                 action=payload['actionId'];event=payload['eventId']
                 with business.store.transaction():

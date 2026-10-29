@@ -2,6 +2,8 @@
 
 This assembly keeps the persistent Node.js web/worker foundation and connects the separately implemented economy, tools and business modules. Each Python service gets its own virtual environment because their original packages use the same `widemind` namespace. They communicate over authenticated loopback HTTP, not by sharing/importing an agent-writable ledger.
 
+For scheduled market research, evidence-backed opportunities and private bounded product experiments, follow [discovery setup](DISCOVERY.md). This optional layer uses the same worker, tools and ledger and starts disabled. It does not expand outreach permissions or alter the central Stripe alternative.
+
 ## Local installation
 
 Requirements: Node.js 24, Python 3.12+, local persistent storage. Optional browser/code capabilities need their separately documented isolation/runtime dependencies.
@@ -29,6 +31,8 @@ npm run worker:dev
 Or launch services, web and worker together after setup/migration with `npm run dev:all`. Closing a browser never stops the worker. Configure the operator password hash as described in [FOUNDATION.md](FOUNDATION.md); it is not an internal service bearer token. Open `/operator`, resume the configured commerce run, then inspect `/operator/integrations`. `npm run services:status` checks service reachability; `npm run status` checks persistent worker observations.
 
 Customer interface: `/commerce`. Available services come from actual configured capabilities. Customers describe work, receive a private token-scoped request link, review/accept a quote, pay through the configured provider, and retrieve only their own delivery. Access tokens use URL fragments and POST bodies, not query strings or public logs. Quotes and receipts do not create money by themselves.
+
+The integrated PayPal business service also supports [natural customer conversations](CUSTOMER_CONVERSATIONS.md): budget-authorized message interpretation, durable thread context, versioned quotes, private portal acceptance and operator intervention controls. Gmail is optional and requires its dedicated account/recipient setup; the Stripe brief workflow stays separate.
 
 ## Payment provider choice
 

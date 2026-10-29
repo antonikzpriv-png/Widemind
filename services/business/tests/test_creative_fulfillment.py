@@ -497,4 +497,33 @@ class CreativeFulfillmentTests(unittest.TestCase):
         self.assertEqual(self.job(job)["state"], "payment_hold")
 
 
+    def test_existing_enhanced_scope_conversation_explains_exact_revisions_without_extra_model_spend(self):
+        job = self.complete(revisions=1)
+        order = self.business.order(job)
+        quote = self.store.one("SELECT * FROM quotes WHERE id=?", (order["quote_id"],))
+        customer = self.store.one("SELECT email FROM customers WHERE id=?", (order["customer_id"],))
+        original = deepcopy(order)
+        before = self.count("ai.generate")
+        self.business.conversation_receive(source="customer-portal", external_id="enhanced-revisions-question",
+            thread_id="synthetic-enhanced-thread", customer_email=customer["email"],
+            body="How many revisions are included?", authenticated=True, opportunity_id=quote["opportunity_id"])
+        self.drain()
+        conversation = self.business.conversation_for_opportunity(quote["opportunity_id"])
+        self.assertEqual(conversation["proposals"][0]["revisionAllowance"], 1)
+        self.assertIn("Functional verified arithmetic calculator", conversation["proposals"][0]["deliverables"][0])
+        outbound = self.store.all("SELECT body FROM conversation_messages WHERE conversation_id=? AND direction='outbound'", (conversation["id"],))
+        self.assertTrue(any("1 revisions" in row["body"] and "private delivery controls" in row["body"] for row in outbound))
+        self.assertEqual(self.count("ai.generate"), before)
+        self.assertEqual(self.business.order(job)["scope"], original["scope"])
+        self.assertEqual(self.business.order(job)["cost_micro_usd"], original["cost_micro_usd"])
+
+
+    def test_legacy_provenance_only_receipt_preserves_results_without_inventing_costs(self):
+        from widemind.business.host_clients import ToolsClient
+        result = ToolsClient.outcome({"state": "succeeded", "data": {"text": "Legacy result", "_accounting": {"charged_micro_usd": 0}},
+            "receipt": {"usage": {"sourceReferences": []}}})
+        self.assertEqual(result.state, "succeeded")
+        self.assertEqual(result.data, {"text": "Legacy result"})
+
+
 if __name__ == "__main__": unittest.main()

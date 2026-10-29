@@ -1,0 +1,23 @@
+# Creative fulfillment qualification — 2026-10-29
+
+The implementation is integrated with main `a7bfe2267ebfc732be6cba248db4c89eb4318ed7`, including discovery and authenticated customer conversations. [Setup and boundaries](CREATIVE_FULFILLMENT.md) describe the PayPal deployment, owner configuration, exact supported scopes and missing live credentials.
+
+| Executed check | Result |
+| --- | --- |
+| `npm ci` | Installed from the lockfile |
+| `npm run services:setup -- --with-tests --with-graphics` | Three isolated service environments installed |
+| `npm run check` | Formatting, typecheck, 247 application tests, production build passed |
+| `PYTHONPATH=services/business .venvs/business/bin/python -m unittest discover -s services/business/tests -q` | 230 tests passed |
+| `PYTHONPATH=services/tools/src WIDEMIND_CREATIVE_IMAGE=<approved-image-id> .venvs/tools/bin/python -m pytest services/tools/tests -q` | 475 tests and 81 subtests passed; 9 unrelated opt-in checks skipped |
+| `npm run creative:browser` | Chromium portal/security/mobile checks passed |
+| `WIDEMIND_CREATIVE_IMAGE=<approved-image-id> npm run creative:integration` | Real three-service/worker/SQLite/rendering/Docker/browser flow passed |
+
+The locally built immutable sandbox was `sha256:507c2d0004af5dbd7ff5a5146a9bf21ed4449934ac5653dd8e37b04f4f28860b`. It contains Python and Node; runtime execution never pulls an image or uses host JavaScript. The complete tools suite exercised the enhanced calculator through the real networkless Docker adapter, including a correct formula and a rejected incorrect formula. Provision and review your own image; this local ID is evidence, not a registry reference.
+
+The complete integration uses **explicit local PayPal and model HTTP fixtures**. Other components are real: authenticated service calls, native AI adapter usage receipts, authoritative reservations, persistent worker scheduling, SQLite journals, actual SVG/PNG renderers, isolated generated-JavaScript execution, publication, private downloads and browser previews. It generated four bounded model replies, captured two fixture checkouts despite duplicate approvals, restarted the worker after process death, delivered two graphic versions, and rejected then repaired an incorrect calculator formula. Original manifests stayed immutable, downloaded bytes matched hashes, scope/budget stayed fixed, ownership checks rejected another token, public data stayed redacted, and viewing/waiting made no model calls. Costs remained provisional. None of this claims a live customer, payment, provider invoice, deployed service or profit.
+
+[Integration evidence](evidence/creative-fulfillment-20261029/integration.json), [portal evidence](evidence/creative-fulfillment-20261029/portal.json), and [actual phone preview](evidence/creative-fulfillment-20261029/calculator-phone.png) are synthetic development records. The browser checked the delivered calculator's initial result, live recalculation, invalid-input error, reset, keyboard focus and phone layout through CDP, while preserving its opaque frame origin. A separate hostile fixture proved parent DOM, cookies and network requests were blocked; no page errors occurred. SVG/PNG [examples and visual checks](../services/tools/examples/creative-graphics/) and [calculator source, instructions and manifest](../examples/creative/software/project-estimator/) are included.
+
+Recovery regressions cover interrupted publication on both sides of the legacy order transition, immutable artifact insertion, atomic completion/expiry scheduling, lost cancellation responses followed by reconciliation, consumed terminal effects awaiting stage updates, concurrent revision/expiry and conflicting scope-change IDs. Tests also cover exhausted generation/repair budgets, pause, malformed/unsupported designs, uncertain effects, prior saved records/templates, exact revision limits and payment loss. Future revision deadlines cannot prevent free background payment observation; a later funded order needs no website visit to resume.
+
+Initial limits remain explicit: graphics use safe primitives and printable ASCII required text; subjective design requirements require customer review. Software supports arithmetic calculators, not arbitrary applications, and uses JavaScript numeric precision. Enhanced scopes use the detailed form; existing enhanced sales questions explain frozen terms without paid interpretation, while explicit change controls authorize work. Live operation still requires dedicated approved model/PayPal credentials, truthful tariffs, funds, permitted network access and HTTPS.

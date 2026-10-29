@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "synthetic": true,
+  "providerCalls": false,
+  "previewOpaqueOrigin": true,
+  "parentAccessBlocked": true,
+  "cookiesBlocked": true,
+  "networkBlocked": true,
+  "calculatorResult": "75",
+  "sourceDownload": true,
+  "revisionRequest": true,
+  "typedCalculatorScope": true,
+  "graphicScope": true,
+  "mobileWidths": [
+    390,
+    320
+  ],
+  "pageErrors": []
+}

@@ -191,6 +191,7 @@ try {
       "input[name=email]",
       "controlled-customer@example.invalid",
     );
+    await browser.click("#commerce-request details > summary");
     await browser.evaluate(
       "document.querySelector('select[name=service]').value='svg-graphic'",
     );
@@ -236,7 +237,7 @@ try {
     await browser.click("#customer-open button");
     await browser.waitFor(() =>
       browser.evaluate(
-        "!!Array.from(document.querySelectorAll('#customer-content button')).find(el=>el.textContent==='Accept this quote')",
+        "!!Array.from(document.querySelectorAll('#customer-content button')).find(el=>el.textContent.startsWith('Accept this exact quote'))",
       ),
     );
     await browser.click("#customer-content button");

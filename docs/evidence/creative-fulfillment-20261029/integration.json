@@ -1,0 +1,43 @@
+{
+  "passed": true,
+  "fixtureBoundaries": [
+    "PayPal HTTP protocol",
+    "model Responses HTTP"
+  ],
+  "realComponents": [
+    "persistent Node worker",
+    "three authenticated services",
+    "native AI adapter usage receipts",
+    "SQLite stage recovery",
+    "GraphicsAdapter SVG/PNG renderers",
+    "networkless Docker generated-JS execution",
+    "private artifact manifests/downloads",
+    "opaque-origin preview"
+  ],
+  "providerStats": {
+    "orders": 2,
+    "captured": 2,
+    "refunds": 0
+  },
+  "modelCalls": 4,
+  "graphicVersions": 2,
+  "calculatorRepairAttempts": 2,
+  "manifestHashesVerified": true,
+  "privateOwnershipVerified": true,
+  "publicProjectionRedacted": true,
+  "revisionScopeAndBudgetFrozen": true,
+  "workerRestart": true,
+  "idleModelCalls": 0,
+  "provisionalUsagePreserved": true,
+  "calculatorBrowserChecks": [
+    "initial calculation",
+    "live recalculation",
+    "invalid input",
+    "reset",
+    "keyboard focus",
+    "phone layout"
+  ],
+  "codeImage": "sha256:507c2d0004af5dbd7ff5a5146a9bf21ed4449934ac5653dd8e37b04f4f28860b",
+  "pageErrors": [],
+  "reservationCount": 52
+}

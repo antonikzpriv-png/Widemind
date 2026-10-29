@@ -25,17 +25,26 @@ function updateCreativeFields() {
   const form = $("#commerce-request");
   if (!form) return;
   const service = form.elements.service.value;
-  form.elements.description.maxLength = [
+  const enhanced = [
     "custom-graphic",
     "interactive-calculator",
-  ].includes(service)
-    ? 2000
-    : 4000;
+  ].includes(service);
+  if (form.elements.description)
+    form.elements.description.maxLength = enhanced ? 2000 : 4000;
+  if (form.elements.message) form.elements.message.disabled = enhanced;
+  const hint = $("#enhanced-conversation-hint");
+  if (hint) hint.hidden = !enhanced;
+  const submit = form.querySelector?.('button[type="submit"]');
+  if (submit)
+    submit.textContent = enhanced
+      ? "Request a scoped quote"
+      : "Start a private conversation";
   for (const [id, enabled] of [
     ["graphic-details", service === "custom-graphic"],
     ["calculator-details", service === "interactive-calculator"],
   ]) {
     const group = $("#" + id);
+    if (!group) continue;
     group.hidden = !enabled;
     for (const field of group.querySelectorAll("input,textarea,select"))
       field.disabled = !enabled;
@@ -302,7 +311,7 @@ function privateDownload(card, label, body, status) {
   button.onclick = async () => {
     button.disabled = true;
     try {
-      const artifact = await api("/api/modules/business/delivery", body);
+      const artifact = await customerApi("/api/modules/business/delivery", body);
       downloadBytes(
         artifact.content,
         artifact.encoding,
@@ -334,7 +343,11 @@ function previewControl(card, body, status) {
   form.method = "POST";
   form.action = "/api/modules/business/preview";
   form.target = frame.name;
-  for (const [name, value] of Object.entries(body)) {
+  const runId = privateRun();
+  for (const [name, value] of Object.entries({
+    ...body,
+    ...(runId ? { runId } : {}),
+  })) {
     if (value === undefined) continue;
     const field = node("input");
     field.type = "hidden";
@@ -405,7 +418,7 @@ function appendArtifactVersions(card, order, token, status) {
     manifest.type = "button";
     manifest.onclick = async () => {
       try {
-        const value = await api("/api/modules/business/manifest", {
+        const value = await customerApi("/api/modules/business/manifest", {
           token,
           orderId: order.orderId,
           version: version.version,
@@ -513,7 +526,7 @@ function appendChangeRequest(card, order, token, status) {
         pendingId = randomId();
         pendingFingerprint = fingerprint;
       }
-      const result = await api("/api/modules/business/change-request", {
+      const result = await customerApi("/api/modules/business/change-request", {
         token,
         orderId: order.orderId,
         requestId: pendingId,
@@ -523,8 +536,10 @@ function appendChangeRequest(card, order, token, status) {
       });
       if (result.customerToken) {
         const link = node("a", "Open your new scope request");
-        link.href =
-          "/commerce#customer=" + encodeURIComponent(result.customerToken);
+        const fragment = new URLSearchParams({ customer: result.customerToken });
+        const runId = result.runId || privateRun();
+        if (runId) fragment.set("runId", runId);
+        link.href = "/commerce#" + fragment.toString();
         link.target = "_blank";
         link.rel = "noopener noreferrer";
         resultText.replaceChildren(

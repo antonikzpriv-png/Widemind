@@ -7,6 +7,8 @@ This extends [the integrated PayPal services](INTEGRATED_SETUP.md); it does not 
 | `custom-graphic` | Customer-specific SVG original and full-resolution PNG preview/download | `ai.generate`, `creative.graphics`, `files`, enabled native `graphics`, Pillow |
 | `interactive-calculator` | Functional self-contained calculator, JS/CSS source, instructions and frozen acceptance scope | `ai.generate`, `creative.software`, `files`, enabled `code.execute`, reviewed local Python+Node Docker image |
 
+Enhanced quotes use the detailed scope form. For an existing enhanced request, sales messages can explain the frozen quote without paid interpretation; work changes use the explicit revision/scope-change controls. The initial free-text sales interpreter does not construct graphics layouts or nested calculator acceptance scopes.
+
 The existing `svg-graphic` and `software-starter` remain labeled **fixed templates**. Enhanced offerings stay unavailable without real dependencies and an operator-approved price. Existing run policies are not silently expanded.
 
 ## Scope and verification
@@ -25,7 +27,7 @@ Unused repair caps release after verification. Future revision caps stay reserve
 
 Paid model tariffs remain **provisional** until authoritative invoice reconciliation. Manifests retain creation-time cost observations. Per-job accounting aggregates actual/provisional authoritative stage reservations and keeps costs nonfinal while future/unresolved liabilities remain; no model assertion finalizes a bill or credits funds.
 
-Migration `008_creative_fulfillment.sql` adds private creative jobs/stages, artifact versions and idempotent change requests. Old saved orders/templates remain readable. Each published version has a version-1 manifest with frozen scope/hash, file hashes/sizes, checks, creation costs, budget, feedback and previous-manifest hashes. Original versions remain downloadable; crash recovery reuses exact persisted versions/timestamps. Customer access requires the original scoped capability and a committed private publication.
+Migration `011_creative_fulfillment.sql` adds private creative jobs/stages, artifact versions and idempotent change requests. Old saved orders/templates remain readable. Each published version has a version-1 manifest with frozen scope/hash, file hashes/sizes, checks, creation costs, budget, feedback and previous-manifest hashes. Original versions remain downloadable; crash recovery reuses exact persisted versions/timestamps. Customer access requires the original scoped capability and a committed private publication.
 
 Previews use token-authorized POST documents inside an iframe with only `sandbox="allow-scripts"`. Response CSP also forces an opaque origin and blocks network/forms/navigation/parent access. Operator cookies and secrets remain outside the generated page. See [portal UI and access controls](CREATIVE_PORTAL.md).
 
@@ -57,3 +59,5 @@ WIDEMIND_CREATIVE_IMAGE=sha256:<local-image-id> npm run creative:integration
 The full integration runs actual authenticated services, persistent worker, SQLite, native AI usage accounting, graphics renderers, private publication and real networkless Docker JS execution. **PayPal and model HTTP responses are explicitly local protocol fixtures**. Checks include duplicate approvals, restart, actual downloads, immutable revision manifests, an intentionally incorrect calculator formula followed by one funded repair, idle behavior, ownership and browser previews. Synthetic outputs/reports go to ignored `var/creative-integration/`; they are not live customers, payments or profit.
 
 Examples: [graphics source/originals](../services/tools/examples/creative-graphics/) and [calculator source](../examples/creative/software/project-estimator/). Further tests cover exhaustion, pause/cancellation, malformed designs, uncertain effects, old records, revision bounds and expiry. Live operation requires dedicated credentials/accounts, funding, permitted provider access and HTTPS; no such live qualification is claimed.
+
+[Executed qualification and synthetic evidence](CREATIVE_VALIDATION_20261029.md) record the combined test results, restart/concurrency checks and actual browser artifacts.
