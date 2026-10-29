@@ -21,7 +21,9 @@ def financial_summary(business):
     result.update({"spendable_micro_usd": None, "posted_micro_usd": None, "reserved_micro_usd": None,
                    "holds_micro_usd": None, "currency": "USD", "mode": business.mode,
                    "source": "cached_order_snapshots", "costs_final": False})
-    rows = business.store.all("SELECT payment FROM orders WHERE run_id=?", (business.run_id,))
+    balance = getattr(business.economy, "balance", None)
+    rows = [] if callable(balance) or business.mode == "live" or getattr(business, "uses_fixtures", True) is False else business.store.all(
+        "SELECT payment FROM orders WHERE run_id=?", (business.run_id,))
     snapshots = [json.loads(row["payment"]) for row in rows if row["payment"] != "{}"]
     for snapshot in snapshots:
         for key in keys:
@@ -29,7 +31,6 @@ def financial_summary(business):
             if type(value) is int and value >= 0:
                 result[key] += value
     result["costs_final"] = bool(snapshots) and all(s.get("costs_final") is True for s in snapshots)
-    balance = getattr(business.economy, "balance", None)
     if callable(balance):
         try:
             current = balance(run_id=business.run_id)
@@ -74,27 +75,91 @@ def integration_status(business):
              "detail": "Scripted payment fixtures" if business.mode != "live" else "Injected accounting service; inspect qualification separately"}]
 
 
-def console_view(business):
+def console_view(business, *, collection=None, offset=0):
+    # One WAL read snapshot keeps record pages and run-wide counts consistent
+    # while the independent worker commits new states. It does not reserve spend
+    # or take a business write lock while reading separate control-plane services.
+    owns_snapshot = not business.store.db.in_transaction
+    if owns_snapshot:
+        business.store.db.execute("BEGIN")
+    try:
+        result = _console_view(business, collection=collection, offset=offset)
+        if owns_snapshot:
+            business.store.db.execute("COMMIT")
+        return result
+    except BaseException:
+        if owns_snapshot:
+            business.store.db.execute("ROLLBACK")
+        raise
+
+
+def _console_view(business, *, collection=None, offset=0):
+    collections = {"opportunities", "orders", "effects", "events"}
+    if collection is not None and collection not in collections:
+        raise ValueError("unsupported console collection")
+    if type(offset) is not int or not 0 <= offset <= 10**9 or collection is None and offset:
+        raise ValueError("invalid console page")
+    limit = 500
+    page_offset = lambda key: offset if key == collection else 0
+    run = business.run_id
+    totals = {key: business.store.one("SELECT COUNT(*) AS n FROM " + key + " WHERE run_id=?", (run,))["n"] for key in collections}
     opportunities = [_decode(row, ("scope", "assessment")) for row in business.store.all(
-        "SELECT * FROM opportunities WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 500", (business.run_id,))]
-    quotes = [_decode(row, ("scope", "plan")) for row in business.store.all(
-        "SELECT q.* FROM quotes q JOIN opportunities o ON o.id=q.opportunity_id WHERE o.run_id=? ORDER BY q.expires_at DESC LIMIT 500", (business.run_id,))]
+        """SELECT * FROM opportunities WHERE run_id=? ORDER BY
+        CASE WHEN status IN ('completed','expired','rejected') THEN 1 ELSE 0 END,created_at DESC,id DESC LIMIT ? OFFSET ?""",
+        (run, limit, page_offset("opportunities")))]
+    quotes = []
+    if opportunities:
+        ids = [row["id"] for row in opportunities]
+        quotes = [_decode(row, ("scope", "plan")) for row in business.store.all(
+            "SELECT * FROM quotes WHERE opportunity_id IN (" + ",".join("?" for _ in ids) + ")", ids)]
     orders = []
-    for row in business.store.all("SELECT id FROM orders WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 500", (business.run_id,)):
+    for row in business.store.all("""SELECT id FROM orders WHERE run_id=? ORDER BY
+        CASE WHEN status IN ('completed','cancelled','failed') THEN 1 ELSE 0 END,created_at DESC,id DESC LIMIT ? OFFSET ?""",
+        (run, limit, page_offset("orders"))):
         order = business.order(row["id"])
         order.pop("artifact", None)
         orders.append(_decode(order, ("scope", "plan", "payment")))
-    return {"schema_version": 1, "mode": business.mode, "run_id": business.run_id,
+    customer_ids = sorted({row["customer_id"] for row in (*opportunities, *orders) if row.get("customer_id")})
+    customers = []
+    for start in range(0, len(customer_ids), 400):
+        batch = customer_ids[start:start+400]
+        customers.extend(business.store.all("SELECT id,email,opted_out,created_at FROM customers WHERE run_id=? AND id IN (" +
+                                            ",".join("?" for _ in batch) + ")", (run, *batch)))
+    effects = business.store.all("""SELECT e.id,e.job_id,e.provider,e.action,e.state,e.attempt,e.reason,
+        CASE WHEN e.state IN ('unknown','running','planned','failed') AND NOT EXISTS
+        (SELECT 1 FROM effects newer WHERE newer.logical_id=e.logical_id AND newer.attempt>e.attempt)
+        THEN 1 ELSE 0 END AS active_issue
+        FROM effects e WHERE run_id=? ORDER BY active_issue DESC,created_at DESC,id DESC LIMIT ? OFFSET ?""",
+        (run, limit, page_offset("effects")))
+    for effect in effects:
+        effect["active_issue"] = bool(effect["active_issue"])
+    events = business.store.all("""SELECT id,kind,state,due_at,error FROM events WHERE run_id=? ORDER BY
+        CASE WHEN state IN ('blocked','running','queued','failed') THEN 0 ELSE 1 END,due_at DESC,id DESC LIMIT ? OFFSET ?""",
+        (run, limit, page_offset("events")))
+    open_expression = """status NOT IN ('completed','delivered','cancelled','failed') AND
+        (delivery_due_at IS NOT NULL OR COALESCE(json_extract(payment,'$.receipts_micro_usd'),0) > COALESCE(json_extract(payment,'$.refunds_micro_usd'),0))"""
+    counts = {"opportunities": totals["opportunities"], "orders": totals["orders"],
+        "open_commitments": business.store.one("SELECT COUNT(*) AS n FROM orders WHERE run_id=? AND " + open_expression, (run,))["n"],
+        "unresolved_effects": business.store.one("""SELECT COUNT(*) AS n FROM effects e WHERE run_id=?
+            AND state IN ('unknown','running','planned','failed') AND NOT EXISTS
+            (SELECT 1 FROM effects newer WHERE newer.logical_id=e.logical_id AND newer.attempt>e.attempt)""", (run,))["n"],
+        "blocked_events": business.store.one("SELECT COUNT(*) AS n FROM events WHERE run_id=? AND state IN ('blocked','failed')", (run,))["n"]}
+    for key, states in (("completed_orders", ("completed",)), ("awaiting_payment", ("accepted", "awaiting_payment")),
+                        ("in_fulfillment", ("funded", "ready", "delivered", "payment_hold"))):
+        counts[key] = business.store.one("SELECT COUNT(*) AS n FROM orders WHERE run_id=? AND status IN (" +
+                                        ",".join("?" for _ in states) + ")", (run, *states))["n"]
+    pages = {"opportunities": opportunities, "orders": orders, "effects": effects, "events": events}
+    pagination = {key: {"offset": page_offset(key), "limit": limit, "total": totals[key],
+                        "has_more": page_offset(key) + len(rows) < totals[key], "has_previous": page_offset(key) > 0}
+                  for key, rows in pages.items()}
+    return {"schema_version": 1, "mode": business.mode, "run_id": run,
             "execution_profile": getattr(business, "execution_profile", business.mode),
             "uses_fixtures": getattr(business, "uses_fixtures", business.mode != "live"),
-            "runtime_state": business.runtime.state(business.run_id),
+            "runtime_state": business.runtime.state(run),
             "controls_available": callable(getattr(business.runtime, "change_state", None)),
-            "policy": business.policy.document(), "summary": financial_summary(business),
-            "opportunities": opportunities, "quotes": quotes, "orders": orders,
-            "customers": business.store.all("SELECT id,email,opted_out,created_at FROM customers WHERE run_id=? ORDER BY created_at DESC LIMIT 500", (business.run_id,)),
-            "effects": business.store.all("SELECT id,job_id,provider,action,state,attempt,reason FROM effects WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 500", (business.run_id,)),
-            "events": business.store.all("SELECT id,kind,state,due_at,error FROM events WHERE run_id=? ORDER BY due_at DESC LIMIT 500", (business.run_id,)),
-            "integrations": integration_status(business), "memories": business.recall()}
+            "policy": business.policy.document(), "summary": financial_summary(business), "counts": counts, "pagination": pagination,
+            "opportunities": opportunities, "quotes": quotes, "orders": orders, "customers": customers,
+            "effects": effects, "events": events, "integrations": integration_status(business), "memories": business.recall()}
 
 
 def public_view(business, contact_email=None):

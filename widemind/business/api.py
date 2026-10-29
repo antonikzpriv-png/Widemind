@@ -3,6 +3,7 @@ import hmac
 import json
 import re
 from importlib.resources import files
+from urllib.parse import parse_qs
 from .store import encode
 from .policy import Policy
 from .views import console_view, public_view
@@ -10,8 +11,8 @@ from .views import console_view, public_view
 
 class API:
     def __init__(self, factory, *, operator_token, contact_email=None):
-        if not isinstance(operator_token, str) or len(operator_token) < 32:
-            raise ValueError("a separate operator bearer token of at least 32 characters is required")
+        if not isinstance(operator_token, str) or len(operator_token) < 32 or not operator_token.isascii() or not operator_token.isprintable() or any(ch.isspace() for ch in operator_token):
+            raise ValueError("an operator token needs at least 32 printable ASCII characters without whitespace")
         self.factory, self.token = factory, operator_token
         self.contact_email = contact_email
 
@@ -27,7 +28,7 @@ class API:
                 return self._webhook(environ, start_response)
             if not public:
                 supplied = environ.get("HTTP_AUTHORIZATION", "")
-                if not hmac.compare_digest(supplied, f"Bearer {self.token}"):
+                if not isinstance(supplied, str) or not supplied.isascii() or not hmac.compare_digest(supplied, f"Bearer {self.token}"):
                     return self._respond(start_response, "401 Unauthorized", {"error": "authentication required"})
             if method not in {"GET", "POST"}:
                 return self._respond(start_response, "405 Method Not Allowed", {"error": "unsupported method"})
@@ -50,7 +51,13 @@ class API:
             elif public:
                 document = {"events": business.public_activity(), "mode": business.mode}
             elif method == "GET" and path == "/api/v1/console":
-                document = console_view(business)
+                query = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+                if set(query) - {"collection", "offset"} or any(len(values) != 1 for values in query.values()):
+                    raise ValueError("invalid console query")
+                offset = query.get("offset", ["0"])[0]
+                if not re.fullmatch(r"[0-9]{1,10}", offset):
+                    raise ValueError("invalid console offset")
+                document = console_view(business, collection=query.get("collection", [None])[0], offset=int(offset))
             elif method == "POST" and path == "/api/v1/runtime":
                 document = business.control_runtime(**payload)
             elif method == "GET" and path == "/api/v1/memory":

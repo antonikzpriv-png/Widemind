@@ -288,7 +288,7 @@ function financesView(view) {
 }
 function recoveryView(view) {
   view.append(heading(...labels.recovery));
-  const effects = list(state.data.effects).filter(effect => ['unknown', 'running', 'failed', 'planned'].includes(effect.state));
+  const effects = list(state.data.effects).filter(effect => effect.active_issue !== false && ['unknown', 'running', 'failed', 'planned'].includes(effect.state));
   const effectsContainer = node('div');
   effectsContainer.append(node('h2', { class: 'subheading', text: 'External effects that need attention' }));
   for (const effect of effects) {

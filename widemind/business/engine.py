@@ -250,7 +250,7 @@ class Business:
             if existing["state"] == "planned":
                 if reconciliation or (not control and not self._active()):
                     raise Deferred("runtime does not permit retry")
-                claimed = self.store.db.execute("UPDATE effects SET state='running' WHERE id=? AND state='planned'", (action_id,))
+                claimed = self.store.db.execute("UPDATE effects SET state='running',started_at=? WHERE id=? AND state='planned'", (self.clock(), action_id))
                 if claimed.rowcount != 1:
                     raise Deferred("effect claimed by another worker")
                 existing = {**existing, "state": "running"}
@@ -267,9 +267,9 @@ class Business:
             if reconciliation or (not control and not self._active()):
                 raise Deferred("runtime does not permit new work")
             self.store.db.execute("""INSERT INTO effects
-                (id,run_id,job_id,provider,action,request,state,created_at,logical_id,attempt)
-                VALUES (?,?,?,?,?,?,'running',?,?,0)""",
-                (action_id, self.run_id, entity, provider, action, request, self.clock(), logical_id))
+                (id,run_id,job_id,provider,action,request,state,created_at,logical_id,attempt,started_at)
+                VALUES (?,?,?,?,?,?,'running',?,?,0,?)""",
+                (action_id, self.run_id, entity, provider, action, request, self.clock(), logical_id, self.clock()))
             try:
                 # The gateway MUST recheck runtime cancellation/capabilities as well.
                 outcome = invoke(action_id)
@@ -452,7 +452,7 @@ class Business:
             if latest and (snapshot["revision"] < latest["revision"] or
                            snapshot["revision"] == latest["revision"] and snapshot != latest):
                 raise Deferred("concurrent newer economy snapshot")
-            self.store.db.execute("UPDATE orders SET payment=? WHERE id=?", (encode(snapshot), order["id"]))
+            self.store.db.execute("UPDATE orders SET payment=?,payment_observed_at=? WHERE id=?", (encode(snapshot), self.clock(), order["id"]))
         return snapshot
 
     def _paid(self, order, snapshot):
@@ -557,7 +557,10 @@ class Business:
                     maximum_micro_usd=order["cost_micro_usd"]))
             reservation_id = text(reservation.get("reservation_id"), "reservation_id", 300)
             quote = self.store.one("SELECT turnaround_seconds FROM quotes WHERE id=?", (order["quote_id"],))
-            due = order["delivery_due_at"] or self.clock() + quote["turnaround_seconds"]
+            reserve_effect = self.store.one("SELECT started_at,created_at FROM effects WHERE logical_id=? ORDER BY attempt DESC LIMIT 1",
+                (identity(self.run_id, order_id, f"reserve:{order['funding_round']}"),))
+            funding_started = reserve_effect["started_at"] if reserve_effect["started_at"] is not None else reserve_effect["created_at"]
+            due = order["delivery_due_at"] or funding_started + quote["turnaround_seconds"]
             self._status(order, "funded", reservation_id=reservation_id, delivery_due_at=due)
         elif order["status"] == "funded":
             service = self.services.get(order["service"])
@@ -770,6 +773,12 @@ class Business:
             state = "delivery_confirmation_overdue"
         self.store.memory(self.run_id, order_id, "deadline", {"state": state, "due_at": order["delivery_due_at"]}, now, order["customer_id"])
 
+    def _wake_owner(self, entity, revision):
+        if self.store.one("SELECT id FROM orders WHERE id=? AND run_id=?", (entity, self.run_id)):
+            self._enqueue("advance", entity, revision)
+        elif self.store.one("SELECT id FROM opportunities WHERE id=? AND run_id=?", (entity, self.run_id)):
+            self._enqueue("offer", entity, revision)
+
     def retry_effect(self, action_id, *, evidence_reference):
         """Operator/provider-triggered retry only after a confirmed terminal failure."""
         text(evidence_reference, "retry evidence", 1000)
@@ -789,6 +798,7 @@ class Business:
               (next_id, self.run_id, previous["job_id"], previous["provider"], previous["action"], previous["request"],
                self.clock(), previous["logical_id"], previous["attempt"] + 1))
             self.store.memory(self.run_id, next_id, "retry_authorization", {"evidence": evidence_reference}, self.clock())
+            self._wake_owner(previous["job_id"], "retry:" + next_id)
             return next_id
 
     def _reconcile(self, action_id):
@@ -809,14 +819,17 @@ class Business:
         result = self._write_effect(action_id, result, effect)
         if result.state != "unknown":
             self.store.memory(self.run_id, action_id, "reconciliation", {"state": result.state}, self.clock())
+        if result.state == "succeeded":
+            self._wake_owner(effect["job_id"], "reconciled:" + identity(action_id, result.data))
 
     def order(self, order_id):
         order = self.store.one("SELECT * FROM orders WHERE id=? AND run_id=?", (order_id, self.run_id))
         if not order:
             raise ValueError("unknown order")
         payment = json.loads(order["payment"])
+        order["payment_source"] = "cached_order_snapshot"
         order["unrefunded_receipts_micro_usd"] = max(0, payment.get("receipts_micro_usd", 0) - payment.get("refunds_micro_usd", 0))
-        order["delivery_obligation_open"] = (order["status"] not in {"completed", "cancelled", "failed"} and
+        order["delivery_obligation_open"] = (order["status"] not in {"completed", "delivered", "cancelled", "failed"} and
             (order["delivery_due_at"] is not None or order["unrefunded_receipts_micro_usd"] > 0))
         return order
 

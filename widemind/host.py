@@ -105,8 +105,9 @@ def load_config(environ=None):
     run_id = values["WIDEMIND_RUN_ID"].strip()
     if len(run_id) > 200 or any(ord(c) < 32 or ord(c) == 127 for c in run_id):
         raise ConfigurationError("WIDEMIND_RUN_ID is invalid")
-    if len(values["WIDEMIND_OPERATOR_TOKEN"]) < 32:
-        raise ConfigurationError("WIDEMIND_OPERATOR_TOKEN requires at least 32 characters")
+    token = values["WIDEMIND_OPERATOR_TOKEN"]
+    if len(token) < 32 or not token.isascii() or not token.isprintable() or any(ch.isspace() for ch in token):
+        raise ConfigurationError("WIDEMIND_OPERATOR_TOKEN requires at least 32 printable ASCII characters without whitespace")
     business = _path(values, "WIDEMIND_BUSINESS_DB")
     runtime = _path(values, "WIDEMIND_RUNTIME_DB")
     economy = _path(values, "WIDEMIND_ECONOMY_DB")
