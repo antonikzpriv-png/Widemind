@@ -427,7 +427,7 @@ class BusinessTests(unittest.TestCase):
             store.close()
             return count
         with ThreadPoolExecutor(max_workers=2) as pool:
-            self.assertEqual(list(pool.map(initialize, range(2))), [6, 6])
+            self.assertEqual(list(pool.map(initialize, range(2))), [7, 7])
         with worker_lock(path):
             with self.assertRaises(OSError):
                 with worker_lock(path):

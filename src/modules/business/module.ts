@@ -17,6 +17,7 @@ interface Work {
 interface Step {
   kind: "completed" | "unknown";
   processed?: boolean;
+  eventState?: string;
   reason?: string;
 }
 const record = (value: Json): Record<string, Json> => {
@@ -44,6 +45,7 @@ function receipt(action: ToolAction, step: Step): ToolReceipt {
     status: "succeeded",
     result: {
       processed: step.processed === true,
+      eventState: step.eventState ?? "unknown",
       transport: "private-business-portal",
     },
     usage: {
@@ -70,23 +72,52 @@ async function start(reservation: Reservation) {
     )
   )
     throw new Error("Invalid economy service origin");
-  const response = await fetch(
-    new URL(
-      `/v1/reservations/${identifier(reservation.reservationId)}/start`,
-      url,
-    ),
-    {
+  const endpoint = new URL(
+    `/v1/reservations/${identifier(reservation.reservationId)}`,
+    url,
+  );
+  const headers = {
+    Authorization: `Bearer ${secret}`,
+    "Content-Type": "application/json",
+  };
+  const observed = await fetch(endpoint, {
+    headers,
+    redirect: "error",
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!observed.ok) throw new Error("Reservation unavailable");
+  const row = (await observed.json()) as {
+    run_id: string;
+    action_id: string;
+    provider: string;
+    account: string;
+    amount_micro_usd: number;
+    state: string;
+    limits: Record<string, number>;
+  };
+  if (
+    row.run_id !== reservation.runId ||
+    row.action_id !== reservation.actionId ||
+    row.provider !== "business.step" ||
+    row.account !== (process.env.WIDEMIND_TOOLS_ACCOUNT ?? "dedicated-tools") ||
+    row.amount_micro_usd !== 0 ||
+    row.limits.max_duration_ms !== reservation.limit.maxDurationMs ||
+    row.limits.max_storage_bytes !== reservation.limit.maxOutputBytes
+  )
+    throw new Error("Business reservation binding mismatch");
+  if (row.state === "reserved") {
+    const response = await fetch(new URL(endpoint.pathname + "/start", url), {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${secret}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: "{}",
       redirect: "error",
       signal: AbortSignal.timeout(15000),
-    },
-  );
-  if (!response.ok) throw new Error("Business step dispatch not authorized");
+    });
+    if (!response.ok) throw new Error("Business dispatch unavailable");
+  } else if (!["running", "unknown"].includes(row.state))
+    throw new Error("Reservation closed");
+  // A repeated same-action dispatch is fenced by the bridge's transactionally
+  // unique invocation, never by assuming an absent network response was free.
 }
 export const definition: ModuleDefinition = {
   id: "business",

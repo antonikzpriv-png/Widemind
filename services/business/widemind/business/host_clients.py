@@ -82,7 +82,11 @@ class EconomyClient:
         self.store,self.mode=store,mode
         self.http=HTTP(env.get('WIDEMIND_ECONOMY_URL','http://127.0.0.1:8080'),env.get('WIDEMIND_ECONOMY_OPERATOR_TOKEN',''))
         self.account=env.get('WIDEMIND_TOOLS_ACCOUNT','dedicated-tools')
+    def check_mode(self,run_id):
+        observed=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/balance')
+        if observed.get('run_id')!=run_id or observed.get('mode')!=self.mode:raise Unavailable('economy run mode differs from business configuration')
     def reserve(self,*,run_id,job_id,action_id,maximum_micro_usd):
+        self.check_mode(run_id)
         order=self.store.one('SELECT plan FROM orders WHERE id=? AND run_id=?',(job_id,run_id))
         if not order: return Outcome('failed',reason='frozen order plan unavailable')
         plan=json.loads(order['plan'])
@@ -92,6 +96,7 @@ class EconomyClient:
         return Outcome('succeeded',{'reservation_id':result['reservation_id']})
     def payment_link(self,*,run_id,job_id,action_id,amount_micro_usd,currency):
         if currency!='USD':return Outcome('failed',reason='unsupported currency')
+        self.check_mode(run_id)
         result=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/checkout',{'request_id':action_id,'job_id':job_id,'amount_micro_usd':amount_micro_usd,'description':'WideMind scoped order'})
         if not result.get('url'):return Outcome('unknown',reason='checkout requires recovery')
         return Outcome('succeeded',{'url':result['url'],'payment_id':result['payment_id']})
@@ -100,7 +105,7 @@ class EconomyClient:
         matches=[item for item in payments if item.get('job_id')==job_id]
         if len(matches)>1: raise Unavailable('multiple payment mappings require operator review')
         if not matches:
-            document={'run_id':run_id,'job_id':job_id,'status':'pending','currency':'USD','mode':self.mode,'receipts_micro_usd':0,'refunds_micro_usd':0,'fees_micro_usd':0,'earned_micro_usd':0,'operating_cost_micro_usd':0,'costs_final':True}
+            document={'run_id':run_id,'job_id':job_id,'status':'pending','currency':'USD','mode':self.mode,'receipts_micro_usd':0,'refunds_micro_usd':0,'fees_micro_usd':0,'earned_micro_usd':0,'operating_cost_micro_usd':0,'costs_final':True,'_provider_revision':0}
         else:
             payment=matches[0]
             order=self.store.one('SELECT reservation_id FROM orders WHERE id=? AND run_id=?',(job_id,run_id))
@@ -108,13 +113,15 @@ class EconomyClient:
             snapshot=self.http.request(f'/v1/payments/{quote(payment["payment_id"],safe="")}/snapshot'+suffix)
             if snapshot.get('run_id')!=run_id or snapshot.get('job_id')!=job_id or snapshot.get('mode')!=self.mode:raise Unavailable('payment snapshot identity mismatch')
             document={key:snapshot[key] for key in ('run_id','job_id','status','currency','mode','receipts_micro_usd','refunds_micro_usd','fees_micro_usd','earned_micro_usd','operating_cost_micro_usd','costs_final')}
+            document['_provider_revision']=snapshot['revision']
             document['status']={'partially_refunded':'partial','failed':'pending'}.get(document['status'],document['status'])
         digest=hashlib.sha256(encode(document).encode()).hexdigest()
         with self.store.transaction():
             previous=self.store.one('SELECT * FROM host_payment_snapshots WHERE job_id=?',(job_id,))
+            if previous and json.loads(previous['document']).get('_provider_revision',0)>document['_provider_revision']:raise Unavailable('stale provider snapshot cannot overwrite newer financial observation')
             revision=(previous['revision']+(previous['digest']!=digest)) if previous else 1
             self.store.db.execute('INSERT INTO host_payment_snapshots VALUES (?,?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET revision=excluded.revision,digest=excluded.digest,document=excluded.document',(job_id,run_id,revision,digest,encode(document)))
-        return {**document,'revision':revision}
+        return {**{key:value for key,value in document.items() if not key.startswith('_')},'revision':revision}
     def record_fulfillment(self,*,run_id,job_id,action_id,delivery_reference):
         order=self.store.one('SELECT * FROM orders WHERE id=? AND run_id=?',(job_id,run_id))
         notification=self.store.one('SELECT id FROM host_notifications WHERE id=? AND entity_id=? AND purpose=?',(delivery_reference,job_id,'delivery'))

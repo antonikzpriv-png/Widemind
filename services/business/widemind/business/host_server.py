@@ -70,11 +70,20 @@ class Host:
                 request_id=payload['requestId'];token=payload.get('customerToken') or secrets.token_urlsafe(32)
                 if not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9._:-]{1,200}',request_id):raise ValueError('invalid request id')
                 if not re.fullmatch(r'[A-Za-z0-9_-]{32,256}',token):raise ValueError('invalid customer token')
-                previous=business.store.one('SELECT * FROM host_requests WHERE request_id=?',(identity(run,request_id),))
                 hashed=hashlib.sha256(token.encode()).hexdigest()
-                if previous and (previous['revoked_at'] or previous['token_hash']!=hashed):return {'error':'request already exists; use the original private customer token','statusCode':409}
-                op=business.receive(source='customer-portal',external_id=request_id,service=payload['service'],scope=payload['scope'],customer_email=payload['email'])
-                with business.store.transaction():business.store.db.execute('INSERT OR IGNORE INTO host_requests VALUES (?,?,?,?,?,?,NULL)',(identity(run,request_id),run,op,payload['email'].lower(),hashed,time.time()))
+                email=payload['email']
+                if not isinstance(email,str) or len(email)>254 or not re.fullmatch(r'[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+',email):raise ValueError('invalid contact address')
+                # Claim credentials atomically before receive; retries with the same
+                # token recover an interruption without returning unusable secrets.
+                key=identity(run,request_id);op=identity(run,'customer-portal',request_id)
+                with business.store.transaction():
+                    previous=business.store.one('SELECT * FROM host_requests WHERE request_id=?',(key,))
+                    used=business.store.one('SELECT request_id FROM host_requests WHERE token_hash=?',(hashed,))
+                    if previous and (previous['revoked_at'] or previous['token_hash']!=hashed or previous['email']!=email.lower()):return {'error':'request already exists; use original private access','statusCode':409}
+                    if used and used['request_id']!=key:return {'error':'use a new token for each request','statusCode':409}
+                    business.store.db.execute('INSERT OR IGNORE INTO host_requests VALUES (?,?,?,?,?,?,NULL)',(key,run,op,email.lower(),hashed,time.time()))
+                actual=business.receive(source='customer-portal',external_id=request_id,service=payload['service'],scope=payload['scope'],customer_email=email)
+                if actual!=op:raise ValueError('opportunity identity mismatch')
                 return {'requestId':request_id,'opportunityId':op,'customerToken':token,'runId':run}
             if path in {'/v1/customer','/v1/accept','/v1/delivery','/v1/revoke'}:
                 request=self.token_request(business,payload.get('token'))
@@ -111,16 +120,28 @@ class Host:
                     expected=self.work(business)
                     if expected['eventId']!=event or expected['dueAt']>time.time():raise ValueError('business event is not due')
                     business.store.db.execute("INSERT INTO host_invocations VALUES (?,?,?,'running',NULL,?)",(action,run,event,time.time()))
-                processed=business.tick();result={'kind':'completed','processed':processed,**self.work(business)}
+                processed=business.tick();event_state=business.store.one('SELECT state FROM events WHERE id=? AND run_id=?',(event,run));result={'kind':'completed','processed':processed,'eventState':event_state['state'] if event_state else 'unknown',**self.work(business)}
                 business.store.db.execute("UPDATE host_invocations SET state='completed',result=? WHERE action_id=?",(encode(result),action));return result
             if path=='/v1/reconcile':
                 row=business.store.one('SELECT * FROM host_invocations WHERE action_id=? AND run_id=?',(payload['actionId'],run))
-                return json.loads(row['result']) if row and row['state']=='completed' else {'kind':'unknown','reason':'business step outcome requires reconciliation; no blind replay'}
+                if row and row['state']=='completed':return json.loads(row['result'])
+                if row:
+                    observed=business.store.one('SELECT state FROM events WHERE id=? AND run_id=?',(row['event_id'],run))
+                    if observed and observed['state'] in {'done','blocked','failed'}:
+                        # The core already committed its exact event outcome. This
+                        # observes orchestration completion, not business/job success.
+                        result={'kind':'completed','processed':True,'eventState':observed['state'],**self.work(business)}
+                        business.store.db.execute("UPDATE host_invocations SET state='completed',result=? WHERE action_id=?",(encode(result),row['action_id']))
+                        return result
+                return {'kind':'unknown','reason':'business step outcome requires reconciliation; no blind replay'}
             raise ValueError('unknown route')
         finally:business.store.close()
 
 def main():
-    os.umask(0o077);host=Host();address=os.environ.get('WIDEMIND_BUSINESS_HOST','127.0.0.1');port=int(os.environ.get('WIDEMIND_BUSINESS_PORT','8082'))
+    os.umask(0o077);host=Host()
+    import argparse
+    parser=argparse.ArgumentParser(description='WideMind authenticated business bridge');parser.add_argument('--host',default=os.environ.get('WIDEMIND_BUSINESS_HOST','127.0.0.1'));parser.add_argument('--port',type=int,default=int(os.environ.get('WIDEMIND_BUSINESS_PORT','8082')));args=parser.parse_args();address,port=args.host,args.port
+    if not 1<=port<=65535:raise ValueError('invalid business port')
     if address not in {'127.0.0.1','localhost','::1'}:raise ValueError('business bridge must bind loopback')
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*_args):pass

@@ -27,6 +27,7 @@ class FixtureServices:
             assert body['reservation_id']==self.reservations[0]['reservation_id'];assert body['action_id']==self.reservations[0]['action_id'];self.creation_calls+=1
             self.reservations[0]['state']='settled'
             return {'state':'succeeded','data':{'filename':'graphic.svg','media_type':'image/svg+xml','content':'<svg xmlns="http://www.w3.org/2000/svg"><text>Fixture requested graphic</text></svg>','checks':{'valid_svg':True}}}
+        if path.endswith('/balance'):return {'run_id':'run-1','mode':'test'}
         if path.endswith('/payments'):return self.payments
         if path.endswith('/checkout'):
             row={'payment_id':'fixture-paypal-order','job_id':body['job_id'],'request_id':body['request_id'],'url':'https://www.sandbox.paypal.com/checkoutnow?token=fixture-order','status':'pending'};self.payments=[row];return row
@@ -69,8 +70,19 @@ class HostTests(unittest.TestCase):
         self.host.handle('/v1/revoke',{'runId':'run-1','token':'x'*43})
         with self.assertRaises(ValueError):self.host.handle('/v1/customer',{'runId':'run-1','token':'x'*43})
         self.assertEqual(self.host.handle('/v1/customer',{'runId':'run-1','token':'y'*43})['opportunityId'],self.request('request-2','y'*43)['opportunityId'])
+    def test_a_customer_token_cannot_be_rebound_to_another_request(self):
+        self.request()
+        other=self.request('another-request','x'*43)
+        self.assertEqual(other['statusCode'],409)
+        self.assertEqual(self.host.handle('/v1/customer',{'runId':'run-1','token':'x'*43})['opportunityId'],self.request()['opportunityId'])
     def test_outer_step_is_idempotent_and_unknown_is_never_blindly_repeated(self):
         self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'});request={'runId':'run-1','actionId':'outer-durable','eventId':work['eventId']};first=self.host.handle('/v1/step',request);self.assertEqual(self.host.handle('/v1/step',request),first);self.assertEqual(self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'not-started'})['kind'],'unknown')
+    def test_interrupted_bridge_receipt_recovers_from_exact_completed_core_event(self):
+        self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'});request={'runId':'run-1','actionId':'outer-crash-window','eventId':work['eventId']};self.host.handle('/v1/step',request)
+        business=self.host.business('run-1')
+        try:business.store.db.execute("UPDATE host_invocations SET state='running',result=NULL WHERE action_id=?",('outer-crash-window',))
+        finally:business.store.close()
+        result=self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'outer-crash-window'});self.assertEqual(result['kind'],'completed');self.assertEqual(result['eventState'],'done');self.assertEqual(self.fixture.creation_calls,0)
     def test_stopped_runtime_preserves_customer_read_access_but_does_no_work(self):
         self.request()
         with sqlite3.connect(self.runtime) as db:db.execute("UPDATE runtime_runs SET desired='stop',state='stopped'")
