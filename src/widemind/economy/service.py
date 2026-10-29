@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -69,7 +70,22 @@ class EconomyService:
         # Atomically create restrictive files before sqlite opens them (no umask window).
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
+        # Concurrent first openers can receive SQLITE_BUSY from journal_mode
+        # without honoring SQLite's normal busy handler. Retry only lock errors,
+        # with a bounded startup deadline and a fresh connection each time.
+        for attempt in range(8):
+            try:
+                self._migrate()
+                break
+            except sqlite3.OperationalError as error:
+                code = getattr(error, 'sqlite_errorcode', 0) & 0xFF
+                if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or attempt == 7:
+                    raise
+                time.sleep(min(0.01 * 2**attempt, 0.25))
+
+    def _migrate(self):
         with self._initial_connection() as connection:
+            connection.execute('PRAGMA busy_timeout=1000')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
             if version not in (0, 1, 2):
                 raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
