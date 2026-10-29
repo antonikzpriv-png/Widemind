@@ -299,3 +299,52 @@ test("public text preserves ordinary line breaks while projecting only declared 
     reason: "Setup required\nContact the operator",
   });
 });
+
+test("resolved malformed content cannot take the public page or API offline", async () => {
+  const f = fixture("foundation");
+  let content: unknown;
+  f.services.website.publicContent = async () =>
+    content as Pick<
+      PublicWebsiteData,
+      "offerings" | "activity" | "availability"
+    >;
+  const server = webServer({ ...f, secrets: { operatorPasswordHash: null } });
+  try {
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    assert(address && typeof address !== "string");
+    const origin = `http://127.0.0.1:${address.port}`;
+    for (const malformed of [
+      null,
+      undefined,
+      false,
+      0,
+      "private-content-canary",
+      [],
+      ["private-content-canary"],
+    ]) {
+      content = malformed;
+      const response = await fetch(origin + "/api/public");
+      assert.equal(response.status, 200);
+      const projected = (await response.json()) as PublicWebsiteData;
+      assert.deepEqual(projected.offerings, []);
+      assert.deepEqual(projected.activity, []);
+      assert.deepEqual(projected.availability, {
+        available: false,
+        reason: "Website availability unavailable",
+      });
+      assert.doesNotMatch(JSON.stringify(projected), /private-content-canary/);
+      const page = await fetch(origin + "/");
+      assert.equal(page.status, 200);
+      const html = await page.text();
+      assert.match(html, /Headquarters|Operating funds/);
+      assert.doesNotMatch(html, /private-content-canary/);
+    }
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    f.close();
+  }
+});

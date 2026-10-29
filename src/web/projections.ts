@@ -185,7 +185,7 @@ export async function publicProjection(
 ): Promise<PublicWebsiteData> {
   const runs = store.runs();
   const latest = runs[0];
-  const content = await callDependency(
+  const suppliedContent: unknown = await callDependency(
     "website.publicContent",
     () => services.website.publicContent(),
     dependencyMs,
@@ -197,6 +197,12 @@ export async function publicProjection(
       reason: "Website content dependency unavailable",
     },
   }));
+  const content =
+    suppliedContent &&
+    typeof suppliedContent === "object" &&
+    !Array.isArray(suppliedContent)
+      ? (suppliedContent as Record<string, unknown>)
+      : {};
   return {
     version: 1,
     runs: runs.map(publicRun),
