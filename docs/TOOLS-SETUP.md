@@ -1,30 +1,19 @@
 # Tools runtime setup
 
-The integrated package requires Python 3.12+, Linux/POSIX filesystem controls, SQLite, and
+This guide covers the retained standalone Python tools gateway. For the web app, persistent business worker and authoritative shared economy, use [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and [TOOLS_INTEGRATION.md](TOOLS_INTEGRATION.md). Install these variants in separate virtual environments. The standalone control store is for its development/adapter workflow; it is not the integrated application's ledger.
+
+
+This slice selects Python 3.11+, Linux/POSIX filesystem controls, SQLite, and
 optional Pillow, Playwright, and Docker. It is an operator-driven tools gateway;
 it does not run an autonomous scheduler, website, payments, or a customer queue.
 There is no timer that makes paid model calls while idle.
-
-The SDK is preserved as an owner-operated development tool; it is not registered
-as a Node runtime tool provider. Its local development wallet must not fund
-central runtime actions. When `WIDEMIND_ECONOMY_URL`,
-`WIDEMIND_RUNTIME_AUTH_SECRET`, or the owner policy
-`accounting_authority: "central"` selects central accounting, new paid SDK calls
-stop before preparation or dispatch. An explicit standalone setting cannot
-override inherited central configuration. Free tools, receipt replay and
-observational recovery remain available. A future runtime adapter must use the
-central authorization and settlement contracts in
-[RUNTIME_ECONOMY.md](RUNTIME_ECONOMY.md), without seeding a second wallet.
-
-When supplied, `accounting_authority` must be exactly `central` or `standalone`.
-Unknown strings and other types fail configuration before opening control state;
-omitting the field preserves the owner-only standalone development default.
 
 ## Install and first local deliverable
 
 ```sh
 python -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip==26.2.2
 python -m pip install -e '.[test,graphics,browser]'
 python -m pytest -q
 ```
@@ -167,3 +156,5 @@ operator APIs. They must not be exposed as model tools or a public HTTP API.
 owner-configured capabilities. Tool results are marked untrusted: webpages,
 emails, attachments, files and generated plans cannot modify policy, secrets,
 accounts, tariffs or budgets. There is deliberately no automatic plan executor.
+
+The root package retains the current main central-accounting authority checks: standalone paid SDK execution is blocked when central runtime configuration is present. It does not provide an alternate wallet for the web/worker. See [MAIN_AUDIT_20261029.md](MAIN_AUDIT_20261029.md).

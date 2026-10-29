@@ -56,3 +56,9 @@ var/
 owner-config.json
 control/
 workspace/
+
+# Isolated integration services
+.venvs/
+owner-config.json
+control/
+workspace/

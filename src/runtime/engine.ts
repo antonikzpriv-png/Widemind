@@ -313,6 +313,10 @@ export class AgentRuntime {
         );
         return true;
       }
+      if (this.services.tools.refresh)
+        await this.dependency("tools.capabilities", () =>
+          this.services.tools.refresh!(),
+        );
       // Recover/settle recorded effects even while paused, stopped or exhausted.
       const outstanding = this.store
         .actions(run.id)

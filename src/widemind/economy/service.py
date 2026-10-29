@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from .db_family import check_family, claim_family, preflight
 
 OPENING_CREDIT = 5_000_000
 MAX_MONEY = 9_223_372_036_854_775_807
@@ -64,8 +65,10 @@ def _row(row):
 class EconomyService:
     def __init__(self, database_path: str | Path):
         self.path = Path(database_path)
+        self._family_ready = False
         if str(database_path) == ':memory:':
             raise EconomyError('invalid_database', 'Use a persistent local SQLite database', 422)
+        preflight(self.path, 'central-v1', EconomyError)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Atomically create restrictive files before sqlite opens them (no umask window).
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -82,6 +85,18 @@ class EconomyService:
                 if code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED) or attempt == 7:
                     raise
                 time.sleep(min(0.01 * 2**attempt, 0.25))
+        # A subclass can build a genuine pre-fork fixture/schema itself. Pin that
+        # compatible legacy format too, without changing its schema version.
+        with self._initial_connection() as connection:
+            if not check_family(connection, 'central-v1', EconomyError):
+                connection.execute('BEGIN IMMEDIATE')
+                try:
+                    claim_family(connection, 'central-v1', EconomyError)
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
+        self._family_ready = True
 
     def _migrate(self):
         with self._initial_connection() as connection:
@@ -103,6 +118,7 @@ class EconomyService:
                     version = connection.execute('PRAGMA user_version').fetchone()[0]
                     if version not in (0, 1, 2, 3, 4, 5):
                         raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
+                    claim_family(connection, 'central-v1', EconomyError)
                     migrations = ('001_economy.sql', '002_reconciliation_queue.sql', '003_reconciliation_schedule_index.sql', '004_projection_guards.sql', '005_runtime_bridge.sql')
                     for target in range(version + 1, len(migrations) + 1):
                         script = (Path(__file__).parent / 'migrations' / migrations[target-1]).read_text()
@@ -135,6 +151,13 @@ class EconomyService:
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         db.row_factory = sqlite3.Row
+        try:
+            db.execute('BEGIN')
+            check_family(db, 'central-v1', EconomyError, require_marker=self._family_ready, allow_future=True)
+            db.rollback()
+        except BaseException:
+            db.close()
+            raise
         db.execute('PRAGMA foreign_keys=ON')
         db.execute('PRAGMA synchronous=FULL')
         return db

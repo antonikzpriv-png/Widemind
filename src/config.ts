@@ -36,12 +36,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): {
     throw new Error(
       "Non-loopback serving requires HTTPS termination and secure cookies",
     );
+  const publicRunId = env.WIDEMIND_COMMERCE_RUN_ID;
+  if (
+    publicRunId !== undefined &&
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(publicRunId)
+  )
+    throw new Error("Invalid public commerce run identity");
   return {
     config: {
       database: resolve(env.WIDEMIND_DATABASE ?? "./var/widemind.sqlite"),
       host,
       port,
       publicOrigin,
+      ...(publicRunId ? { publicRunId } : {}),
       profile,
       secureCookies,
       leaseMs: integer(env.WIDEMIND_LEASE_MS, 30000, 3000, 3600000),

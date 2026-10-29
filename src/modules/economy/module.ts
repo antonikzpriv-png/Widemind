@@ -2,6 +2,7 @@
 import type { Json } from "../../contracts/index.ts";
 import { Store } from "../../runtime/store.ts";
 import type { ModuleContext, ModuleDefinition } from "../registry.ts";
+import { definition as serviceDefinition } from "./service-module.ts";
 import { EconomyClient, bridgeSettings } from "./client.ts";
 
 export function createEconomyModule(
@@ -9,7 +10,31 @@ export function createEconomyModule(
   env: NodeJS.ProcessEnv = context.env ?? process.env,
 ): ReturnType<ModuleDefinition["create"]> {
   const { db, config } = context;
+  const serviceConfigured = [
+    env.WIDEMIND_ECONOMY_OPERATOR_TOKEN,
+    env.WIDEMIND_ECONOMY_GATEWAY_TOKEN,
+    env.WIDEMIND_ECONOMY_AGENT_TOKEN,
+  ].some(Boolean);
+  if (serviceConfigured) {
+    if (
+      [
+        env.WIDEMIND_OPERATOR_TOKEN,
+        env.WIDEMIND_GATEWAY_TOKEN,
+        env.WIDEMIND_AGENT_TOKEN,
+        env.WIDEMIND_RUNTIME_AUTH_SECRET,
+        env.WIDEMIND_RUNTIME_TOOL_PROFILES,
+      ].some((value) => value?.trim())
+    )
+      throw new Error(
+        "Choose one economy authority: service-prefixed credentials or the central runtime bridge credentials",
+      );
+    return serviceDefinition.create({ ...context, env });
+  }
   const settings = bridgeSettings(env);
+  if (settings && (env.WIDEMIND_BUSINESS_URL || env.WIDEMIND_TOOLS_URL))
+    throw new Error(
+      "Business/tools services require their matching service economy authority",
+    );
   if (!settings) return {};
   if (config.profile !== "foundation")
     throw new Error(

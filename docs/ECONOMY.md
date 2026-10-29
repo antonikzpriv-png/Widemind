@@ -6,7 +6,9 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The economy module now implements the ledger, reservations, settlement, holds and a Stripe adapter. See [the implemented v1 interface](ECONOMY_CONTRACT.md) and [setup/verification requirements](ECONOMY_SETUP.md). Provider-fixture tests are local verification, not real payments; account setup and an actual sandbox receipt remain unverified. The financial invariants below remain the governing requirements. The Node runtime consumes the typed [Economy interface](INTERFACES.md); its bridge must use this single authoritative ledger and preserve exact monetary values.
+The rules below govern the typed economy interface now consumed by the persistent runtime. The integrated economy service implements the append-only ledger, reservations, verified PayPal payments and explicit unavailable behavior; live accounts/funding still require configuration. Sandbox openings are labelled test credit. See [ECONOMY_INTEGRATION.md](ECONOMY_INTEGRATION.md) and [INTERFACES.md](INTERFACES.md).
+
+The retained standalone tools control store (`src/widemind/control.py`) supports its own development grant/reservation tests. It is not the integrated application's accounting authority. Production business/tool paths use the authenticated economy service; do not combine balances from these stores.
 
 ## Units
 
@@ -113,7 +115,3 @@ Additional owner funding is labelled separately from autonomous earnings. Decide
 - Claimed earnings without settlement create no credit.
 - WideMind cannot edit its balance or enforcement rules.
 - Public financial totals reconcile with the private ledger.
-
-## Preserved standalone tools boundary
-
-The owner-operated Python tools SDK from latest main is available under `src/widemind/tools`, with its separate control journal and documented setup in [TOOLS-SETUP.md](TOOLS-SETUP.md). It is not a Node runtime module and its development wallet is not the central economy wallet. Do not seed both ledgers for one runtime action, import SDK balances as customer receipts, or bypass the central authorization/settlement path. Paid standalone calls are blocked when central runtime configuration is present; existing effects can still be reconciled. SDK adapters require an explicit central-authority adapter before being enabled in the autonomous runtime. Existing free tools, secret setup and owner-only standalone development workflows are preserved. Fixture availability is not real account verification.

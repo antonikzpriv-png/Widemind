@@ -1,6 +1,8 @@
-# Foundation business and fulfillment module
+# Central Stripe brief business and fulfillment module
 
-The opt-in `src/modules/business` module extends the existing Node foundation. It preserves the foundation runtime, operator sessions, namespaced routes and protected Python economy. It does not install another wallet, scheduler, operator credential or root Python package.
+The opt-in `src/modules/brief-business` module extends the existing Node foundation. It preserves the foundation runtime, operator sessions, namespaced routes and protected Python economy. It does not install another wallet, scheduler, operator credential or root Python package.
+
+This is the central Stripe alternative to the integrated PayPal business/customer portal in [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md). Keep its deployment, runtime/ledger databases and unprefixed credentials separate. Enabling the brief module or its tools alongside service-prefixed credentials, service URLs, conflicting modes or an explicit PayPal provider fails startup. Select Stripe explicitly for this alternative; do not load a generated PayPal `var/integration.env` into it. The upstream `/commerce` portal and service orchestration remain available in their own service configuration.
 
 Set `WIDEMIND_BUSINESS_ENABLED=true` with `WIDEMIND_PROFILE=foundation` to register the business and website roles. Without that flag the existing foundation remains unchanged. Configure the separate real-provider tools and commerce settings described in [BUSINESS_TOOLS.md](BUSINESS_TOOLS.md), [RUNTIME_ECONOMY.md](RUNTIME_ECONOMY.md) and [BUSINESS_UI.md](BUSINESS_UI.md). Missing providers remain unavailable; enabling a module does not qualify credentials or fund a run. Existing Node web/worker and Python accounting/reconciliation processes remain independent.
 

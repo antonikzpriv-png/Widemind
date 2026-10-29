@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "widemind"
+version = "0.1.0"
+description = "Durable WideMind business workflows with injected economy and tool gateways"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+widemind = "widemind.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["widemind*"]
+
+[tool.setuptools.package-data]
+"widemind.business" = ["migrations/*.sql"]

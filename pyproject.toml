@@ -8,11 +8,11 @@ version = "0.3.0"
 description = "WideMind runtime economy, payments and owner-operated tools"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "httpx>=0.28,<1", "cryptography>=44,<47"]
+dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.34,<1", "httpx>=0.28,<1", "cryptography>=50,<51"]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.50,<2"]
-graphics = ["Pillow>=11,<13"]
+graphics = ["Pillow>=13,<14"]
 test = ["pytest>=8.3,<10"]
 
 [project.scripts]

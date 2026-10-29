@@ -18,6 +18,7 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      - run: python -m pip install --upgrade pip==26.2.2
       - run: python -m pip install -r requirements.lock -e .
       - run: python -m pip check
       - run: npm ci
@@ -27,5 +28,27 @@ jobs:
         env:
           WIDEMIND_CHROMIUM: /usr/bin/google-chrome
       - run: npm run business:browser
+        env:
+          WIDEMIND_CHROMIUM: /usr/bin/google-chrome
+
+  integrated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip==26.2.2
+      - run: python -m pip install -r requirements.lock -e .
+      - run: npm ci
+      - run: npm run services:setup -- --with-tests
+      - run: npm run services:test
+      - run: npm run check
+      - run: npm run integration:browser
         env:
           WIDEMIND_CHROMIUM: /usr/bin/google-chrome

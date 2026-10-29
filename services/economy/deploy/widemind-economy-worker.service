@@ -1,0 +1,37 @@
+# Install a wheel and dependencies in a root-owned /opt/widemind-economy/.venv.
+# Keep secrets in root-owned /etc/widemind/economy.env (0600).
+# The autonomous agent must use a DIFFERENT unprivileged OS identity.
+[Unit]
+Description=WideMind trusted payment reconciliation worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=widemind-economy
+Group=widemind-economy
+StateDirectory=widemind-economy
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/widemind-economy
+EnvironmentFile=/etc/widemind/economy.env
+Environment=WIDEMIND_ECONOMY_DB=/var/lib/widemind-economy/economy.sqlite3
+ExecStart=/opt/widemind-economy/.venv/bin/widemind-economy worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=120
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

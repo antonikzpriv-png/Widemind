@@ -2,7 +2,11 @@
 
 ## Status
 
-The foundation implements Node.js 24/TypeScript, independent web and worker processes, and local SQLite storage. The Python economy control plane implements its own protected ledger, reservations, Stripe adapter and durable reconciliation worker. See [FOUNDATION.md](FOUNDATION.md), [INTERFACES.md](INTERFACES.md), [economy contracts](ECONOMY_CONTRACT.md) and [economy setup](ECONOMY_SETUP.md). Real provider accounts and deployment remain configuration requirements; separately developed tools/business providers are not silently enabled.
+Node.js 24/TypeScript serves the website and runs an independent persistent worker. The integrated economy, tools and business modules use authenticated local Python services, separate virtual environments and separate durable SQLite/control storage. The Node worker is the sole business scheduler; a separate free economy reconciliation worker processes verified provider events. Module registration composes these through typed interfaces without exposing the ledger to task code.
+
+PayPal Business, OpenAI and dedicated Gmail are the selected provider targets. Local files, SVG graphics, static software and private portal delivery operate without those credentials. Provider adapters are implemented and fixture-tested; live accounts, funding, permitted outbound network access, hosting and a domain remain external prerequisites. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md), [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
+
+The standalone tools package from the latest `main` is preserved at `src/widemind` with its original tests and documentation. The integrated service is a separate package because it uses the shared economy authority instead of the standalone development control store. Keep their virtual environments separate. See [TOOLS-SETUP.md](TOOLS-SETUP.md) and [TOOLS_INTEGRATION.md](TOOLS_INTEGRATION.md).
 
 ## Product requirements
 
@@ -12,7 +16,7 @@ Its intended capabilities include internet browsing, code execution, files, pers
 
 The website is its public headquarters. The agent must continue operating independently of an open webpage.
 
-## Proposed components
+## Component boundaries
 
 ### Persistent worker
 
@@ -107,14 +111,10 @@ Store times in UTC and display them with explicit timezone context. Version impo
 
 ## First integrated slice
 
-Simulated customer request → priced offer → budget-authorized tool action → deliverable → simulated payment reconciliation → updated website balance.
+Verified local acceptance flow: controlled request → priced quote → acceptance → PayPal protocol fixture → verified webhook → capture/reconciliation → budget-authorized SVG creation → private portal delivery → earned record/hold release → exact public balance. Only the external payment provider is a fixture in this acceptance test; no actual customer payment or profit is claimed.
 
 Then verify one actual paid job with real usage and payment records. Expand services through the same interfaces rather than bypassing accounting.
 
 ## Implementation decisions
 
-Select a small maintainable stack and record its actual commands. Start with one deployment and one agent identity. Separate service boundaries logically first; multiple deployable microservices are not required for the first version.
-
-## Preserved standalone tools boundary
-
-The owner-operated Python tools SDK from latest main is available under `src/widemind/tools`, with its separate control journal and documented setup in [TOOLS-SETUP.md](TOOLS-SETUP.md). It is not a Node runtime module and its development wallet is not the central economy wallet. Do not seed both ledgers for one runtime action, import SDK balances as customer receipts, or bypass the central authorization/settlement path. Paid standalone calls are blocked when central runtime configuration is present; existing effects can still be reconciled. SDK adapters require an explicit central-authority adapter before being enabled in the autonomous runtime. Existing free tools, secret setup and owner-only standalone development workflows are preserved. Fixture availability is not real account verification.
+The initial deployment stays on one persistent host with one configured commerce identity. HTTP boundaries preserve the independently implemented modules and isolate the economy from tools. Each service has a separate Python environment because their historical packages share a namespace. Run web, runtime worker, three service APIs and the economy reconciliation worker under supervision; do not use a request-only host. Hosting cost allocation must be recorded before a live survival pilot.

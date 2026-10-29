@@ -155,6 +155,16 @@ try {
     env: { PATH: process.env.PATH ?? "", ...environment },
     stdio: ["ignore", "ignore", "pipe"],
   });
+  const portalResponse = await fetch(origin + "/commerce");
+  assert.equal(portalResponse.status, 200);
+  assert.match(
+    portalResponse.headers.get("content-security-policy") ?? "",
+    /script-src 'self'/,
+  );
+  assert.match(
+    portalResponse.headers.get("content-security-policy") ?? "",
+    /connect-src 'self'/,
+  );
   await navigate(origin + "/");
   assert.equal(
     await evaluate(
@@ -282,7 +292,7 @@ try {
       assert.equal(
         await evaluate("document.scripts.length"),
         0,
-        "CSP remains script-free",
+        "Brief console emits no application scripts",
       );
       checked.push({ view, width });
     }
@@ -316,7 +326,8 @@ try {
     uiViews: checked,
     realFormLoginCreateIntakeResume: true,
     workerIndependent: true,
-    cspNoScripts: true,
+    briefPagesScriptless: true,
+    sharedCspSupportsPortal: true,
     publicPrivacy: true,
     pageErrors: errors,
   };

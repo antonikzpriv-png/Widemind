@@ -1,3 +1,4 @@
+import { commercePage, commerceScript, integrationsPage } from "./commerce.ts";
 import { callDependency, DependencyTimeout } from "../runtime/dependencies.ts";
 import { RequestError } from "./errors.ts";
 import { createServer } from "node:http";
@@ -74,7 +75,7 @@ export function webServer(context: {
       response.setHeader("X-Frame-Options", "DENY");
       response.setHeader(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       );
       const send = (
         status: number,
@@ -95,6 +96,14 @@ export function webServer(context: {
       try {
         const path = new URL(request.url ?? "/", config.publicOrigin).pathname;
         const method = request.method ?? "GET";
+        if (method === "GET" && path === "/commerce") {
+          send(200, commercePage(), "text/html");
+          return;
+        }
+        if (method === "GET" && path === "/commerce.js") {
+          send(200, commerceScript, "text/javascript");
+          return;
+        }
         if (method === "GET" && path === "/style.css") {
           send(200, css, "text/css");
           return;
@@ -108,6 +117,7 @@ export function webServer(context: {
             store,
             services,
             config.dependencyMs ?? 5000,
+            config.publicRunId,
           );
           send(
             200,
@@ -219,6 +229,7 @@ export function webServer(context: {
                 ...(moduleRoute.access === "public" && rawBody
                   ? { rawBody }
                   : {}),
+                remoteAddress: request.socket.remoteAddress ?? "unknown",
                 query: Object.fromEntries(
                   new URL(request.url!, config.publicOrigin).searchParams,
                 ),
@@ -358,6 +369,10 @@ export function webServer(context: {
         }
         if (!session) {
           send(401, { error: "Operator authentication required" });
+          return;
+        }
+        if (method === "GET" && path === "/operator/integrations") {
+          send(200, integrationsPage(), "text/html");
           return;
         }
         if (method === "GET" && path === "/api/operator/runtime") {

@@ -58,6 +58,7 @@ export interface FinancialSummary {
   /** Net performance metrics can be negative after compensating corrections. */
   earnedRevenueMicros: string;
   operatingChargesMicros: Micros;
+  adjustmentsMicros?: string;
   ownerFundingMicros: Micros;
   subsidiesMicros: string;
   /** Expense sign: a negative processor fee is a verified fee credit. */
@@ -154,6 +155,8 @@ export interface ToolAction {
   opportunityId?: ID;
 }
 export interface Tools {
+  /** Free capability observation; never a paid planning path. */
+  refresh?(): Promise<void>;
   health(): Availability;
   capabilities(): ReadonlyArray<{ id: string; availability: Availability }>;
   /** Must enforce authorization/maximums, provider idempotency and AbortSignal. */
@@ -238,6 +241,7 @@ export interface PublicRun {
 }
 export interface PublicWebsiteData {
   version: 1;
+  financialRunId?: ID | null;
   runs: PublicRun[];
   financial: FinancialSummary | null;
   offerings: Array<{ id: string; title: string; description: string }>;
@@ -258,6 +262,8 @@ export interface RuntimeConfig {
   host: string;
   port: number;
   publicOrigin: string;
+  /** Explicit commerce identity for public financial publication. */
+  publicRunId?: ID;
   profile: "foundation" | "demo";
   secureCookies: boolean;
   leaseMs: number;
@@ -281,6 +287,7 @@ export interface ModuleRoute {
   operatorRedirect?: string;
   handle(request: {
     body: Json;
+    remoteAddress?: string;
     /** Exact bytes for signature verification on public ingress routes only. */
     rawBody?: Uint8Array;
     query: Record<string, string>;

@@ -141,7 +141,10 @@ test("six server-rendered business views are navigable and escape private task c
   );
   assert.match(opportunities, /name="requestId" value="[a-f0-9-]{36}"/);
   assert.match(opportunities, /name="csrf" value="csrf"/);
-  assert.match(opportunities, /action="\/api\/modules\/business\/command"/);
+  assert.match(
+    opportunities,
+    /action="\/api\/modules\/brief-business\/command"/,
+  );
   assert.match(opportunities, /collection=opportunities&amp;offset=500/);
   assert.match(opportunities, /of 501/);
 });

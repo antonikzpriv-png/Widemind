@@ -10,6 +10,7 @@ import type { BusinessServiceDefinition } from "./services.ts";
 import { asJson, consoleProjection, orderProjection } from "./views.ts";
 import { renderBusinessPage, renderBusinessPublic } from "./ui.ts";
 import { configuredScopeValidator } from "./readiness.ts";
+import { assertCentralBusinessProtocol } from "./protocol.ts";
 
 export function createBusinessModule(
   context: ModuleContext,
@@ -21,6 +22,7 @@ export function createBusinessModule(
 ) {
   const env = context.env ?? process.env;
   if (env.WIDEMIND_BUSINESS_ENABLED !== "true") return {};
+  assertCentralBusinessProtocol(env);
   if (context.config.profile !== "foundation")
     throw new Error("Business requires the foundation profile");
   const settings = bridgeSettings(env);

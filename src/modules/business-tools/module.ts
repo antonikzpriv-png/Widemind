@@ -12,6 +12,7 @@ import type {
 } from "../../contracts/index.ts";
 import type { ModuleContext, ModuleDefinition } from "../registry.ts";
 import { createCommerceTools } from "../brief-business/commerce.ts";
+import { assertCentralBusinessProtocol } from "../brief-business/protocol.ts";
 
 const ids = ["gmail.read", "gmail.send", "research.collect"] as const;
 const unknown = (): ToolResult => ({
@@ -346,6 +347,7 @@ export function createBusinessToolsModule(
   env: NodeJS.ProcessEnv = context.env ?? process.env,
 ): ReturnType<ModuleDefinition["create"]> {
   if (!env.WIDEMIND_BUSINESS_TOOLS_PROFILE) return {};
+  assertCentralBusinessProtocol(env);
   if (
     context.config.profile !== "foundation" ||
     !["provider-test", "live"].includes(env.WIDEMIND_BUSINESS_TOOLS_PROFILE)

@@ -22,6 +22,8 @@ export interface ModuleDefinition {
   id: string;
   contractVersion: 1;
   migrations?: readonly Migration[];
+  /** Trusted composition after all role providers are registered. */
+  decorate?(services: Services, context: ModuleContext): void;
   create(
     context: ModuleContext,
   ): Omit<ModuleRegistration, "id" | "contractVersion" | "migrations">;
@@ -185,5 +187,7 @@ export function registerModules(
       Object.assign(services, { [role]: providers[role] });
     }
   }
+  for (const definition of definitions)
+    definition.decorate?.(services, context);
   return services;
 }

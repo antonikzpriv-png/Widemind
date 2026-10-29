@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. The Python economy control plane implements the append-only ledger, atomic reservations, Stripe adapter and durable reconciliation worker. Read docs/ECONOMY_CONTRACT.md and docs/ECONOMY_SETUP.md as well. The preserved standalone tools SDK is documented in docs/TOOLS-SETUP.md and docs/CAPABILITIES.md; it is not automatically a Node runtime provider and its owner-development wallet must never be imported as central operating funds. Do not invent real payment verification, provider accounts, deployment URLs or completed live milestones.
+The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. Authenticated economy, business/customer-portal and tool adapters are integrated under services/ and src/modules/. Read docs/INTEGRATED_SETUP.md. The latest main also provides the root Python central runtime economy bridge and its Stripe adapter; read docs/RUNTIME_ECONOMY.md and docs/MAIN_AUDIT_20261029.md. Select exactly one protocol/credential family per deployment. Never combine their databases, schema-5 migrations or balances. The separately maintained standalone Python tools package at src/widemind and its tests/docs are also retained; see docs/TOOLS-SETUP.md and docs/CAPABILITIES.md. Live credentials/accounts remain unconfigured; do not invent balances, provider verification, deployment URLs or completed live milestones.
 
 ## Working approach
 
@@ -57,7 +57,7 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-Use `npm ci`, `npm run migrate`, `npm run check`, `npm run dev` and `npm run worker:dev` for the Node 24.x foundation. Production commands are `npm run build`, `npm start` and `npm run worker`. Install the economy with `python -m pip install -r requirements.lock -e .` and validate with `python -m pytest -q`. Build its wheel with `python -m pip wheel --no-deps .`. See docs/FOUNDATION.md and docs/ECONOMY_SETUP.md. Provider fixtures are synthetic; do not label them live or sandbox payments. The optional SDK graphics/browser checks use `.[graphics,browser]`; never enable live mail or production publishing to run tests. The integrated project requires Python 3.12+.
+Use npm ci, npm run migrate, npm run check, npm run dev and npm run worker:dev. Node 24.x is required. Production commands are npm run build, npm start and npm run worker. See docs/FOUNDATION.md. For standalone tools changes, install the root Python project in a separate venv with `python -m pip install -e '.[test,graphics,browser]'` and run `python -m pytest -q`; do not mix its package namespace with integrated service venvs. Never enable live mail or production publishing merely to run tests.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.
