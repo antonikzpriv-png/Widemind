@@ -60,34 +60,5 @@ class SoftwareWorkflow:
     def reconcile(self,args,ctx):return _reconcile_local(args,ctx)
 
 
-class ResearchWorkflow:
-    spec=ToolSpec('research.collect','Collect real excerpts and citations from operator-curated public sources.')
-    def availability(self,config,secrets):
-        urls=config.get('source_urls',[])
-        return {'available':config.get('enabled',False) is True and bool(urls),'reason':'Configure source_urls and explicit network policy for research collection'}
-    def validate(self,args,config):
-        text(args.get('topic'),'topic',500);sections=args.get('sections');minimum=args.get('min_sources',2);urls=config.get('source_urls',[])
-        if not isinstance(sections,list) or not 1<=len(sections)<=8 or any(not isinstance(item,str) or not item.strip() or len(item)>100 for item in sections):raise ToolError('invalid_input','Research requires 1–8 bounded section headings')
-        if type(minimum) is not int or not 1<=minimum<=10 or not isinstance(urls,list) or len(set(urls))<minimum:raise Unavailable('Configure enough distinct owner-curated source URLs; sources are not fabricated')
-        for url in urls:
-            parsed=urlsplit(url)
-            if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password:raise Unavailable('Research source URLs must use public HTTPS')
-        return sections,urls[:10]
-    def quote(self,args,config):
-        sections,urls=self.validate(args,config)
-        for url in urls:ResearchAdapter().quote({'url':url,'max_text_chars':3000},config)
-        return Quote(provider='public_http',limits={'max_sources':len(urls),'source_mode':'owner-curated actual excerpts; no model claims'})
-    def execute(self,args,ctx):
-        sections,urls=self.validate(args,ctx.config);sources=[];references=[]
-        for url in urls:
-            result=ResearchAdapter().execute({'url':url,'max_text_chars':3000},ctx)
-            if result.data.get('status')!=200 or not result.data.get('text'):raise ToolError('insufficient_sources','A configured source did not return usable content')
-            sources.append({'url':result.data['url'],'title':result.data.get('title') or result.data['url'],'excerpt':result.data['text'][:3000]});references.extend(result.references)
-        excerpt='Source excerpts (not an inferred synthesis; verify relevance to the requested heading):\n\n'+'\n\n'.join(source['title']+': '+source['excerpt'] for source in sources)
-        result=ToolResult({'sources':sources,'sections':[{'heading':heading,'text':excerpt,'source_urls':[source['url'] for source in sources]} for heading in sections]},Usage(0,details={'network_compute':'owner-subsidized, unallocated'}),references=references)
-        # Read-only collection can be recovered from its durable completed record.
-        ctx.save_state({'research_workflow_result':{'data':dict(result.data),'references':references}});return result
-    def reconcile(self,args,ctx):
-        from .contracts import Reconciliation
-        value=ctx.load_state().get('research_workflow_result')
-        return Reconciliation('completed',ToolResult(value['data'],references=value['references'])) if value else Reconciliation('uncertain',detail='Collection has no complete durable receipt')
+# Preserve the integrated import contract while keeping research stages separate.
+from .research_workflow import ResearchWorkflow

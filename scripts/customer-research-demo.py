@@ -235,6 +235,7 @@ def config(root, origin, *, corrections=1):
             "policy": {"profile": "sandbox", "allow_external_effects": True, "network": {"trusted_fixture_origins": [origin]}},
             "tools": {
                 "research.collect": {"enabled": True, "_dependencies_ready": True, "source_mode": "search", "allow_local_http": True,
+                                     "offline_fixture_label": "Synthetic sources and human-written model responses; no live customer, search, inference or payment is verified.",
                                      "max_sources": 2, "max_search_queries": 2, "max_source_chars": 12000,
                                      "max_correction_passes": corrections, "max_output_tokens": 1000, "max_prompt_bytes": 50000},
                 "research.search": {"enabled": True, "provider": "searxng", "endpoint": origin + "/search", "allow_local_http": True,

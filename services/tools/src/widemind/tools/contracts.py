@@ -121,6 +121,7 @@ class ToolContext:
     authorize: Callable[[], None]
     cancelled: Callable[[], bool] = lambda: False
     job_id: str | None = None
+    child_executor: Any = None  # trusted integrated workflow capability, never tool input
 
     def check(self) -> None:
         if self.cancelled():

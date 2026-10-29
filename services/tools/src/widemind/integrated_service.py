@@ -6,11 +6,13 @@ grants or ledger. It verifies and starts economy reservations before adapters.
 from __future__ import annotations
 import argparse
 import base64
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 import json
+from itertools import islice
 import os
 import re
 from pathlib import Path
@@ -67,9 +69,25 @@ class EconomyClient:
                 if len(raw)>2_000_000:raise ToolError('economy_unavailable','Economy response exceeded limit.')
                 return json.loads(raw)
         except HTTPError as exc:
+            try:
+                failure=json.loads(exc.read(16_385)).get('error',{}).get('code')
+            except (ValueError,AttributeError):failure=None
+            if failure=='job_budget_exceeded':
+                raise ToolError('job_budget_exceeded','The total authorized research job budget cannot fund another child operation.') from exc
             raise ToolError('economy_unavailable','Economy rejected reservation or settlement; inspect its operator diagnostics.') from exc
         except (OSError,ValueError) as exc:raise ToolError('economy_unavailable','Economy unavailable; no execution authorized.') from exc
     def reservation(self,id):return self.request('GET','/v1/reservations/'+urlquote(id,safe=''))
+    def reserve_child(self,parent,**arguments):return self.request('POST','/v1/reservations/'+urlquote(parent,safe='')+'/children',arguments)
+    def reservation_children(self,parent):return self.request('GET','/v1/reservations/'+urlquote(parent,safe='')+'/children')
+    def mark_unknown(self,id,fallback_event):
+        row=self.reservation(id)
+        if row['state']=='settled':return row
+        # Preserve a native adapter's already-posted known subtotal and charge
+        # identity; a timeout must never lower it to zero or rebind the bill.
+        if row.get('provisional_micro_usd',0):return row
+        return self.request('POST','/v1/reservations/'+urlquote(id,safe='')+'/settle',
+            {'actual_micro_usd':None,'provider':row['provider'],'account':row['account'],
+             'external_charge_id':fallback_event,'usage':{'research_child_unknown':True},'outcome':'unknown'})
     def start(self,id):return self.request('POST','/v1/reservations/'+urlquote(id,safe='')+'/start',{})
     def settle(self,id,receipt):
         usage=receipt['usage']
@@ -93,6 +111,9 @@ class Journal:
         self.root=private_directory(Path(directory));self.path=self.root/'actions.sqlite3'
         with self.connection() as db:
             db.execute('CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,action TEXT NOT NULL,reservation TEXT NOT NULL,status TEXT NOT NULL,state TEXT NOT NULL,result TEXT,started INTEGER NOT NULL DEFAULT 0,cancelled INTEGER NOT NULL DEFAULT 0,updated REAL NOT NULL)')
+            db.execute('BEGIN IMMEDIATE')
+            if 'accounting_event_id' not in {row[1] for row in db.execute('PRAGMA table_info(operations)')}:
+                db.execute('ALTER TABLE operations ADD COLUMN accounting_event_id TEXT')
     def connection(self):
         db=sqlite3.connect(self.path,timeout=10);db.row_factory=sqlite3.Row;db.execute('PRAGMA busy_timeout=10000');db.execute('PRAGMA journal_mode=WAL');return db
     def get(self,id):
@@ -109,7 +130,7 @@ class Journal:
             if old:
                 if old['fingerprint']!=fingerprint:raise ToolError('conflict','Action ID reused with changed execution parameters.')
                 return dict(old),False
-            db.execute('INSERT INTO operations VALUES (?,?,?,?,?,?,?,?,?,?)',(action['actionId'],fingerprint,canonical(action),canonical(reservation),'prepared',canonical({'owner_fingerprint':owner_fingerprint}),None,0,0,time.time()))
+            db.execute('INSERT INTO operations(id,fingerprint,action,reservation,status,state,result,started,cancelled,updated) VALUES (?,?,?,?,?,?,?,?,?,?)',(action['actionId'],fingerprint,canonical(action),canonical(reservation),'prepared',canonical({'owner_fingerprint':owner_fingerprint}),None,0,0,time.time()))
         return self.get(action['actionId']),True
     def claim(self,id):
         with self.connection() as db:
@@ -121,9 +142,21 @@ class Journal:
     def load(self,id):return json.loads(self.get(id)['state'])
     def update(self,id,patch):
         with self.connection() as db:
-            db.execute('BEGIN IMMEDIATE');state=json.loads(db.execute('SELECT state FROM operations WHERE id=?',(id,)).fetchone()[0]);state.update(patch);db.execute('UPDATE operations SET state=?,updated=? WHERE id=?',(canonical(state),time.time(),id))
+            db.execute('BEGIN IMMEDIATE');state=json.loads(db.execute('SELECT state FROM operations WHERE id=?',(id,)).fetchone()[0]);state.update(patch)
+            payload=canonical(state)
+            if len(payload.encode())>32_000_000:raise ToolError('output_limit','Private workflow state exceeded its bound; child receipts remain durable.')
+            db.execute('UPDATE operations SET state=?,updated=? WHERE id=?',(payload,time.time(),id))
     def dispatched(self,id,intent):
         self.update(id,{'external_intent':dict(intent)})
+    def billing_event(self,id):
+        with self.connection() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT accounting_event_id,state FROM operations WHERE id=?',(id,)).fetchone()
+            if row['accounting_event_id']:return row['accounting_event_id']
+            # Preserve the event binding of a pre-upgrade posted subtotal.
+            value=json.loads(row['state']).get('accounting_event_id') or json.loads(row['state']).get('partial_usage',{}).get('provider_request_id') or id
+            db.execute('UPDATE operations SET accounting_event_id=? WHERE id=?',(value,id))
+            return value
 
 
 class IntegratedTools:
@@ -137,7 +170,7 @@ class IntegratedTools:
     def capabilities(self):
         result=[]
         for name,adapter in self.adapters.items():
-            settings=self.config.get('tools',{}).get(name,{})
+            settings=self.research_settings() if name=='research.collect' else self.config.get('tools',{}).get(name,{})
             if name not in {'files','graphics','graphics.create','software.create','code.execute'} and self.config.get('policy',{}).get('allow_external_effects') is not True:
                 result.append({'id':name,'availability':{'available':False,'reason':'External network operations disabled in owner policy'}});continue
             try:
@@ -147,6 +180,23 @@ class IntegratedTools:
         gmail=next((item['availability'] for item in result if item['id']=='gmail'),{'available':False,'reason':'Configure Gmail'})
         result.extend({'id':name,'availability':gmail} for name in ['gmail.send','gmail.read','gmail.list','gmail.thread'])
         return result
+    def research_settings(self):
+        settings=dict(self.config.get('tools',{}).get('research.collect',{}))
+        dependencies=['files','ai.generate','browser.read' if settings.get('fetch_mode','http')=='browser' else 'research.fetch']
+        if settings.get('source_mode','curated')=='search':dependencies.append('research.search')
+        ready=True
+        for name in dependencies:
+            config=self.config.get('tools',{}).get(name,{})
+            adapter=self.adapters.get(name)
+            if not adapter or config.get('enabled') is not True:ready=False;continue
+            health=adapter.availability(config,self.secrets)
+            if not health.get('available'):ready=False
+        settings['_dependencies_ready']=ready
+        # Synthesis must fit the actual child AI's owner-controlled limits.
+        ai=self.config.get('tools',{}).get('ai.generate',{})
+        settings['max_output_tokens']=min(settings.get('max_output_tokens',4000),ai.get('max_output_tokens',4000))
+        settings['max_prompt_bytes']=min(settings.get('max_prompt_bytes',24000),ai.get('max_input_bytes',32000))
+        return settings
     def normalize(self,payload):
         if 'action' in payload and isinstance(payload['action'],dict):
             return payload['action'],payload['reservation'],False
@@ -172,6 +222,7 @@ class IntegratedTools:
         name=action['tool']
         if name.startswith('gmail.') and name in {'gmail.send','gmail.read','gmail.list','gmail.thread'}:name='gmail'
         value={'tool_config':self.config.get('tools',{}).get(name,{}),'policy':self.config.get('policy',{}),'workspace':str(self.workspace.root),'adapter_version':self.adapters[name].spec.version if name in self.adapters else None}
+        if name=='research.collect':value['dependencies']={key:self.config.get('tools',{}).get(key,{}) for key in ['ai.generate','research.fetch','research.search','browser.read','files']}
         return hashlib.sha256(canonical(value).encode()).hexdigest()
     def runtime_stopped(self,run_id):
         path=os.environ.get('WIDEMIND_RUNTIME_DATABASE')
@@ -201,24 +252,57 @@ class IntegratedTools:
                 args['attachments']=[{'path':path,'filename':attachment['filename']}]
         if name not in {'files','graphics','graphics.create','software.create','code.execute'} and self.config.get('policy',{}).get('allow_external_effects') is not True:raise Unavailable('Enable external network operations in private owner policy first.')
         if name not in self.adapters:raise Unavailable('Requested workflow is not configured; use capability status.')
-        settings=dict(self.config.get('tools',{}).get(name,{}))
+        settings=self.research_settings() if name=='research.collect' else dict(self.config.get('tools',{}).get(name,{}))
         if settings.get('enabled') is not True:raise Unavailable('Tool disabled in owner configuration.')
         cap=action['limit']['maxOutputBytes'];settings['max_output_bytes']=min(settings.get('max_output_bytes',cap),cap)
         if action['limit'].get('maxTokens') is not None:settings['max_output_tokens']=min(settings.get('max_output_tokens',action['limit']['maxTokens']),action['limit']['maxTokens'])
         return self.adapters[name],args,settings
-    def context(self,action,reservation,settings,*,reconciliation=False):
+    def context(self,action,reservation,settings,*,reconciliation=False,parent_ctx=None):
         deadline=time.monotonic()+min(300,integer(action['limit']['maxDurationMs'])/1000)
         ctx=ToolContext(action_id=action['actionId'],run_id=action['runId'],reservation_id=reservation['reservationId'],config=settings,policy=self.config.get('policy',{}),workspace=self.workspace,secrets=self.secrets,transport=self.transport,state=self.journal,deadline=deadline,authorize=lambda:self.verify(action,reservation),cancelled=lambda:False if reconciliation else bool(self.journal.get(action['actionId'])['cancelled']) or self.runtime_stopped(action['runId']),job_id=action.get('jobId'))
+        if parent_ctx is not None:
+            native_authorize=ctx.authorize
+            def authorize():parent_ctx.check();native_authorize()
+            ctx.authorize=authorize;ctx.deadline=min(ctx.deadline,parent_ctx.deadline)
         ctx.transport=AuthorizedTransport(self.transport,ctx);return ctx
     def receipt(self,action,result,status='succeeded'):
+        try:return self._receipt(action,result,status)
+        except (TypeError,ValueError,RecursionError,OverflowError):
+            self.record_partial(action,result.usage)
+            return {'kind':'unknown','reason':'Provider output could not be represented; known usage was retained independently.'}
+    def _receipt(self,action,result,status='succeeded'):
         usage=result.usage
         if usage.cost_microusd is None:return {'kind':'unknown','reason':'Provider usage is not reconciled; reservation retained'}
         data={'data':dict(result.data),'artifacts':result.artifacts,'references':result.references,'nativeUsage':asdict(usage),'trust':'untrusted'}
-        receipt={'version':1,'actionId':action['actionId'],'status':status,'result':data,'usage':{'actualCharge':{'currency':'USD','micros':str(integer(usage.cost_microusd))},'provider':action['tool'],'accountRef':self.account,'externalEventId':usage.provider_request_id or action['actionId'],'billableFailure':status=='failed' and integer(usage.cost_microusd)>0,'provisional':usage.provisional,'evidenceRef':'tools-journal:'+action['actionId']}}
-        if len(canonical(receipt).encode())>integer(action['limit']['maxOutputBytes'])+8192:return {'kind':'unknown','reason':'Result exceeded bounded output; private usage retained for reconciliation'}
+        # A provider trace/request ID is supporting evidence, not necessarily a
+        # globally unique charge event (retrieval may also return another ID).
+        # Native request IDs remain in nativeUsage; financial idempotency binds
+        # this exact durable action throughout execution and reconciliation.
+        event_id=self.journal.billing_event(action['actionId'])
+        receipt={'version':1,'actionId':action['actionId'],'status':status,'result':data,'usage':{'actualCharge':{'currency':'USD','micros':str(integer(usage.cost_microusd))},'provider':action['tool'],'accountRef':self.account,'externalEventId':event_id,'billableFailure':status=='failed' and integer(usage.cost_microusd)>0,'provisional':usage.provisional,'evidenceRef':'tools-journal:'+action['actionId']}}
+        if len(canonical(receipt).encode())>integer(action['limit']['maxOutputBytes'])+8192:
+            self.record_partial(action,usage)
+            return {'kind':'unknown','reason':'Result exceeded bounded output; known usage was retained independently of presentation.'}
         return {'kind':'receipt','receipt':receipt}
-    def execute(self,payload):
+    def record_partial(self,action,usage):
+        """Known money survives oversized results/diagnostics and remains held."""
+        if usage.cost_microusd is None:return
+        envelope={'version':1,'actionId':action['actionId'],'status':'failed',
+                  'usage':{'actualCharge':{'currency':'USD','micros':str(integer(usage.cost_microusd))},
+                  'provider':action['tool'],'accountRef':self.account,'externalEventId':self.journal.billing_event(action['actionId']),
+                  'billableFailure':True,'provisional':True,'evidenceRef':'tools-journal:'+action['actionId']}}
+        reservation=json.loads(self.journal.get(action['actionId'])['reservation'])
+        try:self.economy.settle(reservation['reservationId'],envelope)
+        except Exception:pass  # The original reservation remains active for recovery.
+        units={key:value for key,value in islice(usage.units.items(),64) if isinstance(key,str) and len(key)<100 and type(value) is int and value>=0} if isinstance(usage.units,Mapping) else {}
+        native=Usage(usage.cost_microusd,units,
+                     usage.provider_request_id[:256] if isinstance(usage.provider_request_id,str) else None,True,
+                     {'reason':'Known subtotal retained; outcome/presentation requires reconciliation.'})
+        try:self.journal.update(action['actionId'],{'partial_usage':asdict(native)})
+        except ToolError:pass  # Native provider state and billing ID remain durable.
+    def execute(self,payload,*,_parent_ctx=None):
         action,reservation,business=self.normalize(payload);old=self.journal.get(action['actionId'])
+        if action['tool']=='research.collect':return self._research(action,reservation,business)
         completed=bool(old and old['result'] and json.loads(old['result']).get('kind')=='receipt')
         self.verify(action,reservation,completed=completed)
         row,fresh=self.journal.prepare(action,reservation,self.owner_fingerprint(action))
@@ -230,29 +314,26 @@ class IntegratedTools:
             if quote.paid and integer(quote.maximum_microusd)==0:raise ToolError('budget_limit','Paid execution requires a positive bounded quote.')
             if not row['started']:
                 self.economy.start(reservation['reservationId']);self.journal.save(action['actionId'],started=1)
-            ctx=self.context(action,reservation,settings);ctx.check();result=adapter.execute(args,ctx)
+            ctx=self.context(action,reservation,settings,parent_ctx=_parent_ctx);ctx.check();result=adapter.execute(args,ctx)
             outcome=self.receipt(action,result)
         except ToolError as exc:
             # Any dispatch or local mutation intent makes failure uncertain.
             state=self.journal.load(action['actionId'])
             if isinstance(exc,Uncertain) or state.get('external_intent') or state.get('local_intent') or exc.usage is None and self.journal.get(action['actionId'])['started']:
                 if exc.usage is not None and exc.usage.cost_microusd is not None:
-                    partial=self.receipt(action,ToolResult({'outcome':'uncertain'},usage=replace(exc.usage,provisional=True)),'failed')
-                    self.journal.update(action['actionId'],{'partial_usage':asdict(exc.usage)})
-                    if partial['kind']=='receipt':
-                        try:self.economy.settle(reservation['reservationId'],partial['receipt'])
-                        except ToolError:pass
+                    self.record_partial(action,exc.usage)
                 outcome={'kind':'unknown','reason':'Tool outcome requires reconciliation; no automatic duplicate effect'}
             else:outcome=self.receipt(action,ToolResult({'error':{'code':exc.code,'message':exc.message}},usage=exc.usage or Usage()),'failed')
         except Exception:outcome={'kind':'unknown','reason':'Tool interrupted; reconcile external effect and usage before retry'}
         self.journal.save(action['actionId'],status='unknown' if outcome['kind']=='unknown' else outcome['receipt']['status'],result=canonical(outcome))
         return self._business(outcome,business,reservation)
-    def reconcile(self,payload):
+    def reconcile(self,payload,*,_parent_ctx=None):
         if set(payload)=={'action_id'}:
             saved=self.journal.get(payload['action_id'])
             if saved is None:return {'state':'unknown','status':'unresolved','reason':'No durable execution journal proves this action'}
             action,reservation,business=json.loads(saved['action']),json.loads(saved['reservation']),True
         else:action,reservation,business=self.normalize(payload)
+        if action['tool']=='research.collect':return self._research(action,reservation,business,reconciliation=True)
         row=self.journal.get(action['actionId'])
         if row is None:return {'kind':'not_performed','evidenceRef':'tools-journal:never-dispatched:'+action['actionId']}
         if row['fingerprint']!=self.journal.fingerprint(action,reservation):raise ToolError('conflict','Reconciliation parameters differ from the original durable action.')
@@ -262,7 +343,7 @@ class IntegratedTools:
             if known['kind']=='receipt':return self._business(known,business,reservation)
         if row['status']=='prepared':return {'kind':'not_performed','evidenceRef':'tools-journal:prepared:'+action['actionId']}
         try:
-            adapter,args,settings=self._adapter(action);ctx=self.context(action,reservation,settings,reconciliation=True);result=adapter.reconcile(args,ctx)
+            adapter,args,settings=self._adapter(action);ctx=self.context(action,reservation,settings,reconciliation=True,parent_ctx=_parent_ctx);result=adapter.reconcile(args,ctx)
             if result.outcome=='completed' and result.result is not None:outcome=self.receipt(action,result.result)
             elif result.outcome=='not_executed':
                 self.journal.save(action['actionId'],status='prepared',result=None)
@@ -277,7 +358,72 @@ class IntegratedTools:
             r=outcome['receipt'];data=r['result']['data']
             if 'message_id' in data:data={**data,'delivery_state':'accepted'}
             return {'state':r['status'],'data':data,'status':r['status'],'result':data,'actual_micro_usd':integer(r['usage']['actualCharge']['micros']),'provisional':r['usage']['provisional'],'receipt':r}
-        return {'state':'unknown','status':'unresolved','reason':outcome.get('reason','Outcome unknown')}
+        return {'state':'unknown','status':'unresolved','reason':outcome.get('reason','Outcome unknown'),'data':outcome.get('data',{})}
+
+    def _research(self,action,reservation,business,*,reconciliation=False):
+        from .research_runtime import ChildExecutor,ResearchLease,WorkflowState,digest
+        old=self.journal.get(action['actionId'])
+        completed=bool(old and old['result'] and json.loads(old['result']).get('kind')=='receipt')
+        self.verify(action,reservation,completed=completed)
+        row,_=self.journal.prepare(action,reservation,self.owner_fingerprint(action))
+        if row['result'] and json.loads(row['result']).get('kind')=='receipt':
+            return self._business(json.loads(row['result']),business,reservation)
+        seconds=min(300,integer(action['limit']['maxDurationMs'])/1000)
+        try:lease=ResearchLease(self.journal,action['actionId'],seconds)
+        except ToolError:return self._business({'kind':'unknown','reason':'Research still has an active execution lease.','data':{'workflow_resumable':False}},business,reservation)
+        try:
+            # Admission may have waited while another worker committed a
+            # terminal result. Its receipt is immutable, including before an
+            # uncertain financial acknowledgement is retried.
+            row=self.journal.get(action['actionId'])
+            if row['result'] and json.loads(row['result']).get('kind')=='receipt':
+                return self._business(json.loads(row['result']),business,reservation)
+            adapter,args,settings=self._adapter(action)
+            ctx=self.context(action,reservation,settings,reconciliation=reconciliation)
+            ctx.state=WorkflowState(self.journal,lease)
+            authorize=ctx.authorize
+            def check():lease.check();authorize()
+            ctx.authorize=check;ctx.child_executor=ChildExecutor(self,action,reservation,ctx)
+            if reconciliation:
+                ready=ctx.child_executor.reconcile_pending()
+                recovered=adapter.reconcile(args,ctx)
+                if recovered.outcome=='completed' and recovered.result is not None:
+                    outcome=self.receipt(action,recovered.result)
+                else:
+                    progress=self.journal.load(action['actionId'])
+                    outcome={'kind':'unknown','reason':'Research needs an execution continuation; reconciliation did not generate content.',
+                             'data':{'workflow_resumable':ready,'progress_key':digest(progress.get('research_v2',{}))}}
+            else:
+                adapter.quote(args,settings)
+                ctx.check()
+                if not row['started']:
+                    authoritative=self.economy.reservation(reservation['reservationId'])
+                    if authoritative['state']=='reserved':self.economy.start(reservation['reservationId'])
+                    elif authoritative['state'] not in {'running','unknown'}:raise ToolError('authorization','Research parent no longer permits continuation.')
+                    if not lease.save(started=1):raise ToolError('authorization','Research execution was superseded before admission completed.')
+                if not lease.save(status='running',result=None):raise ToolError('authorization','Research execution was superseded before continuation.')
+                result=adapter.execute(args,ctx)
+                outcome=self.receipt(action,result)
+            if not lease.save(status='unknown' if outcome['kind']=='unknown' else outcome['receipt']['status'],result=canonical(outcome)):
+                return self._business({'kind':'unknown','reason':'Research execution was superseded before its result committed.'},business,reservation)
+            return self._business(outcome,business,reservation)
+        except ToolError as exc:
+            try:lease.check()
+            except ToolError:return self._business({'kind':'unknown','reason':'Research execution was superseded; its replacement owns progress.'},business,reservation)
+            terminal=exc.code in {'invalid_input','insufficient_evidence','quality_failed','invalid_synthesis','budget_limit','job_budget_exceeded','research_child_failed','unavailable'} and not isinstance(exc,Uncertain)
+            outcome=(self.receipt(action,ToolResult({'error':{'code':exc.code,'message':exc.message}},Usage()),'failed') if terminal else
+                     {'kind':'unknown','reason':'Research stopped with preserved stage receipts and reservations; reconcile before continuation.'})
+            if not lease.save(status='failed' if terminal else 'unknown',result=canonical(outcome)):
+                return self._business({'kind':'unknown','reason':'Research execution was superseded before its result committed.'},business,reservation)
+            return self._business(outcome,business,reservation)
+        except Exception:
+            try:lease.check()
+            except ToolError:return self._business({'kind':'unknown','reason':'Research execution was superseded; its replacement owns progress.'},business,reservation)
+            outcome={'kind':'unknown','reason':'Research interrupted; completed stages and all child liabilities remain recorded.'}
+            if not lease.save(status='unknown',result=canonical(outcome)):
+                return self._business({'kind':'unknown','reason':'Research execution was superseded before its result committed.'},business,reservation)
+            return self._business(outcome,business,reservation)
+        finally:lease.close()
     def artifact(self,path):
         data=self.workspace.read_bytes(path,max_bytes=1_000_000)
         return {'path':path,'content_base64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest()}

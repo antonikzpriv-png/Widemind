@@ -56,6 +56,7 @@ def test_two_customer_scopes_produce_distinct_real_artifacts_and_durable_child_r
             manifest = json.loads(app.workspace.read_bytes(data["evidence_manifest"]["artifact"]["path"]))
             assert data["quality"]["passed"] and all(data["checks"].values())
             assert content == data["document"]["content"]
+            assert content.startswith('> **OFFLINE CONTROLLED FIXTURE:**')
             assert customer in content.lower() and manifest["job_id"] == "customer-" + customer
             assert "Inferences and assumptions" in content and "Evidence and validation limits" in content
             assert manifest["evidence"]["sufficient"] and manifest["synthesis"]["sections"]

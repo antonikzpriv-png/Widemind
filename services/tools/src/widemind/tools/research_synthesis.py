@@ -47,7 +47,7 @@ def _identifier(value, name):
 
 def _encode(value):
     try:
-        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        encoded = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
         encoded.encode("utf-8")
         return encoded
     except (TypeError, ValueError, RecursionError, UnicodeError) as exc:

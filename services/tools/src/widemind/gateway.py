@@ -30,8 +30,9 @@ def default_adapters():
     from .tools.image_generation import ImageGenerationAdapter
     from .tools.publish import PublishAdapter
     from .tools.research import ResearchAdapter
+    from .tools.search import SearchAdapter
     return [AIAdapter(), BrowserAdapter(), CodeAdapter(), FilesAdapter(), GmailAdapter(),
-            GraphicsAdapter(), ImageGenerationAdapter(), PublishAdapter(), ResearchAdapter()]
+            GraphicsAdapter(), ImageGenerationAdapter(), PublishAdapter(), ResearchAdapter(), SearchAdapter()]
 
 
 class AuthorizedTransport:
