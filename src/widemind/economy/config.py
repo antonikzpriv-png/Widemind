@@ -38,8 +38,10 @@ class Settings:
             raise ValueError("Use a persistent economy database path")
         if self.stripe_mode not in {"test", "live"}:
             raise ValueError("WIDEMIND_STRIPE_MODE must be test or live")
-        if bool(self.runtime_auth_secret) != bool(self.runtime_tool_profiles):
-            raise ValueError("Runtime bridge requires both authorization secret and trusted tool profiles")
+        if not isinstance(self.runtime_tool_profiles, dict):
+            raise ValueError("Runtime tool profiles must be an object")
+        if self.runtime_tool_profiles and not self.runtime_auth_secret:
+            raise ValueError("Runtime tool profiles require a persistent authorization secret")
         if self.runtime_auth_secret:
             secret = self.runtime_auth_secret
             if not isinstance(secret, str) or not 32 <= len(secret) <= 512 or not secret.isascii() or any(c.isspace() for c in secret):

@@ -229,7 +229,7 @@ def test_runtime_routes_reject_agent_privilege_and_configuration_partial(setup):
     settings, service, client = setup
     for route, body in [('summary', {'runId': 'run'}), ('authorize', request()), ('seed', {'runId': 'run', 'mode': 'sandbox'})]:
         assert client.post('/v1/runtime/'+route, headers=headers(settings, 'agent'), json=body).status_code == 403
-    for values in ({'runtime_auth_secret': None}, {'runtime_tool_profiles': {}}, {'runtime_auth_secret': settings.gateway_token}):
+    for values in ({'runtime_auth_secret': None}, {'runtime_auth_secret': settings.gateway_token}, {'runtime_tool_profiles': []}):
         with pytest.raises(ValueError):
             replace(settings, **values)
     disabled = replace(settings, runtime_auth_secret=None, runtime_tool_profiles={})
@@ -373,3 +373,26 @@ def test_definitive_not_performed_closes_retired_profile_instead_of_renewing(set
     assert service.balance('run')['posted_micro_usd'] == 5_000_000
     assert service.balance('run')['reserved_micro_usd'] == 0
     assert service.reservation(reservation['reservationId'])['state'] == 'settled'
+
+
+def test_retire_all_profiles_keeps_persistent_key_and_reconciles_old_liability(setup):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    assert post(setup, 'verify', {'reservation': reservation, 'action': action(req), 'dispatch': True})['kind'] == 'verified'
+    reconciliation_only = replace(settings, runtime_tool_profiles={})
+    with TestClient(create_app(reconciliation_only)) as restarted:
+        auth = headers(settings)
+        assert restarted.app.state.runtime_bridge is not None
+        response = restarted.post('/v1/runtime/authorize', headers=auth, json=req)
+        assert response.status_code == 200 and response.json()['kind'] == 'unavailable'
+        response = restarted.post('/v1/runtime/verify', headers=auth, json={'reservation': reservation, 'action': action(req), 'dispatch': True})
+        assert response.status_code == 200 and response.json()['kind'] == 'unavailable'
+        response = restarted.post('/v1/runtime/verify', headers=auth, json={'reservation': reservation, 'action': action(req), 'dispatch': False})
+        assert response.status_code == 200 and response.json()['kind'] == 'verified'
+        charge = receipt(reservation, cost='6000000', event='old-provider-after-retirement')
+        response = restarted.post('/v1/runtime/settle', headers=auth, json={'reservation': reservation, 'receipt': charge})
+        assert response.status_code == 200 and response.json() == {'kind': 'settled'}
+    assert service.balance('run')['posted_micro_usd'] == -1000000
+    assert service.balance('run')['reserved_micro_usd'] == 0
