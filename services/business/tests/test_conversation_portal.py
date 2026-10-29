@@ -132,6 +132,44 @@ class ConversationPortalTests(unittest.TestCase):
         self.assertEqual(self.customer()['orders'], [])
         self.assertEqual(self.providers.payments, [])
 
+    def test_final_quote_admission_and_commit_share_one_write_transaction(self):
+        created = self.request()
+        proposal = self.proposal(created['conversationId'])
+        business = self.host.business('run-1')
+        checked = []
+        accept_locked = business._accept_locked
+        def observe_final_commit(*args, **kwargs):
+            self.assertTrue(business.store.db.in_transaction)
+            # A second process/connection cannot insert a new customer change or
+            # operator policy between final preflight and order creation.
+            with sqlite3.connect(self.env['WIDEMIND_BUSINESS_DB'], timeout=0,
+                                 isolation_level=None) as other:
+                with self.assertRaisesRegex(sqlite3.OperationalError, 'locked'):
+                    other.execute('BEGIN IMMEDIATE')
+            checked.append(True)
+            return accept_locked(*args, **kwargs)
+        business._accept_locked = observe_final_commit
+        try:
+            order_id = business.conversation_accept(conversation_id=created['conversationId'],
+                quote_id=proposal['quoteId'], version=proposal['version'], digest=proposal['digest'],
+                customer_email='controlled-customer@example.test', evidence_reference='fixture-exact-acceptance')
+            self.assertEqual(checked, [True])
+            self.assertEqual(business.order(order_id)['quote_id'], proposal['quoteId'])
+            self.assertEqual(business.conversation_view(created['conversationId'])['status'], 'accepted')
+        finally:
+            business.store.close()
+        with sqlite3.connect(self.env['WIDEMIND_BUSINESS_DB'], timeout=0,
+                             isolation_level=None) as other:
+            other.execute('BEGIN IMMEDIATE')
+            other.rollback()
+        # A later message is a new change request, rather than a rewrite of the
+        # already committed scope/price/version.
+        self.host.handle('/v1/message', {'runId':'run-1','token':'x'*43,
+            'messageId':'after-commit-change','body':'I would now like to discuss a different logo.'})
+        own = self.customer()
+        self.assertEqual(own['orders'][0]['orderId'], order_id)
+        self.assertEqual(own['quotes'][0]['digest'], proposal['digest'])
+
     def test_gmail_portal_access_is_private_single_issue_and_revocable(self):
         business = self.host.business('run-1')
         token = 'g'*43
