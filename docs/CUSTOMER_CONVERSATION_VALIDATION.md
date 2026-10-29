@@ -54,7 +54,9 @@ Post-acceptance changes/revisions and complaints require an audited operator rev
 
 Local wheel SHA256 values (build artifacts, not published releases):
 
-- Business `widemind-0.1.0-py3-none-any.whl`: `884b1e10be9275d2e2a8f7705b091a4e023b37ca4e11208a340864c32b00c9df`.
+- Business `widemind-0.1.0-py3-none-any.whl`: `11d3f4b3fe679ceea019f9d8e719b0471853943a1001013e79a802ea649994ca`.
 - Tools `widemind_tools-0.1.0-py3-none-any.whl`: `16cf2e189391b7acad955e51734af2feaa37dcb41f7ff494a1a22aa94b6599f8`.
 
 Git publication/PR status is checked separately from application qualification. The managed environment currently permits native Git but excludes `api.github.com`; no remote CI result or created PR is implied by these local tests.
+
+Packaging was qualified from a clean Git source export. A preliminary local wheel built in a reused setuptools directory still contained the renamed old conversation migration and was rejected by the separate installation check. The clean wheel above contains exactly nine SQL migrations, installs in a separate environment, initializes a new database successfully and matches all packaged Python/SQL files to source. No preliminary wheel was published as a release.
