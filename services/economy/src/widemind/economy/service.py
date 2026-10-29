@@ -487,7 +487,8 @@ class EconomyService:
                     raise EconomyError('provider_mismatch','Reservation belongs to another run')
                 final=reservation['state']=='settled'
                 cost=reservation['actual_micro_usd'] if final else reservation['provisional_micro_usd']
-            return {'run_id':payment['run_id'],'job_id':payment['job_id'],'payment_id':payment_id,'revision':payment['revision'],'mode':mode,'status':payment['status'],'currency':'USD','receipts_micro_usd':receipts,'refunds_micro_usd':refunds,'fees_micro_usd':fees,'earned_micro_usd':earned,'operating_cost_micro_usd':cost,'costs_final':final,'pending_liability_micro_usd':payment['pending_liability_micro_usd']}
+            revision=db.execute('SELECT COALESCE(MAX(sequence),0) FROM events WHERE run_id=?',(payment['run_id'],)).fetchone()[0]
+            return {'run_id':payment['run_id'],'job_id':payment['job_id'],'payment_id':payment_id,'revision':revision,'provider_revision':payment['revision'],'mode':mode,'status':payment['status'],'currency':'USD','receipts_micro_usd':receipts,'refunds_micro_usd':refunds,'fees_micro_usd':fees,'earned_micro_usd':earned,'operating_cost_micro_usd':cost,'costs_final':final,'pending_liability_micro_usd':payment['pending_liability_micro_usd']}
 
     def payments(self, run_id):
         with self._read() as db:

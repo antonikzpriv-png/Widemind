@@ -48,6 +48,8 @@ class PayPalPayments:
             url=urlsplit(test_api_base)
             if mode!='test' or not allow_test_endpoint or url.scheme not in ('http','https') or url.hostname not in ('localhost','127.0.0.1','::1') or url.username or url.password or url.path not in ('','/') or url.query or url.fragment:raise EconomyError('invalid_config','Custom PayPal endpoint requires explicit loopback test mode',422)
             self.base=test_api_base.rstrip('/')
+            if self._owns_client:
+                self.client.close();self.client=httpx.Client(trust_env=False)
         self._token=None;self._expires=0
     def close(self):
         if self._owns_client:self.client.close()
@@ -67,11 +69,13 @@ class PayPalPayments:
         except (ValueError,UnicodeDecodeError):raise EconomyError('invalid_provider_record','PayPal returned malformed JSON',502) from None
         if not isinstance(value,dict):raise EconomyError('invalid_provider_record','PayPal returned an invalid object',502)
         return value
-    def _request(self,method,path,*,body=None,key=None):
+    def _authenticate(self):
         if not self._token or self.clock()>=self._expires:
             token=self._http('POST','/v1/oauth2/token',auth=httpx.BasicAuth(self.client_id,self._secret),data={'grant_type':'client_credentials'})
             if not isinstance(token.get('access_token'),str) or type(token.get('expires_in')) is not int or token['expires_in']<=0:raise EconomyError('invalid_provider_record','PayPal returned an invalid access token',502)
             self._token=token['access_token'];self._expires=self.clock()+max(1,token['expires_in']-60)
+    def _request(self,method,path,*,body=None,key=None):
+        self._authenticate()
         headers={'Authorization':'Bearer '+self._token,'Content-Type':'application/json'}
         if key:headers['PayPal-Request-Id']=key
         return self._http(method,path,headers=headers,**({'json':body} if body is not None else {}))
@@ -79,8 +83,8 @@ class PayPalPayments:
     def verify_setup(self):
         # Token retrieval verifies configured OAuth credentials; merchant identity
         # is additionally checked against authenticated order payee records.
-        self._request('GET','/v1/identity/oauth2/userinfo?schema=paypalv1.1')
-        return {'provider':'paypal','account':self.account,'mode':self.mode,'oauth_verified':True,'merchant_verified_per_order':True}
+        self._authenticate()
+        return {'provider':'paypal','account':self.account,'mode':self.mode,'oauth_verified':True,'merchant_verification':'checked_against_each_authenticated_order'}
     def _key(self,*values):return hashlib.sha256(json.dumps(['paypal',self.account,self.mode,*values],separators=(',',':')).encode()).hexdigest()[:38]
     def _order(self,payment_id):
         order=self._request('GET',f'/v2/checkout/orders/{_id(payment_id)}')
@@ -104,7 +108,11 @@ class PayPalPayments:
         return self.service.finish_checkout('paypal',self.account,self.mode,request_id,payment_id,url)
     @_bounded_operation
     def capture(self,payment_id,request_id):
+        self.service.payment('paypal',self.account,self.mode,payment_id)
         order,_unit=self._order(payment_id)
+        with self.service._read() as db:
+            claims=list(db.execute('SELECT * FROM checkouts WHERE provider=? AND account=? AND mode=? AND payment_id=?',('paypal',self.account,self.mode,payment_id)))
+        if len(claims)!=1 or _amount(_unit.get('amount'))!=claims[0]['amount_micro_usd'] or _unit.get('custom_id')!=self._key(claims[0]['run_id'],claims[0]['request_id']):raise EconomyError('checkout_recovery_mismatch','PayPal order amount or request binding differs from durable checkout',409)
         if order.get('status')!='COMPLETED':
             if order.get('status')!='APPROVED':raise EconomyError('payment_not_approved','PayPal order must be approved before capture',409)
             self._request('POST',f'/v2/checkout/orders/{_id(payment_id)}/capture',body={},key=self._key('capture',payment_id,ident(request_id)))
@@ -121,7 +129,10 @@ class PayPalPayments:
             if capture.get('id')!=capture_id:raise EconomyError('invalid_provider_record','PayPal capture mismatch',502)
             related=capture.get('supplementary_data',{}).get('related_ids',{}).get('order_id')
             if related!=payment_id:raise EconomyError('invalid_provider_record','PayPal capture belongs to another order',502)
-            detail=capture.get('seller_receivable_breakdown',{});gross=_amount(detail.get('gross_amount',capture.get('amount')));fee=_amount(detail.get('paypal_fee',{'currency_code':'USD','value':'0.00'}));net=_amount(detail.get('net_amount',{'currency_code':'USD','value':f'{(gross-fee)//1_000_000}.{(gross-fee)%1_000_000//10000:02d}'}))
+            detail=capture.get('seller_receivable_breakdown',{})
+            if capture.get('status') not in ('COMPLETED','PARTIALLY_REFUNDED','REFUNDED'):continue
+            if not all(name in detail for name in ('gross_amount','paypal_fee','net_amount')):raise EconomyError('provider_billing_unconfirmed','PayPal gross, fee and net must be verified before credit',503)
+            gross=_amount(detail['gross_amount']);fee=_amount(detail['paypal_fee']);net=_amount(detail['net_amount'])
             if gross-fee!=net:raise EconomyError('invalid_provider_record','PayPal charge does not reconcile',502)
             settled=capture.get('status') in ('COMPLETED','PARTIALLY_REFUNDED','REFUNDED');gross_total+=gross if settled else 0
             transactions.append({'transaction_id':capture_id,'kind':'receipt','amount_micro_usd':gross,'fee_micro_usd':fee,'net_micro_usd':net,'currency':'USD','settled':settled,'native':{'provider':'paypal','status':capture.get('status'),'order_id':payment_id,'captured_at':capture.get('create_time')}})

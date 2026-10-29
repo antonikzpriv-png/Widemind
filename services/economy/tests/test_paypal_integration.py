@@ -11,7 +11,7 @@ from widemind.economy.config import Settings
 from widemind.economy.reconciliation import ReconciliationWorker
 
 class PayPalFixture:
-    def __init__(self):self.captured=False;self.refunded=False;self.keys=[];self.calls=[];self.bad_merchant=False;self.bad_signature=False
+    def __init__(self):self.captured=False;self.refunded=False;self.keys=[];self.calls=[];self.bad_merchant=False;self.bad_signature=False;self.unit=None
     def __call__(self,request):
         path=request.url.path;self.calls.append((request.method,path));amount=lambda value:{'currency_code':'USD','value':value}
         if path=='/v1/oauth2/token':return httpx.Response(200,json={'access_token':'fixture-oauth','expires_in':3600})
@@ -19,9 +19,9 @@ class PayPalFixture:
         if path=='/v1/identity/oauth2/userinfo':value={}
         elif path=='/v1/notifications/verify-webhook-signature':value={'verification_status':'FAILURE' if self.bad_signature else 'SUCCESS'}
         elif path=='/v2/checkout/orders' and request.method=='POST':
-            self.keys.append(request.headers['paypal-request-id']);value={'id':'ORDER_1','links':[{'rel':'approve','href':'https://www.sandbox.paypal.com/checkoutnow?token=ORDER_1'}]}
+            self.unit=json.loads(request.content)['purchase_units'][0];self.keys.append(request.headers['paypal-request-id']);value={'id':'ORDER_1','links':[{'rel':'approve','href':'https://www.sandbox.paypal.com/checkoutnow?token=ORDER_1'}]}
         elif path=='/v2/checkout/orders/ORDER_1/capture':self.captured=True;value={'id':'ORDER_1','status':'COMPLETED'}
-        elif path=='/v2/checkout/orders/ORDER_1':value={'id':'ORDER_1','intent':'CAPTURE','status':'COMPLETED' if self.captured else 'APPROVED','purchase_units':[{'payee':{'merchant_id':'WRONG' if self.bad_merchant else 'MERCHANT'},'payments':{'captures':[{'id':'CAPTURE_1'}] if self.captured else [],'refunds':[{'id':'REFUND_1'}] if self.refunded else []}}]}
+        elif path=='/v2/checkout/orders/ORDER_1':value={'id':'ORDER_1','intent':'CAPTURE','status':'COMPLETED' if self.captured else 'APPROVED','purchase_units':[{**(self.unit or {}),'payee':{'merchant_id':'WRONG' if self.bad_merchant else 'MERCHANT'},'payments':{'captures':[{'id':'CAPTURE_1'}] if self.captured else [],'refunds':[{'id':'REFUND_1'}] if self.refunded else []}}]}
         elif path=='/v2/payments/captures/CAPTURE_1':value={'id':'CAPTURE_1','status':'COMPLETED','supplementary_data':{'related_ids':{'order_id':'ORDER_1'}},'amount':amount('10.00'),'seller_receivable_breakdown':{'gross_amount':amount('10.00'),'paypal_fee':amount('0.50'),'net_amount':amount('9.50')}}
         elif path=='/v2/payments/captures/CAPTURE_1/refund':self.refunded=True;self.keys.append(request.headers['paypal-request-id']);value={'id':'REFUND_1','status':'COMPLETED'}
         elif path=='/v2/payments/refunds/REFUND_1':value={'id':'REFUND_1','status':'COMPLETED','amount':amount('2.00'),'links':[{'rel':'up','href':'https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE_1'}]}
@@ -82,3 +82,18 @@ def test_version_four_upgrade_preserves_charged_reservation_foreign_keys(tmp_pat
     assert recovered.balance('run')['posted_micro_usd']==4_999_900
     assert recovered.reservation(reservation['reservation_id'])['state']=='settled'
     assert audit_integrity(recovered,'run')['ok'] is True
+
+def test_snapshot_revision_includes_later_costs_and_earned_performance(tmp_path):
+    service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');service.register_payment('run','paypal','MERCHANT','ORDER_1','job','binding')
+    first=service.payment_snapshot('paypal','MERCHANT','test','ORDER_1')
+    service.record_earned_revenue('run',10,'job','verified-fixture-delivery','earned')
+    second=service.payment_snapshot('paypal','MERCHANT','test','ORDER_1')
+    assert second['provider_revision']==first['provider_revision']
+    assert second['revision']>first['revision'];assert second['earned_micro_usd']==10
+    assert service.balance('run')['posted_micro_usd']==5_000_000
+
+
+def test_unregistered_order_cannot_be_captured(tmp_path):
+    service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');fixture=PayPalFixture();provider=adapter(service,fixture)
+    with pytest.raises(EconomyError,match='not registered'):provider.capture('ORDER_1','capture')
+    assert fixture.calls==[]
