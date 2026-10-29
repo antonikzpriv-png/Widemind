@@ -275,3 +275,57 @@ def test_signed_64_bit_amounts_are_exact_above_javascript_safe_integer(tmp_path)
     assert MAX_MONEY == 9_223_372_036_854_775_807
     with pytest.raises(EconomyError):
         service.record_funding('run', MAX_MONEY + 1, 'owner_funding', 'too-large', 'too-large')
+
+
+def test_internal_settle_and_receipt_admission_are_one_rollback_unit(tmp_path):
+    service = EconomyService(tmp_path / 'receipt.sqlite')
+    service.create_run('run')
+    row = reserve(service, amount=1_000_000)
+    service.start_reservation(row['reservation_id'])
+    before = service.balance('run')
+    with pytest.raises(sqlite3.IntegrityError, match='does not match accounting'):
+        with service._tx() as connection:
+            service._settle(connection, row['reservation_id'], 300_000, 'fixture-provider', 'fixture-account',
+                            'rt:' + row['reservation_id'], {'actual_provider_event_id': 'fixture-event'})
+            connection.execute('INSERT INTO runtime_receipts VALUES(?,?,?,?,?,?,?,?)',
+                               ('wrong-provider', 'fixture-account', 'test', 'fixture-event', row['reservation_id'], 'fingerprint', '{"kind":"settled"}', row['created_at']))
+    assert service.balance('run') == before
+    assert service.charges('run') == []
+    assert service.reservation(row['reservation_id'])['state'] == 'running'
+    with service._tx() as connection:
+        result = service._settle(connection, row['reservation_id'], 300_000, 'fixture-provider', 'fixture-account',
+                                 'rt:' + row['reservation_id'], {'actual_provider_event_id': 'fixture-event'})
+        assert result['state'] == 'settled'
+        connection.execute('INSERT INTO runtime_receipts VALUES(?,?,?,?,?,?,?,?)',
+                           ('fixture-provider', 'fixture-account', 'test', 'fixture-event', row['reservation_id'], 'fingerprint', '{"kind":"settled"}', row['created_at']))
+    assert service.balance('run')['posted_micro_usd'] == 4_700_000
+    with service._tx() as connection:
+        for statement in ('UPDATE runtime_receipts SET event_id=\'other\'', 'DELETE FROM runtime_receipts',
+                          'INSERT OR REPLACE INTO runtime_receipts SELECT * FROM runtime_receipts'):
+            with pytest.raises(sqlite3.IntegrityError, match='immutable runtime receipt'):
+                connection.execute(statement)
+    assert audit_integrity(service, 'run')['ok'] is True
+
+
+def test_internal_settle_preserves_provisional_to_final_cost_true_up(tmp_path):
+    service = EconomyService(tmp_path / 'receipt.sqlite')
+    service.create_run('run')
+    row = reserve(service, amount=1_000_000)
+    service.start_reservation(row['reservation_id'])
+    stable_charge_id = 'rt:' + row['reservation_id']
+    with service._tx() as connection:
+        service._settle(connection, row['reservation_id'], 250_000, 'fixture-provider', 'fixture-account',
+                        stable_charge_id, {'actual_provider_event_id': 'provisional-event'}, 'unknown')
+        connection.execute('INSERT INTO runtime_receipts VALUES(?,?,?,?,?,?,?,?)',
+                           ('fixture-provider', 'fixture-account', 'test', 'provisional-event', row['reservation_id'], 'subtotal-fingerprint', '{"kind":"unavailable"}', row['created_at']))
+    assert service.balance('run')['posted_micro_usd'] == 4_750_000
+    assert service.balance('run')['reserved_micro_usd'] == 750_000
+    with service._tx() as connection:
+        service._settle(connection, row['reservation_id'], 400_000, 'fixture-provider', 'fixture-account',
+                        stable_charge_id, {'actual_provider_event_id': 'final-event'})
+        connection.execute('INSERT INTO runtime_receipts VALUES(?,?,?,?,?,?,?,?)',
+                           ('fixture-provider', 'fixture-account', 'test', 'final-event', row['reservation_id'], 'final-fingerprint', '{"kind":"settled"}', row['created_at']))
+    assert service.balance('run')['posted_micro_usd'] == 4_600_000
+    assert service.balance('run')['reserved_micro_usd'] == 0
+    assert service.reservation(row['reservation_id'])['actual_micro_usd'] == 400_000
+    assert audit_integrity(service, 'run')['ok'] is True

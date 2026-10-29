@@ -29,3 +29,13 @@ CREATE TRIGGER runtime_authorizations_no_update BEFORE UPDATE ON runtime_authori
 CREATE TRIGGER runtime_authorizations_no_delete BEFORE DELETE ON runtime_authorizations BEGIN SELECT RAISE(ABORT,'immutable runtime authorization'); END;
 CREATE TRIGGER runtime_authorizations_no_replace BEFORE INSERT ON runtime_authorizations WHEN EXISTS(SELECT 1 FROM runtime_authorizations WHERE reservation_id=NEW.reservation_id) OR EXISTS(SELECT 1 FROM runtime_authorizations WHERE run_id=NEW.run_id AND action_id=NEW.action_id) BEGIN SELECT RAISE(ABORT,'immutable runtime authorization'); END;
 CREATE TRIGGER runtime_authorizations_binding_guard BEFORE INSERT ON runtime_authorizations WHEN NOT EXISTS(SELECT 1 FROM reservations r JOIN runs u ON u.run_id=r.run_id WHERE r.reservation_id=NEW.reservation_id AND r.run_id=NEW.run_id AND r.action_id=NEW.action_id AND r.provider=NEW.provider AND r.account=NEW.account AND u.mode=NEW.mode) BEGIN SELECT RAISE(ABORT,'runtime authorization does not match accounting reservation'); END;
+CREATE TABLE runtime_receipts (
+ provider TEXT NOT NULL, account TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('test','live')),
+ event_id TEXT NOT NULL, reservation_id TEXT NOT NULL REFERENCES reservations(reservation_id),
+ fingerprint TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+ PRIMARY KEY(provider,account,mode,event_id)
+);
+CREATE TRIGGER runtime_receipts_no_update BEFORE UPDATE ON runtime_receipts BEGIN SELECT RAISE(ABORT,'immutable runtime receipt'); END;
+CREATE TRIGGER runtime_receipts_no_delete BEFORE DELETE ON runtime_receipts BEGIN SELECT RAISE(ABORT,'immutable runtime receipt'); END;
+CREATE TRIGGER runtime_receipts_no_replace BEFORE INSERT ON runtime_receipts WHEN EXISTS(SELECT 1 FROM runtime_receipts WHERE provider=NEW.provider AND account=NEW.account AND mode=NEW.mode AND event_id=NEW.event_id) BEGIN SELECT RAISE(ABORT,'immutable runtime receipt'); END;
+CREATE TRIGGER runtime_receipts_binding_guard BEFORE INSERT ON runtime_receipts WHEN NOT EXISTS(SELECT 1 FROM reservations r JOIN runs u ON u.run_id=r.run_id WHERE r.reservation_id=NEW.reservation_id AND r.provider=NEW.provider AND r.account=NEW.account AND u.mode=NEW.mode) BEGIN SELECT RAISE(ABORT,'runtime receipt does not match accounting reservation'); END;

@@ -315,59 +315,62 @@ class EconomyService:
             return self._reservation(db, reservation_id)
 
     def settle(self, reservation_id, actual_micro_usd, provider, account, external_charge_id, usage=None, outcome='succeeded'):
+        with self._tx() as db:
+            return self._settle(db, reservation_id, actual_micro_usd, provider, account, external_charge_id, usage, outcome)
+
+    def _settle(self, db, reservation_id, actual_micro_usd, provider, account, external_charge_id, usage=None, outcome='succeeded'):
         ident(provider); ident(account); ident(external_charge_id)
         usage_json = encode(usage or {})
         if outcome not in ('succeeded', 'failed', 'unknown'):
             raise EconomyError('invalid_outcome', 'Invalid provider outcome', 422)
         if actual_micro_usd is not None:
             money(actual_micro_usd)
-        with self._tx() as db:
-            row = self._reservation(db, reservation_id)
-            if (row['provider'], row['account']) != (provider, account):
-                raise EconomyError('provider_mismatch', 'Charge must belong to the reserved provider/account')
-            if row['state'] == 'cancelled':
-                raise EconomyError('closed_reservation', 'Reservation was cancelled before dispatch')
-            run = self._run(db, row['run_id'])
-            old = db.execute('SELECT * FROM charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
-            if old:
-                if (old['reservation_id'], old['amount_micro_usd'], old['usage'], old['outcome']) != (reservation_id, actual_micro_usd, usage_json, outcome):
-                    raise EconomyError('idempotency_conflict', 'External charge already recorded differently')
-                return row
-            if row['state'] == 'settled':
-                raise EconomyError('closed_reservation', 'Charge reconciled; use a compensating correction')
-            if actual_micro_usd is None or outcome == 'unknown':
-                # Verified billable partial work is a liability even while the outcome is unknown.
-                # Keep the unused cap reserved; a subtotal never authorizes a retry.
-                if actual_micro_usd is not None:
-                    previous = db.execute('SELECT * FROM provisional_charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
-                    own = db.execute('SELECT * FROM provisional_charges WHERE reservation_id=?', (reservation_id,)).fetchone()
-                    if (previous and previous['reservation_id'] != reservation_id) or (own and own['external_charge_id'] != external_charge_id):
-                        raise EconomyError('idempotency_conflict', 'Provisional charge is bound to another attempt')
-                    if actual_micro_usd < row['provisional_micro_usd']:
-                        raise EconomyError('invalid_subtotal', 'A partial charge cannot decrease; reconcile the final total')
-                    delta = actual_micro_usd - row['provisional_micro_usd']
-                    if delta:
-                        self._entry(db, row['run_id'], 'operating_charge', -delta, external_charge_id,
-                                    {'reservation_id': reservation_id, 'provider': provider, 'account': account, 'provisional': True, 'usage': usage or {}})
-                    db.execute('INSERT INTO provisional_charges VALUES(?,?,?,?,?,?) ON CONFLICT(provider,account,mode,external_charge_id) DO UPDATE SET amount_micro_usd=excluded.amount_micro_usd',
-                               (provider, account, run['mode'], external_charge_id, reservation_id, actual_micro_usd))
-                    db.execute('UPDATE reservations SET provisional_micro_usd=? WHERE reservation_id=?', (actual_micro_usd, reservation_id))
-                db.execute("UPDATE reservations SET state='unknown',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
-                self._event(db, row['run_id'], 'economy.cost_unknown', {'reservation_id': reservation_id, 'provider': provider,
-                            'account': account, 'external_charge_id': external_charge_id, 'reported_subtotal_micro_usd': actual_micro_usd, 'usage': usage or {}})
-                return self._reservation(db, reservation_id)
-            provisional = db.execute('SELECT * FROM provisional_charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
-            own_provisional = db.execute('SELECT * FROM provisional_charges WHERE reservation_id=?', (reservation_id,)).fetchone()
-            if (provisional and provisional['reservation_id'] != reservation_id) or (own_provisional and own_provisional['external_charge_id'] != external_charge_id):
-                raise EconomyError('idempotency_conflict', 'Partial charge belongs to another provider attempt')
-            db.execute('INSERT INTO charges VALUES(?,?,?,?,?,?,?,?)',
-                       (provider, account, run['mode'], external_charge_id, reservation_id, actual_micro_usd, usage_json, outcome))
-            eid = self._entry(db, row['run_id'], 'operating_charge', -(actual_micro_usd-row['provisional_micro_usd']), external_charge_id,
-                             {'provider': provider, 'account': account, 'reservation_id': reservation_id, 'usage': usage or {}, 'outcome': outcome})
-            db.execute("UPDATE reservations SET state='settled',actual_micro_usd=?,updated_at=? WHERE reservation_id=?", (actual_micro_usd, now(), reservation_id))
-            self._event(db, row['run_id'], 'economy.charge_settled', {'entry_id': eid, 'reservation_id': reservation_id,
-                        'actual_micro_usd': actual_micro_usd, 'overage_micro_usd': max(0, actual_micro_usd-row['amount_micro_usd'])})
+        row = self._reservation(db, reservation_id)
+        if (row['provider'], row['account']) != (provider, account):
+            raise EconomyError('provider_mismatch', 'Charge must belong to the reserved provider/account')
+        if row['state'] == 'cancelled':
+            raise EconomyError('closed_reservation', 'Reservation was cancelled before dispatch')
+        run = self._run(db, row['run_id'])
+        old = db.execute('SELECT * FROM charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
+        if old:
+            if (old['reservation_id'], old['amount_micro_usd'], old['usage'], old['outcome']) != (reservation_id, actual_micro_usd, usage_json, outcome):
+                raise EconomyError('idempotency_conflict', 'External charge already recorded differently')
+            return row
+        if row['state'] == 'settled':
+            raise EconomyError('closed_reservation', 'Charge reconciled; use a compensating correction')
+        if actual_micro_usd is None or outcome == 'unknown':
+            # Verified billable partial work is a liability even while the outcome is unknown.
+            # Keep the unused cap reserved; a subtotal never authorizes a retry.
+            if actual_micro_usd is not None:
+                previous = db.execute('SELECT * FROM provisional_charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
+                own = db.execute('SELECT * FROM provisional_charges WHERE reservation_id=?', (reservation_id,)).fetchone()
+                if (previous and previous['reservation_id'] != reservation_id) or (own and own['external_charge_id'] != external_charge_id):
+                    raise EconomyError('idempotency_conflict', 'Provisional charge is bound to another attempt')
+                if actual_micro_usd < row['provisional_micro_usd']:
+                    raise EconomyError('invalid_subtotal', 'A partial charge cannot decrease; reconcile the final total')
+                delta = actual_micro_usd - row['provisional_micro_usd']
+                if delta:
+                    self._entry(db, row['run_id'], 'operating_charge', -delta, external_charge_id,
+                                {'reservation_id': reservation_id, 'provider': provider, 'account': account, 'provisional': True, 'usage': usage or {}})
+                db.execute('INSERT INTO provisional_charges VALUES(?,?,?,?,?,?) ON CONFLICT(provider,account,mode,external_charge_id) DO UPDATE SET amount_micro_usd=excluded.amount_micro_usd',
+                           (provider, account, run['mode'], external_charge_id, reservation_id, actual_micro_usd))
+                db.execute('UPDATE reservations SET provisional_micro_usd=? WHERE reservation_id=?', (actual_micro_usd, reservation_id))
+            db.execute("UPDATE reservations SET state='unknown',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
+            self._event(db, row['run_id'], 'economy.cost_unknown', {'reservation_id': reservation_id, 'provider': provider,
+                        'account': account, 'external_charge_id': external_charge_id, 'reported_subtotal_micro_usd': actual_micro_usd, 'usage': usage or {}})
             return self._reservation(db, reservation_id)
+        provisional = db.execute('SELECT * FROM provisional_charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
+        own_provisional = db.execute('SELECT * FROM provisional_charges WHERE reservation_id=?', (reservation_id,)).fetchone()
+        if (provisional and provisional['reservation_id'] != reservation_id) or (own_provisional and own_provisional['external_charge_id'] != external_charge_id):
+            raise EconomyError('idempotency_conflict', 'Partial charge belongs to another provider attempt')
+        db.execute('INSERT INTO charges VALUES(?,?,?,?,?,?,?,?)',
+                   (provider, account, run['mode'], external_charge_id, reservation_id, actual_micro_usd, usage_json, outcome))
+        eid = self._entry(db, row['run_id'], 'operating_charge', -(actual_micro_usd-row['provisional_micro_usd']), external_charge_id,
+                         {'provider': provider, 'account': account, 'reservation_id': reservation_id, 'usage': usage or {}, 'outcome': outcome})
+        db.execute("UPDATE reservations SET state='settled',actual_micro_usd=?,updated_at=? WHERE reservation_id=?", (actual_micro_usd, now(), reservation_id))
+        self._event(db, row['run_id'], 'economy.charge_settled', {'entry_id': eid, 'reservation_id': reservation_id,
+                    'actual_micro_usd': actual_micro_usd, 'overage_micro_usd': max(0, actual_micro_usd-row['amount_micro_usd'])})
+        return self._reservation(db, reservation_id)
 
     def charges(self, run_id):
         """Verified final charges and known partial liabilities, never estimated costs."""
