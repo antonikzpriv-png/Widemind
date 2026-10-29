@@ -28,7 +28,7 @@ economy.create_run("your-funded-run", opening_micro_usd=5_000_000,
 
 `initialize_run` is an alias with the same signature. An identical repeat is idempotent; another opening amount or mode is rejected. The opening grant is labelled owner support, never customer revenue. A configured bank/Stripe cash account and actual funding must back a live run; a local opening record does not move money at a payment processor.
 
-Create one request/worker-local `EconomyService` connection. Close it when done. Use private local SQLite storage, its WAL/shm files, consistent SQLite backups, OS resource limits, and a supervisor. Do not copy a live WAL database's main file alone. Mode is pinned at the database and run level. A `StripeClient(mode="test")` can only fund an `EconomyService(mode="test")`; test receipts are never live credit. Demo fixtures remain a separate explicit module.
+Create one request/worker-local `EconomyService` connection. Close it when done. Use private local SQLite storage, its WAL/shm files, consistent SQLite backups, OS resource limits, and a supervisor. Do not copy a live WAL database's main file alone. Mode is pinned at the database and run level. A `StripeClient(mode="test")` can only fund an `EconomyService(mode="test")`; test receipts are never live credit. Stripe secret/restricted credential prefixes must match the configured live/test mode before a network write is possible. Nonstandard fictional keys are accepted only with an explicitly injected offline transport; a contradictory standard key is always rejected. Demo fixtures remain a separate explicit module.
 
 ## Exact financial behavior
 

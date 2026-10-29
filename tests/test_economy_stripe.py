@@ -287,6 +287,28 @@ class StripeTests(unittest.TestCase):
                 self.inspect()
         self.assertEqual(len(self.transport.calls),2)
 
+    def test_credential_mode_conflicts_fail_before_any_checkout_post(self):
+        for mode,key in (("test","sk_live_OFFLINE_CONTRADICTION"),
+                         ("test","rk_live_OFFLINE_CONTRADICTION"),
+                         ("live","sk_test_OFFLINE_CONTRADICTION"),
+                         ("live","rk_test_OFFLINE_CONTRADICTION")):
+            with self.subTest(mode=mode,key_prefix=key[:8]),self.assertRaises(ValueError):
+                client=StripeClient(api_key=key,webhook_secret="whsec_OFFLINE_FIXTURE",mode=mode,
+                    success_url="https://merchant.example.invalid/complete",cancel_url="https://merchant.example.invalid/cancel",
+                    transport=self.transport)
+                client.create_checkout(run_id="r",job_id="j",action_id="a",amount_micro_usd=2000000)
+        self.assertEqual(self.transport.calls,[])
+
+    def test_real_transport_requires_mode_pinned_key_but_fixture_transport_is_explicit(self):
+        kwargs={"api_key":"FICTIONAL_OFFLINE_KEY","webhook_secret":"whsec_OFFLINE_FIXTURE","mode":"test",
+                "success_url":"https://merchant.example.invalid/complete","cancel_url":"https://merchant.example.invalid/cancel"}
+        with self.assertRaises(ValueError):
+            StripeClient(**kwargs)
+        StripeClient(**kwargs,transport=self.transport)
+        for mode,key in (("test","rk_test_OFFLINE_FIXTURE"),("live","sk_live_OFFLINE_FIXTURE")):
+            StripeClient(**{**kwargs,"api_key":key,"mode":mode},transport=self.transport)
+        self.assertEqual(self.transport.calls,[])
+
 
 if __name__ == "__main__":
     unittest.main()

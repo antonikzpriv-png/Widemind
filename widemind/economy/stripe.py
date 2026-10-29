@@ -106,6 +106,19 @@ class StripeClient:
             raise ValueError("Stripe mode must be live or test")
         if not isinstance(api_key, str) or not api_key or any(c.isspace() for c in api_key):
             raise ValueError("Stripe API credential is required")
+        # Stripe mode is chosen by the credential, not a request flag. Reject a
+        # contradictory key before any POST can create a real Checkout session.
+        key_mode = next((candidate for candidate in ("live", "test")
+                         if api_key.startswith((f"sk_{candidate}_", f"rk_{candidate}_"))), None)
+        if key_mode is not None:
+            if key_mode != mode:
+                raise ValueError("Stripe credential prefix contradicts configured mode")
+            if api_key in {f"sk_{key_mode}_", f"rk_{key_mode}_"}:
+                raise ValueError("Stripe API credential is incomplete")
+        elif transport is None:
+            # Fictional opaque keys are usable only with an explicitly injected
+            # offline transport; the real network path requires a mode-pinned key.
+            raise ValueError("Stripe network credentials require an explicit sk_/rk_ live/test prefix")
         if not isinstance(webhook_secret, str) or not webhook_secret or any(c.isspace() for c in webhook_secret):
             raise ValueError("Stripe webhook secret is required")
         self.mode, self.clock = mode, clock
