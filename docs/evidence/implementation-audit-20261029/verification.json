@@ -1,0 +1,370 @@
+{
+  "auditedBaseline": "332d0cecc4fc1e4f11558079c84d45883af48eda",
+  "validatedSourceSha": "9678b7a409166c05fdce334a84441ccfa8a3bc08",
+  "verifiedAtUtc": "2026-10-29T16:43:20.296154+00:00",
+  "findingsCorrected": 9,
+  "checks": {
+    "node": {
+      "passed": 64,
+      "failed": 0,
+      "format": true,
+      "typecheck": true,
+      "build": true
+    },
+    "economy": {
+      "passed": 382,
+      "failed": 0
+    },
+    "tools": {
+      "passed": 360,
+      "skipped": 11,
+      "subtestsPassed": 75
+    },
+    "business": {
+      "passed": 75,
+      "failed": 0
+    },
+    "standalone": {
+      "passed": 348,
+      "skipped": 9,
+      "subtestsPassed": 75
+    },
+    "compiledSmoke": {
+      "passed": true,
+      "mode": "explicit zero-cost local demonstration"
+    },
+    "foundationBrowser": {
+      "passed": true,
+      "profile": "demo",
+      "desktopAndPhone": true,
+      "realFormLoginCreateResumePause": true,
+      "operatorEventForm": true,
+      "workerHealth": true,
+      "pageErrors": []
+    },
+    "integratedBrowser": {
+      "passed": true,
+      "externalPayment": "explicit local PayPal protocol fixture; no actual payment",
+      "actualServices": [
+        "economy",
+        "tools",
+        "business"
+      ],
+      "persistentWorker": true,
+      "hardWorkerRestart": true,
+      "publicHeadquartersWired": true,
+      "publicFinancialRunPinned": true,
+      "browserCustomerAndOperator": true,
+      "customerIsolation": true,
+      "privateDelivery": true,
+      "artifact": "svg-graphic.svg",
+      "queuedCaptureAndRefundEvents": true,
+      "providerEffects": {
+        "orders": 1,
+        "captured": 1,
+        "refunds": 1
+      },
+      "financialBeforeRefund": {
+        "currency": "USD",
+        "openingCreditMicros": "5000000",
+        "postedMicros": "6900000",
+        "reservedMicros": "0",
+        "holdsMicros": "0",
+        "spendableMicros": "6900000",
+        "customerReceiptsMicros": "2000000",
+        "earnedRevenueMicros": "2000000",
+        "operatingChargesMicros": "0",
+        "processorFeesMicros": "100000",
+        "refundsMicros": "0",
+        "adjustmentsMicros": "0",
+        "ownerFundingMicros": "0",
+        "subsidiesMicros": "0",
+        "mode": "sandbox",
+        "asOf": "2026-10-29T16:36:34.958002+00:00"
+      },
+      "financial": {
+        "currency": "USD",
+        "openingCreditMicros": "5000000",
+        "postedMicros": "4900000",
+        "reservedMicros": "0",
+        "holdsMicros": "0",
+        "spendableMicros": "4900000",
+        "customerReceiptsMicros": "2000000",
+        "earnedRevenueMicros": "2000000",
+        "operatingChargesMicros": "0",
+        "processorFeesMicros": "100000",
+        "refundsMicros": "2000000",
+        "adjustmentsMicros": "0",
+        "ownerFundingMicros": "0",
+        "subsidiesMicros": "0",
+        "mode": "sandbox",
+        "asOf": "2026-10-29T16:36:36.536630+00:00"
+      }
+    },
+    "pipCheck": {
+      "economy": true,
+      "tools": true,
+      "business": true,
+      "standalone": true
+    },
+    "npmAudit": {
+      "vulnerabilities": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "dependencies": {
+        "prod": 1,
+        "dev": 4,
+        "optional": 0,
+        "peer": 0,
+        "peerOptional": 0,
+        "total": 4
+      }
+    },
+    "pythonAdvisoryScans": {
+      "economy": {
+        "knownAdvisoryIds": [],
+        "packages": [
+          {
+            "name": "annotated-doc",
+            "version": "0.0.5"
+          },
+          {
+            "name": "annotated-types",
+            "version": "0.8.0"
+          },
+          {
+            "name": "anyio",
+            "version": "4.15.1"
+          },
+          {
+            "name": "certifi",
+            "version": "2026.10.23"
+          },
+          {
+            "name": "click",
+            "version": "8.5.0"
+          },
+          {
+            "name": "fastapi",
+            "version": "0.162.0"
+          },
+          {
+            "name": "h11",
+            "version": "0.16.0"
+          },
+          {
+            "name": "httpcore",
+            "version": "1.0.9"
+          },
+          {
+            "name": "httpx",
+            "version": "0.28.1"
+          },
+          {
+            "name": "idna",
+            "version": "3.20"
+          },
+          {
+            "name": "iniconfig",
+            "version": "2.3.1"
+          },
+          {
+            "name": "opentelemetry-api",
+            "version": "1.45.1"
+          },
+          {
+            "name": "packaging",
+            "version": "26.3"
+          },
+          {
+            "name": "pip",
+            "version": "26.2.2"
+          },
+          {
+            "name": "pluggy",
+            "version": "1.7.0"
+          },
+          {
+            "name": "pydantic",
+            "version": "2.14.1"
+          },
+          {
+            "name": "pydantic-core",
+            "version": "2.50.1"
+          },
+          {
+            "name": "pygments",
+            "version": "2.21.0"
+          },
+          {
+            "name": "pytest",
+            "version": "9.2.0"
+          },
+          {
+            "name": "starlette",
+            "version": "1.10.0"
+          },
+          {
+            "name": "typing-extensions",
+            "version": "4.16.0"
+          },
+          {
+            "name": "typing-inspection",
+            "version": "0.4.4"
+          },
+          {
+            "name": "uvicorn",
+            "version": "0.54.0"
+          },
+          {
+            "name": "widemind",
+            "skip_reason": "Dependency not found on PyPI and could not be audited: widemind (0.2.0)"
+          }
+        ]
+      },
+      "tools": {
+        "knownAdvisoryIds": [],
+        "packages": [
+          {
+            "name": "cffi",
+            "version": "2.1.1"
+          },
+          {
+            "name": "cryptography",
+            "version": "50.0.2"
+          },
+          {
+            "name": "iniconfig",
+            "version": "2.3.1"
+          },
+          {
+            "name": "packaging",
+            "version": "26.3"
+          },
+          {
+            "name": "pip",
+            "version": "26.2.2"
+          },
+          {
+            "name": "pluggy",
+            "version": "1.7.0"
+          },
+          {
+            "name": "pycparser",
+            "version": "3.12"
+          },
+          {
+            "name": "pygments",
+            "version": "2.21.0"
+          },
+          {
+            "name": "pytest",
+            "version": "9.2.0"
+          },
+          {
+            "name": "widemind-tools",
+            "skip_reason": "Dependency not found on PyPI and could not be audited: widemind-tools (0.1.0)"
+          }
+        ]
+      },
+      "business": {
+        "knownAdvisoryIds": [],
+        "packages": [
+          {
+            "name": "pip",
+            "version": "26.2.2"
+          },
+          {
+            "name": "widemind",
+            "skip_reason": "Dependency not found on PyPI and could not be audited: widemind (0.1.0)"
+          }
+        ]
+      },
+      "standalone": {
+        "knownAdvisoryIds": [],
+        "packages": [
+          {
+            "name": "cffi",
+            "version": "2.1.1"
+          },
+          {
+            "name": "cryptography",
+            "version": "50.0.2"
+          },
+          {
+            "name": "greenlet",
+            "version": "3.5.6"
+          },
+          {
+            "name": "iniconfig",
+            "version": "2.3.1"
+          },
+          {
+            "name": "packaging",
+            "version": "26.3"
+          },
+          {
+            "name": "pillow",
+            "version": "13.0.0"
+          },
+          {
+            "name": "pip",
+            "version": "26.2.2"
+          },
+          {
+            "name": "playwright",
+            "version": "1.64.1"
+          },
+          {
+            "name": "pluggy",
+            "version": "1.7.0"
+          },
+          {
+            "name": "pycparser",
+            "version": "3.12"
+          },
+          {
+            "name": "pyee",
+            "version": "14.0.0"
+          },
+          {
+            "name": "pygments",
+            "version": "2.21.0"
+          },
+          {
+            "name": "pytest",
+            "version": "9.2.0"
+          },
+          {
+            "name": "typing-extensions",
+            "version": "4.16.0"
+          },
+          {
+            "name": "widemind",
+            "skip_reason": "Dependency not found on PyPI and could not be audited: widemind (0.1.0)"
+          }
+        ]
+      }
+    }
+  },
+  "screenshotSha256": {
+    "headquarters-phone.png": "e306df53d1c5485431b46255f44c9cc215ae8fbd4efb54d645b8738232066a28",
+    "customer-delivery-phone.png": "b20ce8da14ef1e9c1f92a35c9a97af1255ba4e6facbec5baefa131d8107938c5",
+    "integrations-phone.png": "03a6517601d07ed1eb7876de9d0bb58c8553f99ee8954177dc896bfbcf8ef13a"
+  },
+  "evidenceScope": "Disposable synthetic requests and local PayPal protocol fixtures; screenshots precede final refund.",
+  "liveCredentialsConfigured": false,
+  "livePaymentVerified": false,
+  "survivalPilotCompleted": false,
+  "limitations": [
+    "Live accounts, verified funding, hosting/domain and outbound provider access are not configured.",
+    "Automated PayPal dispute/chargeback ingestion is unavailable; unsupported events require operator review.",
+    "Optional browser/code isolation prerequisites are unavailable and skipped explicitly.",
+    "Tariff estimates may remain provisional pending actual invoice reconciliation."
+  ]
+}

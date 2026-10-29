@@ -37,6 +37,8 @@ The integration gate creates an actual local SVG and downloads it through the cu
 
 All external PayPal responses are explicitly local protocol fixtures. Fixture accounting reconciles $5 opening + $2 receipt − $0.10 fee = $6.90 before refund, then $4.90 after the externally initiated $2 refund. Gross earned performance is separate from refunded cash; this is not actual revenue or profit. The local services, worker, databases, SVG, portal and browser download are real application behavior.
 
+Screenshots precede the final external refund; the machine-readable result retains both balances.
+
 Synthetic [machine-readable evidence](evidence/implementation-audit-20261029/verification.json) records the validated source SHA, results and screenshot hashes. Screenshots contain only disposable fixture data: [headquarters](evidence/implementation-audit-20261029/headquarters-phone.png), [customer delivery](evidence/implementation-audit-20261029/customer-delivery-phone.png) and [operator integrations](evidence/implementation-audit-20261029/integrations-phone.png).
 
 ## Remaining boundaries
