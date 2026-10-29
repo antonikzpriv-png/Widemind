@@ -1,6 +1,6 @@
 # Customer conversation qualification
 
-Base: integrated main `e70220f1f7b38771cf619fba1d1241298763b922`. Qualified implementation: `45268caa4f5db84df23bccf1217c97977a8f3453`; subsequent documentation/environment-example edits do not change the qualified application behavior.
+Initial base: integrated main `e70220f1f7b38771cf619fba1d1241298763b922`. The branch also incorporates newer main `5b6a1a180d853cc30f8ae98913b4ab7df5b7314a` and preserves its discovery module. Qualified implementation: `80f837ab9d0f2aa83391171b89b5081fd9b620c0`; subsequent report-only edits do not change application behavior.
 
 The change extends the existing PayPal business service, Gmail transport and customer portal. It adds no accounting authority, runtime scheduler, provider account or live payment claim. Stripe deployment/source paths and their credential families remain separate.
 
@@ -8,13 +8,14 @@ The change extends the existing PayPal business service, Gmail transport and cus
 
 | Check | Result |
 | --- | --- |
-| `npm run check` with the configured root fixture Python | **240 Node tests passed**, zero failed/skipped; formatting, TypeScript and compiled build passed |
+| `npm run check` with the configured root fixture Python | **243 Node tests passed**, zero failed/skipped; formatting, TypeScript and compiled build passed |
 | Integrated economy service suite | **414 passed**, one existing Starlette HTTPX deprecation warning |
 | Integrated tools service suite | **397 passed, 81 subtests passed, 11 optional prerequisite skips** |
-| Final business service suite | **139 tests passed**, including 28 realistic conversation scenarios and nine actual host/portal cases |
+| Final business service suite | **190 tests passed**, including 28 realistic conversation scenarios, nine actual host/portal cases, discovery and combined-budget/provenance regressions |
 | `npm run integration:browser` | Passed against actual local economy/tools/business processes, persistent worker and desktop/phone Chromium forms; explicit local PayPal protocol fixture; one capture and one refund reconciled, worker hard restart, customer isolation and private SVG delivery verified |
 | Preserved Stripe `npm run business:demo -- --fixtures` | Three scenarios passed: interrupted delivery/reconciliation, pause/unavailable tools and real central-ledger exhaustion; synthetic provider/customer/payment data only |
-| Business/tools wheels | Both built successfully; conversation controller/schema/poller/migration 9 and Gmail wrapper included |
+| Preserved discovery `npm run discovery:demo -- --fixtures --browser` | Passed with actual local services and independent worker restarts, one bounded prototype, lifetime allowance exhaustion, source provenance and desktop/phone private operator views; no real market/demand claim |
+| Business/tools wheels | Both built successfully; conversation controller/schema/poller/migration 9 and Gmail wrapper included. Separately installed business wheel initializes all nine business migrations, preserves Discovery and matches all Python/SQL files to source |
 | Source/format checks | Python compilation, Prettier and `git diff --check` passed |
 
 Commands used in the checkout:
@@ -39,6 +40,8 @@ Unknown model, reply and follow-up outcomes recover through explicit observation
 
 Independent review reproduced and repaired stale-context/policy acceptance races, reminted Gmail portal links, complaint/conflict holds that could clear on a later question, opt-out during capability admission, missing Gmail follow-up headers, large Unicode context and legacy structured-quote compatibility. Tests now verify a single write transaction across final acceptance, persistent evidence-backed operator holds, unchanged accepted orders, exact full stored terms and no stale-version commitment. No additional reproducible issue remained in these reviewed paths after repairs; this is bounded local qualification, not a guarantee about arbitrary future integrations.
 
+The newer discovery main was merged into the feature branch before publication. Conflict resolution retains both event families, host/operator routes, provenance handling and reservation/reconciliation methods. Conversation order admission includes existing discovery allocations when enforcing the experiment allowance. Structured model result wrappers remain usable without granting authority to source/payment claims inside model data. The conversation migration is numbered 9 after Discovery's migration 8; no existing applied migration was rewritten.
+
 The actual Gmail OAuth/MIME adapter runs through the integrated tools gateway with controlled HTTP fixtures for inbox normalization, account/header constraints, threaded replies, exact reservations and send replay. Model interpretations in scenario tests are explicit structured fixtures; they validate application decisions and boundaries rather than measuring a live model's language quality.
 
 ## External setup and scope limits
@@ -51,7 +54,7 @@ Post-acceptance changes/revisions and complaints require an audited operator rev
 
 Local wheel SHA256 values (build artifacts, not published releases):
 
-- Business `widemind-0.1.0-py3-none-any.whl`: `bb33776a26caa09254fa3d9c58dde7699212b99a8798b76cd12a23b0c4ab1b4a`.
+- Business `widemind-0.1.0-py3-none-any.whl`: `884b1e10be9275d2e2a8f7705b091a4e023b37ca4e11208a340864c32b00c9df`.
 - Tools `widemind_tools-0.1.0-py3-none-any.whl`: `16cf2e189391b7acad955e51734af2feaa37dcb41f7ff494a1a22aa94b6599f8`.
 
 Git publication/PR status is checked separately from application qualification. The managed environment currently permits native Git but excludes `api.github.com`; no remote CI result or created PR is implied by these local tests.
