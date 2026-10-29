@@ -334,7 +334,19 @@ class EconomyService:
 
     def _settle(self, db, reservation_id, actual_micro_usd, provider, account, external_charge_id, usage=None, outcome='succeeded'):
         ident(provider); ident(account); ident(external_charge_id)
-        usage_json = encode(usage or {})
+        # Optional diagnostics cannot prevent a known provider bill from posting.
+        # Reserve space for journal envelopes as well as the usage object itself.
+        # Retain the original encoding only to recognize legacy, larger receipts.
+        original_usage_json = None
+        if usage is None:
+            usage = {}
+        try:
+            original_usage_json = encode(usage)
+            if not isinstance(usage, dict) or len(original_usage_json.encode()) > 16_384:
+                raise ValueError('Oversized or non-object usage')
+        except (EconomyError, ValueError):
+            usage = {'usage_omitted': True, 'reason': 'invalid_or_oversized_provider_diagnostics'}
+        usage_json = encode(usage)
         if outcome not in ('succeeded', 'failed', 'unknown'):
             raise EconomyError('invalid_outcome', 'Invalid provider outcome', 422)
         if actual_micro_usd is not None:
@@ -347,7 +359,8 @@ class EconomyService:
         run = self._run(db, row['run_id'])
         old = db.execute('SELECT * FROM charges WHERE provider=? AND account=? AND mode=? AND external_charge_id=?', (provider, account, run['mode'], external_charge_id)).fetchone()
         if old:
-            if (old['reservation_id'], old['amount_micro_usd'], old['usage'], old['outcome']) != (reservation_id, actual_micro_usd, usage_json, outcome):
+            if ((old['reservation_id'], old['amount_micro_usd'], old['outcome']) != (reservation_id, actual_micro_usd, outcome)
+                    or old['usage'] not in (usage_json, original_usage_json)):
                 raise EconomyError('idempotency_conflict', 'External charge already recorded differently')
             return row
         if row['state'] == 'settled':
