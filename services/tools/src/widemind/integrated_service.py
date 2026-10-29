@@ -227,7 +227,12 @@ class IntegratedTools:
         self.journal.save(action['actionId'],status='unknown' if outcome['kind']=='unknown' else outcome['receipt']['status'],result=canonical(outcome))
         return self._business(outcome,business,reservation)
     def reconcile(self,payload):
-        action,reservation,business=self.normalize(payload);row=self.journal.get(action['actionId'])
+        if set(payload)=={'action_id'}:
+            saved=self.journal.get(payload['action_id'])
+            if saved is None:return {'state':'unknown','status':'unresolved','reason':'No durable execution journal proves this action'}
+            action,reservation,business=json.loads(saved['action']),json.loads(saved['reservation']),True
+        else:action,reservation,business=self.normalize(payload)
+        row=self.journal.get(action['actionId'])
         if row is None:return {'kind':'not_performed','evidenceRef':'tools-journal:never-dispatched:'+action['actionId']}
         self.verify(action,reservation,completed=bool(row['result'] and json.loads(row['result']).get('kind')=='receipt'))
         if row['result'] is not None:
@@ -249,8 +254,8 @@ class IntegratedTools:
             self.economy.settle(reservation['reservationId'],outcome['receipt'])
             r=outcome['receipt'];data=r['result']['data']
             if 'message_id' in data:data={**data,'delivery_state':'accepted'}
-            return {'status':r['status'],'result':data,'actual_micro_usd':integer(r['usage']['actualCharge']['micros']),'provisional':r['usage']['provisional'],'receipt':r}
-        return {'status':'unresolved','reason':outcome.get('reason','Outcome unknown')}
+            return {'state':r['status'],'data':data,'status':r['status'],'result':data,'actual_micro_usd':integer(r['usage']['actualCharge']['micros']),'provisional':r['usage']['provisional'],'receipt':r}
+        return {'state':'unknown','status':'unresolved','reason':outcome.get('reason','Outcome unknown')}
     def artifact(self,path):
         data=self.workspace.read_bytes(path,max_bytes=1_000_000)
         return {'path':path,'content_base64':base64.b64encode(data).decode(),'sha256':hashlib.sha256(data).hexdigest()}

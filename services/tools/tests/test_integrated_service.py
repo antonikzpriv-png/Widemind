@@ -91,3 +91,11 @@ class OwnerSecretIntegration(unittest.TestCase):
             self.assertIsNone(secret.get('WIDEMIND_FIXTURE_PROVIDER_KEY'))
             secret.set('provider-key','fixture-only-rotated-value')
             self.assertEqual(secret.get('provider-key'),'fixture-only-rotated-value')
+
+class BusinessProtocolIntegration(unittest.TestCase):
+    def test_business_outcome_shape_and_action_only_reconciliation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);econ=Economy();config={'control_dir':str(root/'control'),'workspace_dir':str(root/'workspace'),'tools':{'files':{'enabled':True}},'policy':{'profile':'development','allow_external_effects':False}}
+            tools=IntegratedTools(config,econ,secrets=Secrets());a=action();econ.add(a)
+            payload={'run_id':a['runId'],'action_id':a['actionId'],'job_id':'job-1','action':'files','arguments':a['input'],'reservation_id':'reservation-1','maximum_micro_usd':0}
+            result=tools.execute(payload);self.assertEqual(result['state'],'succeeded');self.assertEqual(result['data']['operation'],'create');self.assertEqual(tools.reconcile({'action_id':a['actionId']}),result);self.assertEqual(len(econ.starts),1)
