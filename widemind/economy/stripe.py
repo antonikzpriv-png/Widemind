@@ -147,13 +147,19 @@ class StripeClient:
         # urllib handlers preserve inherited proxy configuration and default CA trust.
         opener = build_opener(_NoRedirect())
         request = Request(url, data=body, headers=headers, method=method)
+        deadline = time.monotonic()+timeout
         try:
             with opener.open(request, timeout=timeout) as response:
-                chunks, size, deadline = [], 0, time.monotonic() + timeout
+                chunks, size = [], 0
                 reader = getattr(response, "read1", response.read)
                 while True:
-                    if time.monotonic() > deadline:
+                    remaining = deadline-time.monotonic()
+                    if remaining <= 0:
                         raise StripeError("Stripe response deadline exceeded")
+                    raw = getattr(getattr(response,"fp",None),"raw",None)
+                    sock = getattr(raw,"_sock",None)
+                    if sock is not None:
+                        sock.settimeout(remaining)
                     chunk = reader(min(65536, MAX_BODY + 1 - size))
                     if not chunk:
                         break

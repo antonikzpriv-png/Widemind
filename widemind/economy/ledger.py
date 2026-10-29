@@ -13,6 +13,7 @@ import sqlite3
 import time
 
 from widemind.business.contracts import Outcome
+from .stripe import StripeError
 
 
 def _json(value):
@@ -392,6 +393,9 @@ class EconomyService:
                 result = self.stripe.create_checkout(run_id=run_id,job_id=job_id,action_id=action_id,
                     amount_micro_usd=amount_micro_usd,currency=currency)
                 outcome = Outcome("succeeded",result)
+        except StripeError as exc:
+            outcome = (Outcome("unknown",reason="Stripe outcome uncertain; reconcile before retry") if exc.uncertain else
+                       Outcome("failed",reason="Stripe rejected this request before completion; inspect configured account and terms"))
         except Exception:
             outcome = Outcome("unknown",reason="Stripe outcome uncertain; reconcile before retry")
         return self._save_link(action_id,outcome)

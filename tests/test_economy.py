@@ -348,6 +348,19 @@ class EconomyTests(unittest.TestCase):
         self.assertEqual(len(calls),7)
         self.assertTrue(all(value.startswith("cs_pending_") for value in calls))
 
+    def test_confirmed_checkout_rejection_is_failed_but_inprogress_remains_unknown(self):
+        from widemind.economy.stripe import StripeError
+        def rejected(**kwargs):
+            raise StripeError("sanitized fixture rejection",status=401)
+        self.stripe.create_checkout=rejected
+        self.assertEqual(self.link().state,"failed")
+        self.assertEqual(self.service.reconcile(action_id="link").state,"failed")
+        def inprogress(**kwargs):
+            raise StripeError("sanitized fixture conflict",status=409)
+        self.stripe.create_checkout=inprogress
+        result=self.service.payment_link(run_id="run",job_id="job",action_id="another-link",amount_micro_usd=2000000,currency="USD")
+        self.assertEqual(result.state,"unknown")
+
 
 if __name__ == "__main__":
     unittest.main()
