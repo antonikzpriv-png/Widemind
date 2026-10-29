@@ -1,7 +1,7 @@
 /* WideMind's UI reads persisted facts and submits explicit operator commands.
    Credentials live only in this module's memory; customer data never becomes HTML. */
 const $ = (selector, parent = document) => parent.querySelector(selector);
-const state = { token: '', epoch: 0, data: null, view: 'overview', pending: new Set(), refreshing: false, refreshPromise: null, refreshQueued: false, refreshGeneration: 0, dialogEpoch: 0 };
+const state = { token: '', epoch: 0, data: null, view: 'overview', pageRequest: null, pending: new Set(), refreshing: false, refreshPromise: null, refreshQueued: false, refreshGeneration: 0, dialogEpoch: 0 };
 const labels = { overview: ['The next useful step.', 'A current view of opportunities, commitments, and measured results.'], opportunities: ['Opportunities', 'Assess what is feasible, review scoped offers, and record actual customer acceptance.'], orders: ['Orders & delivery', 'Keep the agreed work, payment, and delivery obligation visible throughout fulfillment.'], finances: ['Money, with context.', 'Cash received is different from earned revenue. Open commitments and measured costs stay visible.'], recovery: ['Activity & recovery', 'Inspect unresolved effects before retrying. An uncertain outcome is not permission to send or spend again.'], settings: ['The operating boundaries.', 'Configure the business goals and capabilities. Accounts and provider secrets stay in the control plane.'] };
 
 function node(tag, attrs = {}, children = []) {
@@ -138,7 +138,7 @@ function renderPublicActivity(target, activities) {
 }
 
 function lock(reason = '') {
-  state.token = ''; state.data = null; state.epoch += 1; state.refreshing = false; state.refreshPromise = null; state.refreshQueued = false; state.refreshGeneration += 1;
+  state.token = ''; state.data = null; state.pageRequest = null; state.epoch += 1; state.refreshing = false; state.refreshPromise = null; state.refreshQueued = false; state.refreshGeneration += 1;
   for (const controller of state.pending) controller.abort();
   state.pending.clear();
   if ($('#detail-dialog').open) $('#detail-dialog').close();
@@ -166,7 +166,13 @@ async function readConsole(focus) {
     do {
       state.refreshQueued = false;
       const generation = state.refreshGeneration;
-      const data = await api('/api/v1/console');
+      const query = state.pageRequest ? `?${new URLSearchParams(state.pageRequest)}` : '';
+      let data;
+      try { data = await api(`/api/v1/console${query}`); }
+      catch (error) {
+        if (epoch === state.epoch && generation !== state.refreshGeneration) { state.refreshQueued = true; continue; }
+        throw error;
+      }
       if (epoch !== state.epoch) return;
       // A command completed after this read began. Its caller must await a newer
       // read, and the older snapshot must not replace the current controls.
@@ -200,20 +206,34 @@ function renderView(focus = false) {
   if (focus) view.focus({ preventScroll: true });
 }
 function overviewView(view) {
-  const data = state.data, orders = list(data.orders), opportunities = list(data.opportunities), summary = data.summary || {};
+  const data = state.data, orders = list(data.orders), summary = data.summary || {};
   const obligations = orders.filter(order => order.delivery_obligation_open);
   const unresolved = list(data.effects).filter(effect => ['unknown', 'running'].includes(effect.state));
   view.append(heading(...labels.overview, button('Add opportunity +', opportunityDialog, 'primary')));
-  view.append(node('div', { class: 'metric-grid' }, [metric('Spendable credit', money(summary.spendable_micro_usd), 'From the configured economy'), metric('Cash received', money(summary.receipts_micro_usd), 'Before refunds and processor fees'), metric('Earned revenue', money(summary.earned_micro_usd), 'Confirmed fulfillment, economy-owned'), metric('Open commitments', String(obligations.length), `${unresolved.length} unresolved external ${unresolved.length === 1 ? 'effect' : 'effects'}`)]));
-  const stages = [['Opportunities', opportunities.filter(item => !['completed', 'ordered', 'expired'].includes(item.status)).length], ['Awaiting payment', orders.filter(item => ['accepted', 'awaiting_payment'].includes(item.status)).length], ['In fulfillment', orders.filter(item => ['funded', 'ready', 'delivered', 'payment_hold'].includes(item.status)).length], ['Completed', orders.filter(item => item.status === 'completed').length]];
-  const pipeline = node('div', { class: 'pipeline' }, stages.map(([name, count]) => node('div', { class: 'pipeline-step' }, [node('strong', { text: count }), node('span', { text: name })])));
-  const left = panel('Delivery commitments', obligations.length ? `${obligations.length} open` : 'No open obligations', orderList(obligations.slice(0, 6)));
+  const openCount = reportedCount('open_commitments'), unresolvedCount = reportedCount('unresolved_effects');
+  view.append(node('div', { class: 'metric-grid' }, [metric('Spendable credit', money(summary.spendable_micro_usd), 'From the configured economy'), metric('Cash received', money(summary.receipts_micro_usd), 'Before refunds and processor fees'), metric('Earned revenue', money(summary.earned_micro_usd), 'Confirmed fulfillment, economy-owned'), metric('Open commitments', openCount ?? 'Unavailable', unresolvedCount == null ? 'Unresolved effect total unavailable' : `${unresolvedCount} unresolved external ${unresolvedCount === 1 ? 'effect' : 'effects'}`)]));
+  const stages = [['All opportunities', reportedCount('opportunities')], ['Awaiting payment', reportedCount('awaiting_payment')], ['In fulfillment', reportedCount('in_fulfillment')], ['Completed', reportedCount('completed_orders')]];
+  const pipeline = node('div', { class: 'pipeline' }, stages.map(([name, count]) => node('div', { class: 'pipeline-step' }, [node('strong', { text: count ?? 'Unavailable' }), node('span', { text: name })])));
+  const left = panel('Delivery commitments', openCount === 0 ? 'No open obligations' : openCount == null ? 'Total unavailable' : `${openCount} open · up to six from the current order page`, orderList(obligations.slice(0, 6)));
   const right = panel('The pipeline', 'Persisted records', node('div', { class: 'panel-body' }, [pipeline, node('p', { class: 'form-note', text: 'Waiting does not invoke paid reasoning. New events and scheduled wakeups advance work when the run permits it.' })]));
   view.append(node('div', { class: 'split-grid' }, [left, right]));
-  if (unresolved.length) view.append(node('div', { class: 'notice' }, [`${unresolved.length} external outcomes need attention. `, button('Inspect recovery →', () => { state.view = 'recovery'; renderView(true); }, 'small')]));
+  if (unresolvedCount > 0 || unresolved.length) view.append(node('div', { class: 'notice' }, [`${unresolvedCount ?? 'Some'} external outcomes need attention across the run. `, button('Inspect recovery →', () => { state.view = 'recovery'; renderView(true); }, 'small')]));
+}
+function reportedCount(name) { const value = state.data.counts?.[name]; return Number.isSafeInteger(value) && value >= 0 ? value : null; }
+function paginationControls(collection, filtered = false) {
+  const page = state.data.pagination?.[collection];
+  if (!page || !Number.isSafeInteger(page.total) || !Number.isSafeInteger(page.offset) || !Number.isSafeInteger(page.limit) || page.limit < 1) return node('p', { class: 'form-note', text: `Only the returned ${collection} are shown. ${filtered ? 'Search and status filters apply to these records.' : ''}` });
+  const count = list(state.data[collection]).length;
+  const range = count ? `${page.offset + 1}–${page.offset + count}` : '0';
+  const browse = offset => { state.pageRequest = { collection, offset }; state.refreshGeneration += 1; return refresh({ focus: true }); };
+  return node('div', { class: 'form-actions', role: 'group', 'aria-label': `${human(collection)} pages` }, [
+    node('span', { class: 'form-note', text: `Showing ${range} of ${page.total} ${collection}.${filtered ? ' Search and status filters apply only to this page.' : ''}` }),
+    button('← Previous', () => browse(Math.max(0, page.offset - page.limit)), 'quiet small', { disabled: !page.has_previous, 'aria-label': `Previous ${collection} page` }),
+    button('Next →', () => browse(page.offset + page.limit), 'quiet small', { disabled: !page.has_more, 'aria-label': `Next ${collection} page` })
+  ]);
 }
 function panel(title, note, contents) { return node('section', { class: 'panel' }, [node('div', { class: 'panel-heading' }, [node('h2', { text: title }), node('small', { text: note })]), contents]); }
-function orderList(orders) { return orders.length ? node('ul', { class: 'record-list' }, orders.map(order => node('li', {}, buttonRecord(subject(order), `${customer(order.customer_id)} · ${order.delivery_due_at ? when(order.delivery_due_at) : 'No funded deadline'}`, order.status, () => orderDialog(order.id))))) : node('div', { class: 'panel-body' }, [empty('No open delivery commitments.')]); }
+function orderList(orders) { return orders.length ? node('ul', { class: 'record-list' }, orders.map(order => node('li', {}, buttonRecord(subject(order), `${customer(order.customer_id)} · ${order.delivery_due_at ? when(order.delivery_due_at) : 'No funded deadline'}`, order.status, () => orderDialog(order.id))))) : node('div', { class: 'panel-body' }, [empty('No open delivery commitments in the current order page.')]); }
 function buttonRecord(title, subtitle, status, handler) { return node('button', { class: 'record-button', type: 'button', onclick: handler }, [node('span', {}, [node('span', { class: 'record-title', text: title }), node('span', { class: 'record-sub', text: subtitle })]), pill(status)]); }
 function table(headers, rows) { return node('div', { class: 'table-wrap', role: 'region', 'aria-label': headers[0], tabindex: '0' }, [node('table', { class: 'data-table' }, [node('thead', {}, [node('tr', {}, headers.map(label => node('th', { scope: 'col', text: label })))]), node('tbody', {}, rows)])]); }
 function td(content, className = '') { return node('td', { class: className }, content instanceof Node ? [content] : [String(content ?? '—')]); }
@@ -232,13 +252,13 @@ function opportunitiesView(view) {
   const results = node('div');
   const filters = filterBar('Search opportunities or customers', [...new Set(records.map(item => item.status))].sort(), (query, status, count) => {
     const filtered = records.filter(item => (!status || item.status === status) && `${subject(item)} ${item.service} ${customer(item.customer_id)}`.toLowerCase().includes(query));
-    count.textContent = `${filtered.length} ${filtered.length === 1 ? 'opportunity' : 'opportunities'}`;
+    count.textContent = `${filtered.length} ${filtered.length === 1 ? 'opportunity' : 'opportunities'} on this page`;
     replace(results, filtered.length ? table(['Opportunity', 'Customer', 'Stage', 'Expected cost', 'Quote'], filtered.map(item => {
       const quote = quotes.find(value => value.opportunity_id === item.id), assessment = parse(item.assessment);
       return node('tr', {}, [td(recordLink(subject(item), `${human(item.service)} · ${human(item.origin)} · ${short(item.id)}`, () => opportunityDetails(item))), td(customer(item.customer_id)), td(pill(item.status)), td(money(assessment.expected_cost_micro_usd), 'money'), td(quote ? money(quote.price_micro_usd) : 'Not proposed', 'money')]);
     })) : empty('No opportunities match this view. Add a real request or targeted opportunity to begin.'));
   });
-  view.append(filters.element, results); filters.update();
+  view.append(paginationControls('opportunities', true), filters.element, results); filters.update();
 }
 function ordersView(view) {
   const records = list(state.data.orders); view.append(heading(...labels.orders));
@@ -246,10 +266,10 @@ function ordersView(view) {
   const results = node('div');
   const filters = filterBar('Search orders or customers', [...new Set(records.map(item => item.status))].sort(), (query, status, count) => {
     const filtered = records.filter(item => (!status || item.status === status) && `${subject(item)} ${customer(item.customer_id)} ${item.id}`.toLowerCase().includes(query));
-    count.textContent = `${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'}`;
+    count.textContent = `${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'} on this page`;
     replace(results, filtered.length ? table(['Order', 'Stage', 'Cached cash received', 'Cached earned', 'Payment observed', 'Delivery due'], filtered.map(item => { const payment = parse(item.payment); return node('tr', {}, [td(recordLink(subject(item), `${customer(item.customer_id)} · ${short(item.id)}`, () => orderDialog(item.id))), td(pill(item.status)), td(money(payment.receipts_micro_usd), 'money'), td(money(payment.earned_micro_usd), 'money'), td(paymentObserved(item)), td(when(item.delivery_due_at))]); })) : empty('No orders match this view. Accepted scoped offers become orders.'));
   });
-  view.append(filters.element, results); filters.update();
+  view.append(paginationControls('orders', true), filters.element, results); filters.update();
 }
 function paymentObserved(order) { return order.payment_observed_at == null ? 'Observation time unavailable' : when(order.payment_observed_at); }
 function paymentSnapshotNotice() {
@@ -261,9 +281,10 @@ function financesView(view) {
   view.append(heading(...labels.finances));
   view.append(node('div', { class: 'metric-grid' }, [metric('Cash received', money(summary.receipts_micro_usd), 'Verified settlement, not a delivery claim'), metric('Earned revenue', money(summary.earned_micro_usd), 'Recognized by the economy after fulfillment'), metric('Operating charges', money(summary.operating_cost_micro_usd), 'Actual or explicitly provisional costs'), metric('Spendable credit', money(summary.spendable_micro_usd), 'After spending reservations and holds')]));
   const details = [['Opening credit', summary.opening_micro_usd], ['Owner funding', summary.owner_funding_micro_usd], ['Refunds / chargebacks', summary.refunds_micro_usd], ['Processor fees', summary.fees_micro_usd], ['Reserved spending', summary.reserved_micro_usd], ['Customer / refund holds', summary.holds_micro_usd], ['Subsidies', summary.subsidies_micro_usd]];
-  view.append(node('div', { class: 'split-grid' }, [panel('Funding and exposure', 'USD · exact micro-USD records', node('div', { class: 'panel-body' }, [facts(details.map(([name, value]) => [name, money(value)]))])), panel('Delivery obligations', `${orders.filter(item => item.delivery_obligation_open).length} open`, node('div', { class: 'panel-body' }, [node('p', { class: 'financial-note', text: 'Receipts for unfinished work may be held or refundable. Cancelling an order does not issue a refund or erase the original costs.' }), node('p', { class: 'financial-note', text: 'Unavailable values are not zero. The economy defines the operating-cost boundary and remains authoritative for every amount.' })]))]));
+  const openCount = reportedCount('open_commitments');
+  view.append(node('div', { class: 'split-grid' }, [panel('Funding and exposure', 'USD · exact micro-USD records', node('div', { class: 'panel-body' }, [facts(details.map(([name, value]) => [name, money(value)]))])), panel('Delivery obligations', openCount == null ? 'Total unavailable' : `${openCount} open across the run`, node('div', { class: 'panel-body' }, [node('p', { class: 'financial-note', text: 'Receipts for unfinished work may be held or refundable. Cancelling an order does not issue a refund or erase the original costs.' }), node('p', { class: 'financial-note', text: 'Unavailable values are not zero. The economy defines the operating-cost boundary and remains authoritative for every amount.' })]))]));
   const rows = orders.map(order => { const payment = parse(order.payment); return node('tr', {}, [td(recordLink(subject(order), short(order.id), () => orderDialog(order.id))), td(pill(payment.status || 'unavailable')), td(money(payment.receipts_micro_usd), 'money'), td(money(payment.refunds_micro_usd), 'money'), td(money(payment.earned_micro_usd), 'money'), td(paymentObserved(order)), td(order.delivery_obligation_open ? 'Open commitment' : 'No open delivery obligation')]); });
-  view.append(node('h2', { class: 'subheading', text: 'Order-level records' }), paymentSnapshotNotice(), rows.length ? table(['Order', 'Cached payment', 'Cached receipts', 'Cached refunds', 'Cached earned', 'Payment observed', 'Obligation'], rows) : empty('No order-level financial records yet.'));
+  view.append(node('h2', { class: 'subheading', text: 'Order-level records' }), paymentSnapshotNotice(), paginationControls('orders'), rows.length ? table(['Order', 'Cached payment', 'Cached receipts', 'Cached refunds', 'Cached earned', 'Payment observed', 'Obligation'], rows) : empty('No order-level financial records in this page.'));
 }
 function recoveryView(view) {
   view.append(heading(...labels.recovery));
@@ -279,9 +300,9 @@ function recoveryView(view) {
     effectsContainer.append(node('article', { class: 'event-block' }, [node('div', { class: 'event-block-head' }, [node('h3', { text: `${human(effect.action)} · ${effect.provider || 'provider'}` }), pill(effect.state)]), node('p', { text: effect.reason || 'Inspect the durable provider record before deciding what to do next.' }), node('span', { class: 'record-sub', text: `Action ${effect.id} · attempt ${Number.isInteger(effect.attempt) ? effect.attempt + 1 : 'unavailable'}` }), actions]));
   }
   if (!effects.length) effectsContainer.append(empty('No unresolved or failed external effects in the returned records.'));
-  view.append(effectsContainer);
+  view.append(paginationControls('effects'), effectsContainer);
   const events = list(state.data.events).slice().sort((a, b) => (b.due_at || 0) - (a.due_at || 0));
-  view.append(node('h2', { class: 'subheading', text: 'Durable event queue' }), events.length ? table(['Event', 'State', 'Scheduled wakeup', 'Result / blocker'], events.map(event => node('tr', {}, [td(node('span', {}, [node('span', { class: 'record-title', text: human(event.kind) }), node('span', { class: 'record-sub', text: short(event.id) })])), td(pill(event.state)), td(when(event.due_at)), td(event.error || (event.state === 'done' ? 'Recorded' : 'Waiting for the worker'))]))) : empty('No persisted events yet.'));
+  view.append(node('h2', { class: 'subheading', text: 'Durable event queue' }), paginationControls('events'), events.length ? table(['Event', 'State', 'Scheduled wakeup', 'Result / blocker'], events.map(event => node('tr', {}, [td(node('span', {}, [node('span', { class: 'record-title', text: human(event.kind) }), node('span', { class: 'record-sub', text: short(event.id) })])), td(pill(event.state)), td(when(event.due_at)), td(event.error || (event.state === 'done' ? 'Recorded' : 'Waiting for the worker'))]))) : empty('No persisted events in this page.'));
 }
 function field(label, input, note, full = false) {
   const id = input.id || `field-${crypto.randomUUID()}`; input.id = id;

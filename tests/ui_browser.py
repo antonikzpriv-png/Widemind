@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 import shutil
 import time
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import sync_playwright
 
@@ -36,15 +36,17 @@ def fixture():
         "effects": [{"id": "c" * 40, "job_id": "b" * 40, "action": "gmail.send", "provider": "tools", "state": "unknown", "attempt": 0, "reason": "Delivery response lost"}],
         "events": [{"id": "d" * 40, "kind": "advance", "state": "blocked", "due_at": NOW, "error": "external outcome uncertain"}],
         "integrations": [{"name": "Gmail", "status": "test", "detail": "Explicit fixture adapter"}],
+        "counts": {"open_commitments": 1, "opportunities": 1, "orders": 1, "completed_orders": 0, "in_fulfillment": 1, "awaiting_payment": 0, "unresolved_effects": 1, "blocked_events": 1},
     }
 
 
 @contextmanager
 def fixture_server():
     requests = []
-    controls = {"hold_next_console": False, "console_ready": threading.Event(), "console_release": threading.Event(), "console_requests": 0}
+    controls = {"hold_next_console": False, "console_ready": threading.Event(), "console_release": threading.Event(), "console_requests": 0, "console_queries": [], "orders_page_size": 500}
     data = fixture()
     data['orders'].append({**data['orders'][0], 'id': 'e' * 40, 'scope': {'topic': 'Older delayed order'}, 'payment_observed_at': None})
+    data['counts'].update(open_commitments=2, orders=2, in_fulfillment=2)
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -68,7 +70,16 @@ def fixture_server():
                 return self.send({"error": "authentication required"}, status=401)
             if path == "/api/v1/console":
                 controls['console_requests'] += 1
+                query = parse_qs(urlsplit(self.path).query)
+                controls['console_queries'].append(query)
                 snapshot = json.loads(json.dumps(data))
+                snapshot['pagination'] = {}
+                for collection in ['opportunities', 'orders', 'effects', 'events']:
+                    records = snapshot[collection]
+                    limit = controls['orders_page_size'] if collection == 'orders' else 500
+                    offset = int(query.get('offset', ['0'])[0]) if query.get('collection') == [collection] else 0
+                    snapshot['pagination'][collection] = {'offset': offset, 'limit': limit, 'total': len(records), 'has_more': offset + limit < len(records), 'has_previous': offset > 0}
+                    snapshot[collection] = records[offset:offset + limit]
                 if controls['hold_next_console']:
                     controls['hold_next_console'] = False
                     controls['console_ready'].set()
@@ -210,6 +221,27 @@ def main():
         page.locator('#detail-dialog').wait_for(state='hidden')
         check(page.locator('#run-state').inner_text() == 'Paused', "runtime control reflects server state")
         check(controls['console_requests'] >= reads_before + 2, 'a completed command queues a fresh HTTP read after the older refresh')
+        # A small fixture page size exercises the same limit/offset contract
+        # without manufacturing hundreds of browser records.
+        controls['orders_page_size'] = 1
+        page.locator('#refresh').click()
+        page.get_by_role('button', name='Next orders page').wait_for()
+        page.wait_for_function("document.querySelectorAll('#view tbody tr').length === 1")
+        check('Search and status filters apply only to this page.' in page.locator('#view').inner_text(), 'order search scope is explicit for paginated records')
+        page.get_by_role('button', name='Next orders page').click()
+        page.get_by_role('button', name='Previous orders page').wait_for(state='visible')
+        page.wait_for_function("document.querySelector('#view tbody').textContent.includes('Older delayed order')")
+        check(controls['console_queries'][-1] == {'collection': ['orders'], 'offset': ['1']}, 'next page requests the server collection and offset')
+        check(page.get_by_role('button', name='Next orders page').is_disabled(), 'last page cannot advance past its records')
+        page.locator('#refresh').click()
+        page.wait_for_function("!document.querySelector('#refresh').disabled")
+        check('Older delayed order' in page.locator('tbody').inner_text(), 'refresh preserves the selected page')
+        page.locator('[data-view="overview"]').click()
+        check(page.locator('.metric').filter(has_text='Open commitments').locator('.metric-value').inner_text() == '2', 'overview totals include commitments outside the returned page')
+        page.locator('[data-view="orders"]').click()
+        page.get_by_role('button', name='Previous orders page').click()
+        page.wait_for_function("document.querySelector('#view tbody').textContent.includes('customer topic')")
+        check(page.get_by_role('button', name='Previous orders page').is_disabled(), 'first page cannot move before the first record')
         page.locator('[data-view="recovery"]').click()
         page.get_by_role('button', name='Reconcile outcome').click()
         page.locator('input[name="evidence"]').fill('Inspect the persisted provider effect')
