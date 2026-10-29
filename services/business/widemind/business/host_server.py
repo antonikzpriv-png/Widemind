@@ -52,16 +52,39 @@ class Host:
         row=business.store.one('SELECT * FROM host_requests WHERE token_hash=? AND run_id=? AND revoked_at IS NULL',(hashed,business.run_id))
         if not row:raise ValueError('invalid customer authorization')
         return row
+    def observe_payments(self,business):
+        # Cheap local authoritative snapshot polling, never provider inference.
+        # Scope to existing recent commitments; authenticated provider hints can
+        # additionally enqueue reconciliation for older historical records.
+        for order in business.store.all("SELECT id,payment FROM orders WHERE run_id=? AND status IN ('awaiting_payment','funded','ready','delivered','completed') ORDER BY created_at DESC LIMIT 50",(business.run_id,)):
+            try:
+                snapshot=business.economy.payment(run_id=business.run_id,job_id=order['id'])
+                if snapshot!=json.loads(order['payment']):business.notify(source='economy-observation',external_id=f"{order['id']}:{snapshot['revision']}",kind='payment.changed',payload={'id':order['id']})
+            except Exception:pass
     def work(self,business):
         row=business.store.one("SELECT id,CASE WHEN state='running' AND lease_until>due_at THEN lease_until ELSE due_at END AS due_at,attempts FROM events WHERE run_id=? AND state IN ('queued','running') ORDER BY due_at,id LIMIT 1",(business.run_id,))
         return {'eventId':row['id'] if row else None,'attempt':row['attempts'] if row else 0,'dueAt':row['due_at'] if row else None,'runtimeState':self.runtime.state(business.run_id)}
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
         try:
-            if path=='/v1/work-state':return self.work(business)
+            if path=='/v1/work-state':self.observe_payments(business);return self.work(business)
             if path=='/v1/offerings':
                 return {'available':True,'offerings':[{'id':s.name,'title':s.name.replace('-',' ').title(),'description':'Scoped work with private delivery and verified payment before fulfillment.','priceMicros':str(business.policy.prices.get(s.name,0)),'capability':s.capability,'available':s.capability in business.policy.capabilities and business.tools.available({'research':'research.collect','graphics':'graphics.create','software':'software.create'}[s.capability]),'reason':'Requires configured collection tools and funded runtime'} for s in business.services.values()]}
-            if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,))}
+            if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,))}
+            if path=='/v1/recovery':
+                effect=business.store.one('SELECT * FROM effects WHERE id=? AND run_id=?',(payload['actionId'],run))
+                if not effect:raise ValueError('unknown effect')
+                mode=payload.get('mode','reconcile');reference=payload.get('evidenceReference') or 'operator:'+secrets.token_hex(16)
+                if mode=='retry':
+                    action=business.retry_effect(effect['id'],evidence_reference=reference)
+                elif mode=='reconcile':
+                    action=effect['id'];business.notify(source='operator-reconciliation',external_id=reference,kind='reconcile',payload={'id':action})
+                else:raise ValueError('invalid recovery mode')
+                if business.store.one('SELECT id FROM orders WHERE id=? AND run_id=?',(effect['job_id'],run)):
+                    business.notify(source='operator-recovery',external_id=reference+':advance',kind='advance',payload={'id':effect['job_id']},due_at=time.time()+1)
+                return {'scheduled':True,'actionId':action}
+            if path=='/v1/resolve-hold':business.resolve_hold(payload['orderId'],decision=payload['decision'],evidence_reference=payload['evidenceReference']);return {'recorded':True}
+            if path=='/v1/reconsider':business.reconsider(payload['opportunityId'],evidence_reference=payload['evidenceReference'],scope=payload.get('scope'),customer_email=payload.get('email'));return {'scheduled':True}
             if path=='/v1/policy':business.configure(Policy(**payload['policy']));return {'saved':True}
             if path=='/v1/opportunities':
                 p=payload['opportunity'];op=business.receive(source=p['source'],external_id=p['externalId'],service=p['service'],scope=p['scope'],customer_email=p.get('email'),origin=p.get('origin','inbound'),source_reference=p.get('sourceReference',''),priority=p.get('priority',1));return {'opportunityId':op}

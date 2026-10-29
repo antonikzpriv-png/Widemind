@@ -11,6 +11,9 @@ from .store import encode, identity
 
 class Unavailable(Exception): pass
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,*_args,**_kwargs):return None
+
 class HTTP:
     def __init__(self, url, token):
         self.url, self.token = url.rstrip('/'), token
@@ -20,7 +23,7 @@ class HTTP:
         if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in {'127.0.0.1','localhost','::1'}):
             raise ValueError('service HTTP requires loopback; remote requires HTTPS')
         # Dedicated loopback services are local IPC, never outbound through a proxy.
-        self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({})) if parsed.hostname in {'127.0.0.1','localhost','::1'} else urllib.request.build_opener()
+        self.opener=urllib.request.build_opener(urllib.request.ProxyHandler({}),NoRedirect()) if parsed.hostname in {'127.0.0.1','localhost','::1'} else urllib.request.build_opener(NoRedirect())
     def request(self, path, body=None, method=None):
         if not self.token: raise Unavailable('dedicated service credentials are not configured')
         payload = None if body is None else encode(body).encode()
@@ -115,7 +118,7 @@ class EconomyClient:
             document={key:snapshot[key] for key in ('run_id','job_id','status','currency','mode','receipts_micro_usd','refunds_micro_usd','fees_micro_usd','earned_micro_usd','operating_cost_micro_usd','costs_final')}
             document['_provider_revision']=snapshot['revision']
             document['status']={'partially_refunded':'partial','failed':'pending'}.get(document['status'],document['status'])
-        digest=hashlib.sha256(encode(document).encode()).hexdigest()
+        digest=hashlib.sha256(encode({key:value for key,value in document.items() if not key.startswith('_')}).encode()).hexdigest()
         with self.store.transaction():
             previous=self.store.one('SELECT * FROM host_payment_snapshots WHERE job_id=?',(job_id,))
             if previous and json.loads(previous['document']).get('_provider_revision',0)>document['_provider_revision']:raise Unavailable('stale provider snapshot cannot overwrite newer financial observation')

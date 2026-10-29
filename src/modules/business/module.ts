@@ -293,6 +293,31 @@ export const definition: ModuleDefinition = {
             return result;
           }),
         ),
+        ...(["reconcile", "retry"] as const).map((name) =>
+          route(name, "operator", "POST", async (body) => {
+            const runId = run(body.runId);
+            const result = await client.request("/v1/recovery", {
+              runId,
+              actionId: identifier(body.actionId),
+              mode: name,
+              evidenceReference:
+                body.evidenceReference ?? `operator-${randomUUID()}`,
+            });
+            wake(runId);
+            return result;
+          }),
+        ),
+        ...(["resolve-hold", "reconsider"] as const).map((name) =>
+          route(name, "operator", "POST", async (body) => {
+            const runId = run(body.runId);
+            const result = await client.request(`/v1/${name}`, {
+              ...body,
+              runId,
+            });
+            wake(runId);
+            return result;
+          }),
+        ),
         route("status", "operator", "GET", async (_body, query) =>
           client.request("/v1/status", { runId: run(query.runId) }),
         ),
