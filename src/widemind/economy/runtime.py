@@ -253,7 +253,7 @@ class RuntimeBridge:
         except EconomyError as error:
             return {'kind': 'insufficient' if error.code == 'insufficient_funds' else 'unavailable', 'reason': error.code}
 
-    def _bound(self, reservation: Reservation, action: ToolAction | None = None):
+    def _bound(self, reservation: Reservation, action: ToolAction | None = None, *, require_current_profile=False):
         with self.service._read() as db:
             raw = db.execute('SELECT * FROM runtime_authorizations WHERE reservation_id=?', (reservation.reservationId,)).fetchone()
             if raw is None:
@@ -263,9 +263,10 @@ class RuntimeBridge:
             supplied = reservation.model_dump(exclude_none=True)
             if not reservation.authorization.isascii() or not hmac.compare_digest(reservation.authorization, expected['authorization']) or any(supplied[k] != expected[k] for k in ('runId', 'actionId', 'reservationId', 'limit')):
                 raise EconomyError('authorization_mismatch', 'Authorization does not match the persisted action')
-            profile = self._profile(binding['tool'])
-            if any(binding[k] != profile[k] for k in ('provider', 'account', 'mode')):
-                raise EconomyError('profile_changed', 'Tool accounting profile changed; operator reconciliation is required')
+            if require_current_profile:
+                profile = self._profile(binding['tool'])
+                if any(binding[k] != profile[k] for k in ('provider', 'account', 'mode')):
+                    raise EconomyError('profile_changed', 'Tool accounting profile changed; no new execution is authorized')
             row = self.service._reservation(db, binding['reservation_id'])
             if action is not None:
                 if (action.runId, action.actionId, action.tool, action.limit.model_dump(exclude_none=True)) != (
@@ -277,7 +278,7 @@ class RuntimeBridge:
 
     def verify(self, request: VerificationRequest):
         try:
-            binding, row = self._bound(request.reservation, request.action)
+            binding, row = self._bound(request.reservation, request.action, require_current_profile=request.dispatch)
             if request.dispatch:
                 with self.service._tx() as db:
                     self.service._start_reservation(db, binding['reservation_id'])
@@ -289,6 +290,8 @@ class RuntimeBridge:
     def confirm_not_performed(self, request: NotPerformedRequest):
         try:
             binding, _ = self._bound(request.reservation)
+            current = self.profiles.get(binding['tool'])
+            profile_current = current is not None and all(binding[k] == current[k] for k in ('provider', 'account', 'mode'))
             with self.service._tx() as db:
                 row = self.service._reservation(db, binding['reservation_id'])
                 latest = db.execute('SELECT MAX(ordinal) FROM runtime_dispatches WHERE reservation_id=?', (binding['reservation_id'],)).fetchone()[0]
@@ -299,6 +302,8 @@ class RuntimeBridge:
                 charge = db.execute('SELECT * FROM charges WHERE reservation_id=?', (binding['reservation_id'],)).fetchone()
                 if previous:
                     if previous['dispatch_ordinal'] == latest and row['state'] == 'reserved':
+                        if not profile_current:
+                            raise EconomyError('profile_changed', 'A retired tool profile cannot renew execution')
                         return {'kind': 'renewed'}
                     if previous['dispatch_ordinal'] == latest and row['state'] == 'settled' and charge and charge['amount_micro_usd'] == 0:
                         usage = json.loads(charge['usage'])
@@ -314,7 +319,8 @@ class RuntimeBridge:
                            (binding['reservation_id'], latest, request.evidenceRef, digest, now()))
                 event_data = {'reservation_id': binding['reservation_id'], 'dispatch_ordinal': latest,
                               'evidence_ref': request.evidenceRef}
-                if latest >= 3:
+                if latest >= 3 or not profile_current:
+                    event_data['closure_reason'] = 'dispatch_limit' if profile_current else 'profile_retired'
                     self.service._settle(db, binding['reservation_id'], 0, binding['provider'], binding['account'],
                                          'rt:' + binding['reservation_id'],
                                          usage={'source': 'runtime-not-performed', 'evidenceRef': request.evidenceRef,

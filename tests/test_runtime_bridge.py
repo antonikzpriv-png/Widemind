@@ -317,3 +317,59 @@ def test_provider_event_reference_uses_full_foundation_2000_character_contract(s
     assert len(charge['usage']['externalEventId']) == 2000
     assert post(setup, 'settle', {'reservation': reservation, 'receipt': charge}) == {'kind': 'settled'}
     assert post(setup, 'settle', {'reservation': reservation, 'receipt': charge}) == {'kind': 'settled'}
+
+
+@pytest.mark.parametrize('change', ['account', 'provider', 'mode', 'removed'])
+def test_retired_profiles_cannot_hide_known_old_liability_or_authorize_new_effects(setup, change):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    assert post(setup, 'verify', {'reservation': reservation, 'action': action(req), 'dispatch': True})['kind'] == 'verified'
+    profiles = copy.deepcopy(settings.runtime_tool_profiles)
+    if change == 'removed':
+        profiles.pop('fixture.tool')
+    else:
+        profiles['fixture.tool'][change] = {'account': 'replacement-account', 'provider': 'replacement-provider', 'mode': 'live'}[change]
+    rotated = replace(settings, runtime_tool_profiles=profiles)
+    with TestClient(create_app(rotated)) as restarted:
+        auth = headers(rotated)
+        def call(route, body):
+            response = restarted.post('/v1/runtime/'+route, headers=auth, json=body)
+            assert response.status_code == 200, response.text
+            return response.json()
+        assert call('authorize', req)['kind'] == 'unavailable'
+        assert call('verify', {'reservation': reservation, 'action': action(req), 'dispatch': True})['kind'] == 'unavailable'
+        read = call('verify', {'reservation': reservation, 'action': action(req), 'dispatch': False})
+        assert read == {'kind': 'verified', 'profile': {'provider': 'fixture-provider', 'account': 'fixture-account', 'mode': 'sandbox'}}
+        charge = receipt(reservation, cost='6000000', event='old-provider-final')
+        assert call('settle', {'reservation': reservation, 'receipt': charge}) == {'kind': 'settled'}
+        assert call('settle', {'reservation': reservation, 'receipt': charge}) == {'kind': 'settled'}
+    assert service.balance('run')['posted_micro_usd'] == -1_000_000
+    assert service.balance('run')['reserved_micro_usd'] == 0
+    assert len(service.charges('run')) == 1
+
+
+@pytest.mark.parametrize('remove', [False, True])
+def test_definitive_not_performed_closes_retired_profile_instead_of_renewing(setup, remove):
+    settings, service, client = setup
+    seed(setup)
+    req = request()
+    reservation = post(setup, 'authorize', req)['reservation']
+    assert post(setup, 'verify', {'reservation': reservation, 'action': action(req), 'dispatch': True})['kind'] == 'verified'
+    profiles = copy.deepcopy(settings.runtime_tool_profiles)
+    if remove:
+        profiles.pop('fixture.tool')
+    else:
+        profiles['fixture.tool']['account'] = 'replacement'
+    with TestClient(create_app(replace(settings, runtime_tool_profiles=profiles))) as retired:
+        body = {'reservation': reservation, 'evidenceRef': 'old-provider-definitive-no-effect'}
+        for _ in range(2):
+            response = retired.post('/v1/runtime/not-performed', headers=headers(settings), json=body)
+            assert response.status_code == 200 and response.json() == {'kind': 'closed'}
+        response = retired.post('/v1/runtime/verify', headers=headers(settings),
+                                json={'reservation': reservation, 'action': action(req), 'dispatch': True})
+        assert response.json()['kind'] == 'unavailable'
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+    assert service.balance('run')['reserved_micro_usd'] == 0
+    assert service.reservation(reservation['reservationId'])['state'] == 'settled'
