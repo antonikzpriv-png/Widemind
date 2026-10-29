@@ -2,7 +2,7 @@
 
 ## Status
 
-The foundation implements Node.js 24/TypeScript, a separate HTTP web process and persistent worker, and durable local SQLite storage. The component boundaries below remain the product architecture. Live economy/tools/business/commerce providers are not implemented. See [FOUNDATION.md](FOUNDATION.md) and the versioned [INTERFACES.md](INTERFACES.md) for actual commands, recovery semantics and module integration. Hosting, payment and model providers are not selected.
+The foundation implements Node.js 24/TypeScript, independent web and worker processes, and local SQLite storage. The Python economy control plane implements its own protected ledger, reservations, Stripe adapter and durable reconciliation worker. See [FOUNDATION.md](FOUNDATION.md), [INTERFACES.md](INTERFACES.md), [economy contracts](ECONOMY_CONTRACT.md) and [economy setup](ECONOMY_SETUP.md). Real provider accounts and deployment remain configuration requirements; separately developed tools/business providers are not silently enabled.
 
 ## Product requirements
 

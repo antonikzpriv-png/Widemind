@@ -10,7 +10,7 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
-Live economy, business strategy, Gmail, models, payment processing, publishing, and customer commerce are **not implemented**. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent the $5 opening grant or customer revenue.
+The Python economy control plane implements the ledger, reservations, Stripe Checkout/webhooks, durable reconciliation, uncertain-checkout recovery and redacted financial reporting. Real Stripe accounts and sandbox verification remain configuration requirements. Business strategy, Gmail, model and publishing providers from separate branches are not enabled here. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent customer revenue.
 
 ```sh
 npm ci
@@ -71,7 +71,7 @@ See the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduc
 
 ## Start building
 
-The initial stack is Node.js 24, TypeScript, and SQLite, with separate web and worker commands in this repository. Install, migration, development, build, test, and worker commands are implemented and documented in [FOUNDATION.md](docs/FOUNDATION.md).
+The foundation uses Node.js 24, TypeScript and SQLite, with independent web and worker processes; see [FOUNDATION.md](docs/FOUNDATION.md). The economy uses Python 3.12+, FastAPI, HTTPX and a separate protected SQLite database. Install with `python -m pip install -r requirements.lock -e .`, validate with `python -m pytest -q`, and follow [economy setup](docs/ECONOMY_SETUP.md) and [operations](docs/ECONOMY_OPERATIONS.md) for its HTTP and reconciliation-worker processes.
 
 The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
 
@@ -79,4 +79,4 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-The application stack and local storage are selected. Hosting, domain, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+Application stacks and local storage are selected; Stripe is the implemented payment adapter. Hosting, domain, real payment account credentials, model provider, Gmail and graphics/publishing providers remain unconfigured. Record these choices during implementation without inventing working credentials or integrations.

@@ -6,7 +6,7 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below govern the typed economy interface now consumed by the persistent runtime. The foundation implements reservation/settlement wiring and explicit unavailable behavior, not the funded ledger or payment integration. No opening credit or customer revenue is invented. See [INTERFACES.md](INTERFACES.md).
+The economy module now implements the ledger, reservations, settlement, holds and a Stripe adapter. See [the implemented v1 interface](ECONOMY_CONTRACT.md) and [setup/verification requirements](ECONOMY_SETUP.md). Provider-fixture tests are local verification, not real payments; account setup and an actual sandbox receipt remain unverified. The financial invariants below remain the governing requirements. The Node runtime consumes the typed [Economy interface](INTERFACES.md); its bridge must use this single authoritative ledger and preserve exact monetary values.
 
 ## Units
 

@@ -48,3 +48,6 @@ Thumbs.db
 var/
 *.sqlite-shm
 *.sqlite-wal
+
+# Python package metadata
+*.egg-info/

@@ -2,9 +2,9 @@
 
 ## Current status
 
-The repository now provides the locally runnable foundation, independent worker, SQLite state, authenticated operator controls and explicit zero-cost local demonstration. It does not yet provide live business strategy, funded accounting, Gmail, payments, or a deployed website.
+The repository provides the locally runnable foundation, independent worker, authenticated operator controls and an implemented economy/payment service. The ledger, reservations and Stripe adapter are locally verified using provider fixtures. Real sandbox acceptance, account configuration, live strategy/Gmail tools and deployed website remain pending; see [economy setup](ECONOMY_SETUP.md).
 
-Milestone 1 is locally implemented and tested; it is not a live survival pilot. Subsequent milestones remain planned. See [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
+Milestone 1 is locally implemented and tested; it is not a live survival pilot. Economy capabilities are implemented locally; full live-pilot acceptance remains pending. See [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 
