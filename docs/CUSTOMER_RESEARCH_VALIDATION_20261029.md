@@ -1,7 +1,8 @@
 # Customer research validation — 2026-10-29
 
-Code revision: `683ff3b4d4e831b661a525f5708d8e33b16992fb`. Started from
-`e70220f` and integrated main through `5b6a1a1` before final verification.
+Code revision: `a411a125af8905742a8a3d1824b3fc5b668284dc`. Started from
+`e70220f` and integrated main through `a7bfe22` before final verification,
+preserving its newly merged discovery and customer conversation features.
 This work selects integrated PayPal **service-v1**. The central Stripe
 implementation, root Python runtime and `src/modules/business-tools` were not
 modified. No live provider credentials, payment or customer job were used.
@@ -33,10 +34,10 @@ checks with an installation message. **Both checks ran in this validation.**
 
 | Check | Observed result |
 | --- | --- |
-| Integrated tools | 520 passed, 75 subtests passed, 9 skipped; 53.99 seconds |
+| Integrated tools | 528 passed, 81 subtests passed, 9 skipped; 54.98 seconds |
 | Service-v1 economy | 435 passed; 11.79 seconds; one upstream Starlette/httpx deprecation warning |
-| Integrated business | 140 passed; 25.49 seconds |
-| Node format, types, tests and build | Passed; 234 tests, zero failures |
+| Integrated business | 216 passed; 34.33 seconds |
+| Node format, types, tests and build | Passed; 243 tests, zero failures |
 | Local PayPal integration smoke | Passed across actual economy, tools, business and persistent Node worker, including restart, private delivery, refund and exact financial totals |
 | Customer-specific offline demo | Two different reviewed Markdown documents, private manifests and independent generation receipts |
 | Python distributions | Tools and economy wheels/source distributions built; economy migration 006 included |
