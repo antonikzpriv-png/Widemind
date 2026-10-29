@@ -2,7 +2,12 @@
 
 ## Status
 
-This document proposes implementation boundaries. No application stack, hosting provider, payment processor, model provider, or database has been selected.
+This document describes the broader product boundaries. The implemented tools
+slice selects Python 3.11+, SQLite, and a private operator gateway with
+configurable OpenAI-compatible, Gmail, HTTP/browser, filesystem, Docker, and
+publishing adapters. See [tools setup](TOOLS-SETUP.md) and
+[verified capability status](CAPABILITIES.md). The autonomous worker, website,
+hosting and payment processor remain unimplemented/unconfigured here.
 
 ## Product requirements
 

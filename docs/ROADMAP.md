@@ -2,9 +2,15 @@
 
 ## Current status
 
-The repository contains the product foundation. It does not yet provide a working agent, Gmail connection, payment integration, or deployed website.
+The repository contains the product foundation and a runnable tools gateway.
+The [capability table](CAPABILITIES.md) records implemented adapters and local
+verification. There is no connected Gmail account, autonomous agent, payment
+integration, or deployed website yet.
 
-All milestones below are unchecked. Mark work complete only after demonstrating its acceptance criteria.
+Milestone checkboxes below refer to their full acceptance criteria, including
+the controlled live-account and business demonstrations. Adapter implementation
+and fixture tests alone do not complete those criteria. Mark work complete only
+after demonstrating them.
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 

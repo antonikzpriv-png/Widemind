@@ -53,6 +53,9 @@ use the checkout or a directory containing unrelated files as the workspace.
 The receipt is private JSON containing status, action/reservation IDs, measured
 usage, artifacts and references. It may include customer data: do not publish
 CLI output or the SQLite database. This slice has no public projection.
+The top-level `succeeded` status means the adapter completed and its usage was
+settled. Inspect operation-specific results too: generated Python exposes its
+actual `exit_code` and `data.status`, including nonzero program failures.
 
 ## Enable providers independently
 

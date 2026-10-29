@@ -170,3 +170,16 @@ def test_terminal_receipt_replay_survives_adapter_version_change(configured):
     paid.spec = ToolSpec("fixture.paid","Synthetic version two.","external",version=2)
     assert gw.execute("fixture.paid",{},run_id="integration",action_id="old-version") == original
     assert paid.calls == 1
+
+
+def test_non_uncertain_tool_error_preserves_measured_failure_usage(configured):
+    class MeasuredFailure(SyntheticPaidAdapter):
+        def execute(self,args,ctx):
+            ctx.mark_dispatched({"fixture":"provider rejection with usage"})
+            raise ToolError("provider_rejected","Synthetic provider rejected output after measured work.",
+                            usage=Usage(7,{"attempts":1},provisional=True))
+    gw,_ = gateway(configured,MeasuredFailure())
+    result = gw.execute("fixture.paid",{},run_id="integration",action_id="measured-tool-error")
+    assert result["status"] == "uncertain"
+    assert result["charged_microusd"] == 7 and result["reserved_microusd"] == 53
+    assert result["result"]["usage"]["units"] == {"attempts":1}

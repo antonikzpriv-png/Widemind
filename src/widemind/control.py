@@ -25,7 +25,7 @@ from .tools.contracts import Quote, ToolError, ToolResult, Usage
 def json_text(value, maximum=8_000_000):
     try:
         data = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise ToolError("invalid_input", "Expected finite JSON data.") from exc
     if len(data.encode()) > maximum:
         raise ToolError("output_limit", "JSON data exceeds its configured size limit.")
@@ -220,13 +220,21 @@ class ControlStore:
         if usage is not None:
             if usage.cost_microusd is not None:
                 money(usage.cost_microusd)
-            if any(type(v) is not int or v < 0 for v in usage.units.values()):
-                raise ToolError("accounting", "Usage units must be nonnegative integers.")
+            if (not isinstance(usage.units, Mapping) or
+                any(not isinstance(k,str) or len(k)>128 or type(v) is not int or v<0 for k,v in usage.units.items())):
+                # Invalid usage metadata must not erase a known money liability.
+                usage = Usage(usage.cost_microusd,{},provisional=True,
+                              details={"receipt":"Adapter returned invalid usage units; known cost retained."})
+                if result is not None:
+                    from dataclasses import replace
+                    result = replace(result,usage=usage)
+                status = "uncertain"
+                error = {"code":"usage_metadata","message":"Known cost retained; usage units require reconciliation."}
         if result is None and usage is not None:
             result = ToolResult({}, usage)
         try:
             encoded_result = json_text(asdict(result), 4_000_000) if result else None
-        except ToolError:
+        except (ToolError, TypeError, ValueError, RecursionError):
             # Result presentation failure is not proof that a paid call was
             # free. Preserve the known charge and a bounded usage receipt.
             bounded_usage = None

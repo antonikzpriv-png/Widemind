@@ -182,7 +182,7 @@ class Gateway:
                                                  "unavailable" if isinstance(exc,Unavailable) else "failed")
         code = exc.code if isinstance(exc,ToolError) else "cancelled" if isinstance(exc,KeyboardInterrupt) else "adapter_error"
         message = exc.message if isinstance(exc,ToolError) else "Action stopped unexpectedly; inspect its private receipt and reconcile before retrying."
-        usage = exc.usage if isinstance(exc,Uncertain) else None
+        usage = getattr(exc,"usage",None)
         return self.store.finish(row["id"],claim,status,usage=usage,error={"code":code,"message":message})
 
     def reconcile(self, action_id):

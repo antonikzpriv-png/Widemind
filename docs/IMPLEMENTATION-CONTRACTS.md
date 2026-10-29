@@ -16,6 +16,10 @@ execution. Unknown price/credentials returns actionable unavailability. Paid
 quotes require a positive bounded micro-USD reservation. Actual measured units
 and configured-tariff costs are provisional until a provider invoice is known.
 Unknown usage retains the reservation and remains visible.
+`ToolError(..., usage=Usage(...))` preserves measured usage on rejected/read
+failures as well as `Uncertain`. Reconciliation should include a result carrying
+cumulative usage even when its outcome is uncertain; missing usage is never
+interpreted as a free dispatched paid request.
 
 Configuration and secrets belong outside the writable workspace. `ctx.config`
 and `ctx.policy` come only from owner configuration. `ToolResult` is untrusted

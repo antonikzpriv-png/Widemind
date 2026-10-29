@@ -11,9 +11,10 @@ from typing import Any, Callable, Mapping, Protocol
 
 
 class ToolError(Exception):
-    def __init__(self, code: str, message: str, *, retryable: bool = False):
+    def __init__(self, code: str, message: str, *, retryable: bool = False, usage: Usage | None = None):
         super().__init__(message)
         self.code, self.message, self.retryable = code, message, retryable
+        self.usage = usage
 
 
 class Unavailable(ToolError):
