@@ -187,14 +187,19 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
     check("opening_event", sum(row["type"] == "economy.run_opened" and data.get("opening_micro_usd") == OPENING_CREDIT for row, data in events) == 1)
 
     transactions = {(row["provider"], row["account"], row["mode"], row["transaction_id"]): row for row in rows["payment_transactions"]}
+    payments = {(row["provider"], row["account"], row["mode"], row["payment_id"]): row for row in rows["payments"]}
     components = {}
     component_entries = set()
     verified_positive = set()
     covered_transactions = set()
-    event_reconciliations = {data["reconciliation_id"] for row, data in events if row["type"] == "economy.payment_reconciled" and isinstance(data.get("reconciliation_id"), str)}
+    event_reconciliations = {data["reconciliation_id"]: row["sequence"] for row, data in events if row["type"] == "economy.payment_reconciled" and isinstance(data.get("reconciliation_id"), str)}
+    payment_reconciliations = {}
     for row in rows["reconciliations"]:
         data = payload(row["summary"])
         check("reconciliation_events", row["reconciliation_id"] in event_reconciliations)
+        payment_key = (row["provider"], row["account"], mode, row["payment_id"])
+        check("reconciliation_payment", payment_key in payments)
+        payment_reconciliations.setdefault(payment_key, []).append((event_reconciliations.get(row["reconciliation_id"], -1), row, data))
         for transaction_id in array(data.get("posted_transaction_ids", [])):
             if isinstance(transaction_id, str):
                 covered_transactions.add((row["provider"], row["account"], mode, transaction_id))
@@ -217,7 +222,26 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
         check("payment_component_identity", component["entry_id"] not in component_entries)
         component_entries.add(component["entry_id"])
         components[(key, component["component"])] = component
-    payments = {(row["provider"], row["account"], row["mode"], row["payment_id"]): row for row in rows["payments"]}
+    release_events = {}
+    for row, data in sorted(events, key=lambda item: item[0]["sequence"]):
+        if row["type"] != "economy.customer_funds_released":
+            continue
+        payment_id = data.get("payment_id")
+        scoped = [name in data for name in ("provider", "account", "mode")]
+        if all(scoped) and all(isinstance(data[name], str) for name in ("provider", "account", "mode")) and isinstance(payment_id, str):
+            payment_key = (data["provider"], data["account"], data["mode"], payment_id)
+        elif not any(scoped) and isinstance(payment_id, str):
+            candidates = [key for key in payments if key[3] == payment_id]
+            check("legacy_release_scope", len(candidates) == 1)
+            if len(candidates) != 1:
+                continue
+            payment_key = candidates[0]
+        else:
+            check("release_event_scope", False)
+            continue
+        check("release_event_scope", payment_key in payments)
+        if payment_key in payments:
+            release_events.setdefault(payment_key, []).append((row["sequence"], data))
     payment_net = {}
     for component in rows["payment_components"]:
         transaction_key = tuple(component[name] for name in ("provider", "account", "mode", "transaction_id"))
@@ -227,6 +251,23 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
             payment_net[payment_key] = payment_net.get(payment_key, 0) + component["amount_micro_usd"]
     for key, payment in payments.items():
         check("payment_mode", payment["mode"] == mode)
+        releases = release_events.get(key, [])
+        recorded_release = 0
+        for _, data in releases:
+            amount = data.get("released_micro_usd")
+            valid = type(amount) is int and amount >= recorded_release
+            check("release_event_amount", valid)
+            if valid:
+                recorded_release = amount
+        check("payment_release_authorization", payment["released_micro_usd"] == recorded_release)
+        reconciliations = sorted(payment_reconciliations.get(key, []), key=lambda item: item[0])
+        pending = reconciliations[-1][2].get("pending_liability_micro_usd", 0) if reconciliations else 0
+        check("payment_pending_projection", type(pending) is int and pending >= 0 and payment["pending_liability_micro_usd"] == pending)
+        check("payment_revision_projection", payment["revision"] == len(reconciliations) + len(releases))
+        mutations = [(sequence, record["revision"], True) for sequence, record, _ in reconciliations] + [(sequence, None, False) for sequence, _ in releases]
+        for revision, (_, recorded_revision, is_reconciliation) in enumerate(sorted(mutations, key=lambda item: item[0]), 1):
+            if is_reconciliation:
+                check("reconciliation_revision", type(recorded_revision) is int and recorded_revision == revision)
         hold_id = "payment:" + fingerprint(list(key))
         actual_hold = holds.get(hold_id)
         expected = max(0, payment_net.get(key, 0) - payment["released_micro_usd"], payment["pending_liability_micro_usd"])

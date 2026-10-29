@@ -19,12 +19,12 @@ JOB = "private-job-identifier"
 PAYMENT = "private-payment-identifier"
 
 
-def _payment(service, transactions):
+def _payment(service, transactions, *, pending=0):
     payment = service.payment(PROVIDER, ACCOUNT, "test", PAYMENT)
     service.apply_payment_snapshot({
         "provider": PROVIDER, "account": ACCOUNT, "mode": "test", "payment_id": PAYMENT,
         "run_id": RUN, "job_id": JOB, "status": "settled", "expected_revision": payment["revision"],
-        "transactions": transactions,
+        "transactions": transactions, "pending_liability_micro_usd": pending,
     }, event_id=f"private-event-{payment['revision']}", event_digest="private-webhook-digest")
 
 
@@ -348,3 +348,65 @@ def test_reservation_actual_amount_is_valid_for_its_state(service, state, actual
     service.reserve(RUN, "action", 1_000_000, "key", PROVIDER, ACCOUNT, {"max_tokens": 100})
     _legacy_projection_update(service, "reservations", "UPDATE reservations SET state=?,actual_micro_usd=?", (state, actual))
     assert "reservation_amount_state" in _failed(audit_integrity(service, RUN))
+
+
+def test_typed_release_corruption_stays_detectable_after_a_legitimate_snapshot_refresh(service):
+    service.register_payment(RUN, PROVIDER, ACCOUNT, PAYMENT, JOB, "registration")
+    receipt = _transaction("private-receipt", 1_000_000, 0)
+    _payment(service, [receipt])
+    _legacy_projection_update(service, "payments", "UPDATE payments SET released_micro_usd=1000000")
+    _payment(service, [receipt])
+    # The normal refresh now matches the corrupted release and hold, so checking
+    # only the current formula would falsely certify unauthorized fulfillment.
+    assert service.balance(RUN)["held_micro_usd"] == 0
+    report = audit_integrity(service, RUN)
+    assert "payment_release_authorization" in _failed(report)
+    _assert_no_private_data(report)
+
+
+def test_typed_pending_corruption_stays_detectable_after_normal_fulfillment(service):
+    service.register_payment(RUN, PROVIDER, ACCOUNT, PAYMENT, JOB, "registration")
+    receipt = _transaction("private-receipt", 1_000_000, 0)
+    _payment(service, [receipt], pending=2_000_000)
+    _legacy_projection_update(service, "payments", "UPDATE payments SET pending_liability_micro_usd=0")
+    service.release_payment_hold(PROVIDER, ACCOUNT, "test", PAYMENT, "operator-fulfillment")
+    assert service.balance(RUN)["held_micro_usd"] == 0
+    assert "payment_pending_projection" in _failed(audit_integrity(service, RUN))
+
+
+def test_typed_revision_corruption_cannot_pass_event_count_reconciliation(service):
+    service.register_payment(RUN, PROVIDER, ACCOUNT, PAYMENT, JOB, "registration")
+    _legacy_projection_update(service, "payments", "UPDATE payments SET revision=1")
+    assert "payment_revision_projection" in _failed(audit_integrity(service, RUN))
+
+
+def _remove_legacy_release_scope(service):
+    with sqlite3.connect(service.path) as connection:
+        connection.execute("DROP TRIGGER events_no_update")
+        for sequence, encoded in connection.execute("SELECT sequence,data FROM events WHERE type='economy.customer_funds_released'").fetchall():
+            data = json.loads(encoded)
+            for field in ("provider", "account", "mode"):
+                data.pop(field, None)
+            connection.execute("UPDATE events SET data=? WHERE sequence=?", (json.dumps(data), sequence))
+
+
+def test_unambiguous_legacy_fulfillment_events_remain_auditable(populated):
+    _remove_legacy_release_scope(populated)
+    assert audit_integrity(populated, RUN)["ok"] is True
+
+
+def test_legacy_fulfillment_scope_cannot_be_guessed_between_provider_accounts(service):
+    for account in (ACCOUNT, "another-private-account"):
+        service.register_payment(RUN, PROVIDER, account, PAYMENT, JOB, f"registration-{account}")
+    service.release_payment_hold(PROVIDER, ACCOUNT, "test", PAYMENT, "fulfillment")
+    _remove_legacy_release_scope(service)
+    report = audit_integrity(service, RUN)
+    assert "legacy_release_scope" in _failed(report)
+    _assert_no_private_data(report)
+
+
+def test_new_scoped_fulfillment_events_support_repeated_payment_ids_across_accounts(service):
+    for account in (ACCOUNT, "another-private-account"):
+        service.register_payment(RUN, PROVIDER, account, PAYMENT, JOB, f"registration-{account}")
+        service.release_payment_hold(PROVIDER, account, "test", PAYMENT, f"fulfillment-{account}")
+    assert audit_integrity(service, RUN)["ok"] is True
