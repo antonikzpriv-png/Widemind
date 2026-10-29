@@ -32,7 +32,7 @@ class StripeError(RuntimeError):
     def __init__(self, message, *, status=None):
         super().__init__(message)
         self.status = status
-        self.uncertain = status is None or status == 429 or status >= 500
+        self.uncertain = status is None or status in {409, 429} or status >= 500
 
 
 class _NoRedirect(HTTPRedirectHandler):

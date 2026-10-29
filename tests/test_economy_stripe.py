@@ -274,6 +274,12 @@ class StripeTests(unittest.TestCase):
         self.assertEqual(result["refunds_micro_usd"], 0)
         self.assertEqual(result["pending_refunds_micro_usd"], 2000000)
 
+    def test_idempotency_conflicts_remain_uncertain_until_reconciled(self):
+        self.transport.add("POST", "/v1/checkout/sessions", b"", 409)
+        with self.assertRaises(StripeError) as error:
+            self.client.create_checkout(run_id="r", job_id="j", action_id="a", amount_micro_usd=10000)
+        self.assertTrue(error.exception.uncertain)
+
 
 if __name__ == "__main__":
     unittest.main()
