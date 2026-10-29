@@ -83,12 +83,17 @@ class FixtureTools:
         self.economy = economy
         self.model_available = True
         self.responses = []
+        self.send_responses = []
         self.calls = []
         self.reconciliations = []
         self.completed = {}
         self.on_model = None
+        self.on_available = None
 
     def available(self, action):
+        if action == 'ai.generate' and self.on_available:
+            callback, self.on_available = self.on_available, None
+            callback()
         return self.model_available if action == 'ai.generate' else True
 
     def execute(self, **request):
@@ -106,8 +111,9 @@ class FixtureTools:
                 callback()
             result = response if isinstance(response, Outcome) else Outcome('succeeded', {'json': response})
         elif request['action'] == 'gmail.send':
-            result = Outcome('succeeded', {'message_id': 'fixture-mail-'+aid,
-                'thread_id': request['arguments'].get('thread_id', 'fixture-thread'), 'delivery_state': 'accepted'})
+            result = self.send_responses.pop(0) if self.send_responses else Outcome('succeeded', {
+                'message_id': 'fixture-mail-'+aid, 'thread_id': request['arguments'].get('thread_id', 'fixture-thread'),
+                'delivery_state': 'accepted'})
         else:
             raise AssertionError('Unexpected provider action in a conversation fixture.')
         self.completed[aid] = result
@@ -449,6 +455,84 @@ class ConversationScenarios(unittest.TestCase):
         self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM customer_threads')['n'], 0)
         self.assertEqual(self.tools.calls, [])
         self.assertEqual(self.economy.calls, [])
+
+    def test_reconciled_model_response_resumes_the_original_message_without_another_paid_call(self):
+        cid = self.send('Please make an SVG for our garden.', Outcome('unknown', reason='Synthetic model response loss.'))
+        effect = self.store.one("SELECT id FROM effects WHERE action='ai.generate' AND state='unknown'")
+        self.assertIsNotNone(effect)
+        self.tools.completed[effect['id']] = Outcome('succeeded', {'json': interpretation('request', 'svg-graphic',
+            {'title': 'Garden', 'description': 'A green plant.'})})
+        self.business._reconcile(effect['id'])
+        self.drain()
+        view = self.business.conversation_view(cid)
+        self.assertIsNotNone(view['currentQuote'])
+        self.assertEqual(view['status'], 'quoted')
+        self.assertEqual(len(self.model_calls()), 1)
+        self.assertEqual(len(self.economy.calls), 1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM conversation_allocations')['n'], 1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM host_notifications')['n'], 1)
+        self.business._reconcile(effect['id'])
+        self.drain()
+        self.assertEqual(len(self.model_calls()), 1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM host_notifications')['n'], 1)
+
+    def _start_gmail_quote(self):
+        self.business.public_origin = 'https://widemind.example.invalid'
+        self.tools.responses.append(interpretation('request', 'svg-graphic',
+            {'title': 'Garden', 'description': 'A green plant.'}))
+        self.business._gmail_message({'message_id': 'fixture-recovery-mail', 'thread_id': 'fixture-recovery-thread',
+            'from': CUSTOMER, 'body': 'Please make a green plant SVG titled Garden.',
+            'rfc_message_id': '<fixture-recovery@example.invalid>', 'sender_verified': True})
+        self.drain()
+        return self.store.one("SELECT id FROM customer_threads WHERE source='gmail'")['id']
+
+    def test_reconciled_gmail_response_publishes_the_cached_reply_without_a_second_send(self):
+        self.tools.send_responses.append(Outcome('unknown', reason='Synthetic Gmail accepted/lost response.'))
+        cid = self._start_gmail_quote()
+        pending = self.store.one("SELECT id FROM effects WHERE action='gmail.send' AND state='unknown'")
+        self.assertIsNotNone(pending)
+        self.tools.completed[pending['id']] = Outcome('succeeded', {
+            'message_id': 'fixture-reconciled-mail', 'thread_id': 'fixture-recovery-thread', 'delivery_state': 'accepted'})
+        self.business._reconcile(pending['id'])
+        self.drain()
+        replies = [message for message in self.business.conversation_view(cid)['messages'] if message['direction'] == 'outbound']
+        self.assertEqual(len(replies), 1)
+        self.assertEqual(replies[0]['status'], 'accepted')
+        self.assertEqual(len([call for call in self.tools.calls if call['action'] == 'gmail.send']), 1)
+        self.assertEqual(len(self.model_calls()), 1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM host_requests')['n'], 1)
+
+    def test_reconciled_followup_counts_once_and_does_not_repeat_the_uncertain_send(self):
+        cid = self._start_gmail_quote()
+        self.tools.send_responses.append(Outcome('unknown', reason='Synthetic follow-up response loss.'))
+        self.now += self.policy.conversation_followup_seconds
+        self.drain()
+        pending = self.store.one("SELECT id FROM effects WHERE action='gmail.send' AND state='unknown'")
+        self.assertIsNotNone(pending)
+        self.assertEqual(self.store.one('SELECT followups_sent FROM customer_threads WHERE id=?', (cid,))['followups_sent'], 0)
+        self.tools.completed[pending['id']] = Outcome('succeeded', {
+            'message_id': 'fixture-reconciled-followup', 'thread_id': 'fixture-recovery-thread', 'delivery_state': 'accepted'})
+        self.business._reconcile(pending['id'])
+        self.drain()
+        self.assertEqual(self.store.one('SELECT followups_sent FROM customer_threads WHERE id=?', (cid,))['followups_sent'], 1)
+        replies = [message for message in self.business.conversation_view(cid)['messages'] if message['direction'] == 'outbound']
+        self.assertEqual(len(replies), 2)
+        self.assertTrue(all(message['status'] == 'accepted' for message in replies))
+        self.assertEqual(len([call for call in self.tools.calls if call['action'] == 'gmail.send']), 2)
+        self.business._reconcile(pending['id'])
+        self.drain()
+        self.assertEqual(self.store.one('SELECT followups_sent FROM customer_threads WHERE id=?', (cid,))['followups_sent'], 1)
+        self.assertEqual(len([call for call in self.tools.calls if call['action'] == 'gmail.send']), 2)
+        self.assertEqual(len(self.model_calls()), 1)
+
+    def test_lowered_operator_budget_during_capability_read_cannot_admit_model_spending(self):
+        self.tools.on_available = lambda: self.business.configure(replace(self.policy, conversation_run_budget_micro_usd=0))
+        cid = self.send('Can you make a simple title graphic?', None)
+        self.assertEqual(self.model_calls(), [])
+        self.assertEqual(self.economy.calls, [])
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM conversation_allocations')['n'], 0)
+        self.assertEqual(self.business.conversation_view(cid)['status'], 'needs_operator')
+        self.assertIn('policy changed', self.business.conversation_view(cid)['intervention'].lower())
 
 
 if __name__ == '__main__':
