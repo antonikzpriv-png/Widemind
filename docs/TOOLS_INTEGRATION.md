@@ -48,13 +48,13 @@ Unknown effects remain unknown and are reconciled before retry. Definitive not-p
 
 ## Capabilities and real deliverables
 
-Native provider names: `files`, `graphics`, `research.fetch`, `browser.read`, `gmail`, `ai.generate`, `image.generate`, `code.execute`, `publish.artifact`. Gmail aliases translate `gmail.send/read/list/thread` into the existing adapter operations. Missing configuration is unavailable.
+Native provider names: `files`, `graphics`, `research.fetch`, `research.search`, `browser.read`, `gmail`, `ai.generate`, `image.generate`, `code.execute`, `publish.artifact`. Gmail aliases translate `gmail.send/read/list/thread` into the existing adapter operations. Missing configuration is unavailable.
 
 Business workflows:
 
 - `graphics.create`: `{title,description?,width?,height?,elements?,background?,filename?}` creates actual SVG using safe primitives. Returns `{filename,media_type,content,checks,artifact}`.
 - `software.create`: `{title,description?,features?,filename?}` creates an escaped static HTML source file; it executes no arbitrary host code. Returns the same artifact shape.
-- `research.collect`: `{topic,sections,min_sources}` requires owner-configured distinct HTTPS `source_urls`. It fetches actual bounded excerpts/citations and explicitly labels them as source excerpts, not an inferred synthesis. It is unavailable without sources/network setup. Sourced factual interpretation/quality review remains a business requirement.
+- `research.collect` version 2: `{topic,sections,min_sources,context?,requirements?,as_of?,max_age_days?}` freezes customer questions, retrieves curated or search-discovered sources, and generates reviewed Markdown with a private evidence manifest. Every paid generation/correction has a separately authorized child reservation under the authoritative job cap; reconciliation generates no new work. See [customer research setup, accounting and limits](CUSTOMER_RESEARCH.md). Source/network/model/file dependencies must be configured; heuristic review does not establish factual truth.
 
 Local compute, filesystem and network costs are disclosed as owner-supplied/unallocated, not claimed as profitable free infrastructure. The action still requires a genuine economy authorization even at zero direct tool charge.
 
