@@ -19,3 +19,22 @@ During validation, fixes addressed concurrent WAL initialization, policy refresh
 All external adapters in these checks are explicit test/demo fixtures. No real Gmail messages were sent, no real customer or payment was created, no live research was collected, and no real earnings or profitability were demonstrated. The fixture economy is not a production ledger or budget enforcer.
 
 The GitHub workflow declares Python 3.11/3.12/3.13 on Linux and Windows. Those remote jobs and Windows behavior are not claimed as locally verified. Live provider qualification requires the host clients and prerequisites in [BUSINESS.md](BUSINESS.md).
+
+## Follow-up audit
+
+The follow-up audit reproduced failures against the original implementation before fixing them. The full suite now has **56 passing tests**, including 14 additional regression cases. Compilation, repeatable offline demonstrations, wheel installation outside the checkout, and the migration review path are checked again for this revision. Live services and Windows are still not claimed as qualified.
+
+| Finding | Correction |
+| --- | --- |
+| Stored runs could reopen in another execution mode | Pin modes durably; explicitly review/classify legacy runs; reject promotion of known fixture payments |
+| Failed paid work could retry with a consumed reservation | Reject generic paid retries; require a fresh approved plan and budget authorization |
+| Malformed reconciled mail evidence could complete an order | Share schema/size checks between execution and reconciliation; require valid provider references |
+| Ordinary reconciliation could rewrite confirmed terminal success | Preserve confirmed facts; evolve only unresolved outcomes and unconfirmed mail |
+| A completed creation result could be lost across interruption, refund, and resume | Recover and validate the result before the financial hold; reuse the deliverable without another creation reservation |
+| Stopped runs kept stale payment/refund information | Permit read-only financial reconciliation, while deferring all further execution |
+| Whitespace in run identifiers broke settings lookup | Normalize once before every persisted run binding/query |
+| Reassessment retained only the original lesson | Preserve distinct assessment outcomes in private memory |
+| Cancelled/delivered work could receive false overdue failures | Check actual obligation state; distinguish missing confirmation from proven unfinished delivery |
+| Mail metadata and source URLs admitted controls or invalid ports | Validate single-line addresses, attachment metadata, provider IDs, and URL syntax |
+
+Remaining integration limitations are explicit: no visual UI, production economy/tools/Gmail/runtime clients, live-provider evidence, or automatic budgeted paid rework. These are not concealed by the fixture demonstration. GitHub API access remains subject to the cloud network policy.

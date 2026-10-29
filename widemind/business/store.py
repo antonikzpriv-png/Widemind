@@ -55,6 +55,30 @@ class Store:
                             self.db.execute(statement)
                     self.db.execute("INSERT INTO business_migrations VALUES (?)", (entry.name,))
 
+    def bind_run_mode(self, run_id, mode):
+        with self.transaction():
+            saved = self.one("SELECT mode FROM business_runs WHERE run_id=?", (run_id,))
+            if saved is None:
+                self.db.execute("INSERT INTO business_runs VALUES (?,?,?)", (run_id, mode, "explicit new-run configuration"))
+            elif saved["mode"] != mode:
+                raise ValueError("run mode mismatch; legacy runs require explicit adopt-run review")
+
+    def adopt_run_mode(self, run_id, mode, evidence_reference):
+        """Operator migration only: never convert a classified run or known fixture payments."""
+        if mode not in {"live", "demo", "test"} or not isinstance(evidence_reference, str) or not evidence_reference.strip():
+            raise ValueError("mode and review evidence are required")
+        with self.transaction():
+            existing = self.one("SELECT mode FROM business_runs WHERE run_id=?", (run_id,))
+            if not existing or existing["mode"] != "unclassified":
+                raise ValueError("only an unclassified legacy run can be adopted")
+            for row in self.all("SELECT payment FROM orders WHERE run_id=?", (run_id,)):
+                observed = json.loads(row["payment"]).get("mode")
+                if observed and observed != mode:
+                    raise ValueError("legacy payment mode conflicts with proposed adoption")
+            self.db.execute("UPDATE business_runs SET mode=?,evidence_reference=? WHERE run_id=?",
+                            (mode, evidence_reference[:1000], run_id))
+            self.memory(run_id, run_id, "mode_adoption", {"mode": mode, "evidence": evidence_reference[:1000]}, time.time())
+
     @contextlib.contextmanager
     def transaction(self):
         self.db.execute("BEGIN IMMEDIATE")

@@ -41,7 +41,7 @@ Windows uses `.venv\Scripts\python.exe`. Use `python -m widemind` directly if no
 7. Fulfillment sends the commitment, invokes the frozen plan through Tools with a reservation and enforceable cost ceiling, validates scope, persists a private artifact, and delivers through Gmail. Every external effect has a durable intent and stable action ID **before** invocation.
 8. Only confirmed delivery permits notifying economy of fulfillment and completing the order. Economy owns earned revenue. Memory preserves results, sources, previous attempts, and lessons. Evaluations calculate contribution only from final economy-reported costs; provisional costs produce no profit conclusion.
 
-The order stages are `accepted`, `awaiting_payment`, `funded`, `ready`, `delivered`, and `completed`. `payment_hold` and explicit `cancelled` recovery preserve financial exposure. An overdue event records an unmet deadline; it does not silently extend it. A resumed funding round keeps the original deadline.
+The order stages are `accepted`, `awaiting_payment`, `funded`, `ready`, `delivered`, and `completed`. `payment_hold` and explicit `cancelled` recovery preserve financial exposure. An overdue event records an unfinished delivery or missing delivery confirmation; it does not mark cancelled/already-delivered work late or silently extend the deadline. A resumed funding round keeps the original deadline. If creation succeeded before an interruption, its result is rendered and preserved before entering a refund hold; resuming that completed work does not reserve or pay for creation again.
 
 ### Research scope
 
@@ -71,7 +71,7 @@ Unquoted opportunities can be reconsidered after clarification or configuration 
 
 ## Host integration contracts (version 1)
 
-Use a factory returning a fresh `Business` with a thread-local `Store`, the **same** run ID and database for worker/API, and your existing economy, tools, and runtime clients. Keep enforcement and secrets outside the business process's writable account/workspace. This Python protocol is a logical service boundary; it is not itself an OS security sandbox.
+Use a factory returning a fresh `Business` with a thread-local `Store`, the **same** run ID and database for worker/API, and your existing economy, tools, and runtime clients. The database pins each run to its explicit `live`, `demo`, or `test` mode; a later factory cannot reinterpret that run in another mode. Keep enforcement and secrets outside the business process's writable account/workspace. This Python protocol is a logical service boundary; it is not itself an OS security sandbox.
 
 ```python
 # your_host.py — skeleton: these imported clients must be implemented/configured.
@@ -99,7 +99,7 @@ The API binds loopback. Deploy behind TLS and operator authentication/rate limit
 
 ### Runtime
 
-`state(run_id)` returns `active`, `waiting`, `paused`, `stopped`, `exhausted`, or `failed`. Only active/waiting permit new work. Pause/stop do not consume queued business events. Reconciliation events remain available while stopped and only inspect existing effects. The control plane is responsible for cancellation of supported active actions; the business module cannot force cancellation in another provider. Gateway calls must have enforced time/resource bounds. Do not run the demo runtime as a live control plane.
+`state(run_id)` returns `active`, `waiting`, `paused`, `stopped`, `exhausted`, or `failed`. Only active/waiting permit new work. Pause/stop do not consume queued business events. Reconciliation events remain available while stopped and only inspect existing effects. Payment-change notifications can also refresh verified financial snapshots while paused/stopped, queuing further work for resume without invoking creation, mail sends, or new reservations. The control plane is responsible for cancellation of supported active actions; the business module cannot force cancellation in another provider. Gateway calls must have enforced time/resource bounds. Do not run the demo runtime as a live control plane.
 
 ### Economy
 
@@ -182,11 +182,21 @@ Events use `source` plus `external_id` scoped to a run as deduplication identity
 
 ## Recovery and migrations
 
-Migrations are ordered SQL files owned by this module. Startup applies each atomically with a migration version row. Preserve the private database, WAL, and adapter journals together with consistent backups. Use SQLite's online backup mechanism or quiesce all writers; do not copy only the main file of a running WAL database. Store and back up customer data according to your retention policy. Database files are created owner-only; deployment directories, backups, WAL/shm files, fixture output, logs, and reverse proxies must also remain private.
+Migrations are ordered SQL files owned by this module. Migration 005 marks pre-audit runs `unclassified` because their original configuration did not persist a mode. They fail closed until the operator reviews their effects/history and classifies them explicitly. Known payment snapshot modes must match the chosen mode; a classified run cannot be promoted or switched.
 
-The event queue claims a lease before work. An interrupted event is reclaimable after 120 seconds; an existing intent is reconciled rather than reinvoked. Normal blocked work does not retry on a timer. Diagnostics preserve the blocking cause. Fix the dependency, reconcile the relevant action, and enqueue a **new uniquely identified** advance/offer event. A reconciliation event updates evidence only; it does not itself start more fulfillment while stopped.
+For an **existing, reviewed fixture** database only:
 
-A confirmed failed action may receive an explicit retry authorization. The new attempt has a distinct action ID, preserves the prior audit record, and is capped at three total attempts. Enqueue the appropriate advance/offer event after authorizing it. Unknown effects cannot be retried. This avoids spending repeatedly on an unproductive or uncertain action.
+```sh
+python -m widemind adopt-run --database /private/demo/business.sqlite3 --run-id demo-run --mode demo --evidence-reference reviewed-offline-demo-history
+```
+
+Use a new run/database for live operations rather than converting demo data. For a legacy live run, review all external effects and provider evidence before using `adopt-run --mode live`; the command does not authenticate old transactions or make a fixture real. New runs are pinned automatically and need no adoption step.
+
+ Startup applies each atomically with a migration version row. Preserve the private database, WAL, and adapter journals together with consistent backups. Use SQLite's online backup mechanism or quiesce all writers; do not copy only the main file of a running WAL database. Store and back up customer data according to your retention policy. Database files are created owner-only; deployment directories, backups, WAL/shm files, fixture output, logs, and reverse proxies must also remain private.
+
+The event queue claims a lease before work. An interrupted event is reclaimable after 120 seconds; an existing intent is reconciled rather than reinvoked. Normal blocked work does not retry on a timer. Diagnostics preserve the blocking cause. Fix the dependency, reconcile the relevant action, and enqueue a **new uniquely identified** advance/offer event. A reconciliation event updates evidence only; it does not itself start more fulfillment while stopped. Execution and reconciliation use the same result/schema limits. Confirmed terminal success is retained; only unresolved outcomes or accepted-but-unconfirmed mail may evolve through ordinary reconciliation.
+
+A confirmed failed nonbillable action or economy authorization request may receive an explicit retry authorization. The new attempt has a distinct action ID, preserves the prior audit record, and is capped at three total attempts. **Paid tool failures cannot use this generic retry:** their reservation may already be settled and their charge remains real. They require a newly approved plan with fresh economy authorization; automated paid rework is not implemented in this slice. Enqueue the appropriate advance/offer event after authorizing it. Unknown effects cannot be retried. This avoids spending repeatedly on an unproductive or uncertain action.
 
 Payment/refund/dispute changes before fulfillment place a funded order on hold after resolving any unknown effects and releasing the appropriate reservation. Confirmed delivery is recorded even if a refund arrived before its acknowledgment. Resuming a hold requires verified settlement and explicit operator evidence; unfinished creation receives a fresh reservation. Cancelling preserves unrefunded receipts and the refund exposure for economy/operator resolution. A cancellation is **not** a refund and does not erase historical commitments or costs. Payment notifications continue to update cancelled/completed orders.
 

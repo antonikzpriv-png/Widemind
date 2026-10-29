@@ -297,7 +297,8 @@ class BusinessTests(unittest.TestCase):
         job = self.order()
         self.paid(job)
         self.adapters.set("state", "paused")
-        self.assertFalse(self.business.tick())
+        drain(self.business)  # Payment reconciliation remains available while paused.
+        self.assertEqual(self.business.order(job)["status"], "awaiting_payment")
         self.assertEqual(self.count("reserve"), 0)
         self.adapters.set("state", "active")
         self.until(job, "funded")
@@ -426,7 +427,7 @@ class BusinessTests(unittest.TestCase):
             store.close()
             return count
         with ThreadPoolExecutor(max_workers=2) as pool:
-            self.assertEqual(list(pool.map(initialize, range(2))), [4, 4])
+            self.assertEqual(list(pool.map(initialize, range(2))), [5, 5])
         with worker_lock(path):
             with self.assertRaises(OSError):
                 with worker_lock(path):

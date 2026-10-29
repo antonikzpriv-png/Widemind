@@ -10,9 +10,20 @@ def text(value, name, limit=10000):
     return value.strip()
 
 
+def single_line(value, name, limit=300):
+    # Validate the original string: stripping first would hide trailing CR/LF
+    # while callers still retain the original provider ID or attachment fields.
+    if isinstance(value, str) and any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise ValueError(f"invalid {name}: control characters")
+    return text(value, name, limit)
+
+
 def web_url(value):
-    value = text(value, "source URL", 2048)
+    value = single_line(value, "source URL", 2048)
+    if any(ch.isspace() for ch in value):
+        raise ValueError("URL whitespace must be encoded")
     parsed = urlsplit(value)
+    _ = parsed.port  # Reject invalid and out-of-range ports.
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise ValueError("source must be an HTTPS URL")
     return value

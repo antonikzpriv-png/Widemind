@@ -6,7 +6,7 @@ import time
 from dataclasses import asdict
 from .contracts import Outcome, Plan
 from .policy import Policy, integer
-from .services import ResearchBrief, text, web_url
+from .services import ResearchBrief, single_line, text, web_url
 from .store import encode, identity
 
 
@@ -20,11 +20,13 @@ class Business:
         if mode not in {"live", "demo", "test"}:
             raise ValueError("invalid mode")
         self.store, self.run_id = store, text(run_id, "run_id", 200)
+        run_id = self.run_id
         self.economy, self.tools, self.runtime, self.clock = economy, tools, runtime, clock
         self.mode = mode
         if mode == "live" and any(getattr(client, "mode", None) in {"demo", "test"}
                                   for client in (economy, tools, runtime)):
             raise ValueError("fixture adapters cannot be used in live mode")
+        store.bind_run_mode(run_id, mode)
         self.services = {s.name: s for s in (services if services is not None else [ResearchBrief()])}
         saved = store.one("SELECT document FROM settings WHERE run_id=?", (run_id,))
         self.policy = policy or (Policy(**json.loads(saved["document"])) if saved else Policy())
@@ -62,7 +64,7 @@ class Business:
     def _customer(self, email):
         if not isinstance(email, str) or len(email) > 254 or not re.fullmatch(r"[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+", email):
             raise ValueError("invalid customer email")
-        email = email.lower()
+        email = single_line(email, "customer email", 254).lower()
         customer_id = identity(self.run_id, email)
         self.store.db.execute("INSERT OR IGNORE INTO customers VALUES (?,?,?,0,?)",
                               (customer_id, self.run_id, email, self.clock()))
@@ -228,17 +230,8 @@ class Business:
                 outcome = invoke(action_id)
             except Exception:
                 outcome = Outcome("unknown", reason="adapter exception; reconcile before retry")
-        if not isinstance(outcome, Outcome) or outcome.state not in {"succeeded", "failed", "unknown"}:
-            outcome = Outcome("unknown", reason="invalid adapter outcome")
-        # Make sure an oversized/unserializable result cannot create a repeat call.
-        try:
-            if not isinstance(outcome.data, dict):
-                raise ValueError("outcome data must be an object")
-            result = encode(outcome.data)
-            if len(result) > 2_000_000:
-                raise ValueError("result exceeds limit")
-        except (TypeError, ValueError):
-            outcome, result = Outcome("unknown", reason="invalid adapter result"), "{}"
+        outcome = self._validated_outcome(outcome, action)
+        result = encode(outcome.data)
         self.store.db.execute("UPDATE effects SET state=?,result=?,reason=? WHERE id=?",
                               (outcome.state, result, outcome.reason[:1000], action_id))
         if outcome.state == "unknown":
@@ -246,6 +239,25 @@ class Business:
         if outcome.state == "failed":
             raise Deferred(f"confirmed action failure: {outcome.reason[:200]}")
         return outcome.data
+
+    @staticmethod
+    def _validated_outcome(outcome, action):
+        if not isinstance(outcome, Outcome) or not isinstance(outcome.state, str) or outcome.state not in {"succeeded", "failed", "unknown"}:
+            return Outcome("unknown", reason="invalid adapter outcome")
+        try:
+            if not isinstance(outcome.data, dict) or not isinstance(outcome.reason, str):
+                raise ValueError("invalid outcome shape")
+            if len(encode(outcome.data)) > 2_000_000:
+                raise ValueError("result exceeds limit")
+            if action == "gmail.send" and outcome.state == "succeeded":
+                if outcome.data.get("delivery_state") not in {"confirmed", "accepted", "unknown"}:
+                    raise ValueError("missing transport state")
+                single_line(outcome.data.get("message_id"), "message_id", 300)
+                if "thread_id" in outcome.data:
+                    single_line(outcome.data["thread_id"], "thread_id", 300)
+        except (TypeError, ValueError, RecursionError):
+            return Outcome("unknown", reason="invalid adapter result; reconciliation required")
+        return outcome
 
     def _tool(self, entity, step, action, arguments, reservation=None, maximum=0):
         if not self._active():
@@ -310,7 +322,7 @@ class Business:
                 assessment = self._assess(opportunity)
                 self.store.db.execute("UPDATE opportunities SET assessment=?,status=? WHERE id=?",
                     (encode(assessment), "assessed" if assessment["feasible"] else "needs_review", opportunity["id"]))
-                self.store.memory(self.run_id, opportunity["id"], "assessment", assessment, self.clock(), opportunity["customer_id"])
+                self.store.memory(self.run_id, opportunity["id"], "assessment:" + identity(assessment), assessment, self.clock(), opportunity["customer_id"])
                 if assessment["feasible"]:
                     score = (self.policy.priority_weight * opportunity["priority"] * 1_000_000 +
                              self.policy.margin_weight * assessment["expected_contribution_micro_usd"] +
@@ -417,13 +429,25 @@ class Business:
             self._status(order, "completed", completed_at=self.clock())
             self._evaluate(order, snapshot)
             return
+        if order["status"] == "funded":
+            created = self.store.one("SELECT * FROM effects WHERE logical_id=? ORDER BY attempt DESC LIMIT 1",
+                                     (identity(self.run_id, order_id, "create"),))
+            if created and created["state"] == "succeeded":
+                service = self.services.get(order["service"])
+                if service is None:
+                    raise Deferred("service validator unavailable for recovery")
+                artifact = service.deliverable(json.loads(order["scope"]), json.loads(created["result"]))
+                self._validate_artifact(artifact)
+                self._status(order, "ready", artifact=encode(artifact))
+                return
         # Payment changes never override uncertainty: reconcile in-flight external
         # effects first, even when delivery may already have happened.
         delivery = self.store.one("SELECT * FROM effects WHERE job_id=? AND action='gmail.send' AND request LIKE ? ORDER BY attempt DESC LIMIT 1",
             (order_id, '%"attachment":%'))
         if order["status"] == "ready" and delivery:
             evidence = json.loads(delivery["result"] or "{}")
-            if delivery["state"] == "succeeded" and evidence.get("delivery_state") == "confirmed" and evidence.get("message_id"):
+            checked = self._validated_outcome(Outcome(delivery["state"], evidence), "gmail.send")
+            if checked.state == "succeeded" and evidence.get("delivery_state") == "confirmed":
                 self._record_mail(order_id, "delivery", order["customer_id"], evidence)
                 self._status(order, "delivered", delivery_reference=evidence["message_id"])
                 return
@@ -499,10 +523,12 @@ class Business:
     def _validate_artifact(artifact):
         if not isinstance(artifact, dict):
             raise ValueError("missing deliverable")
-        filename = text(artifact.get("filename"), "filename", 200)
+        filename = single_line(artifact.get("filename"), "filename", 200)
         if "/" in filename or "\\" in filename or filename in {".", ".."}:
             raise ValueError("unsafe artifact filename")
-        text(artifact.get("media_type"), "media_type", 100)
+        media_type = single_line(artifact.get("media_type"), "media_type", 100)
+        if any(ch.isspace() for ch in media_type) or "/" not in media_type:
+            raise ValueError("invalid media type")
         text(artifact.get("content"), "artifact content", 1_000_000)
         if not artifact.get("checks") or not all(v is True or type(v) is int and v > 0 for v in artifact["checks"].values()):
             raise ValueError("scope checks failed")
@@ -581,7 +607,7 @@ class Business:
         with self.store.transaction():
             event = self.store.one("""SELECT * FROM events WHERE run_id=? AND
                 ((state='queued' AND due_at<=?) OR (state='running' AND lease_until<=?))
-                AND (? OR kind='reconcile') ORDER BY due_at,id LIMIT 1""", (self.run_id, now, now, active))
+                AND (? OR kind IN ('reconcile','payment.changed')) ORDER BY due_at,id LIMIT 1""", (self.run_id, now, now, active))
             if not event:
                 return False
             if event["attempts"] >= 5:
@@ -595,14 +621,19 @@ class Business:
                 self._select()
             elif kind == "offer":
                 self._offer(entity)
+            elif kind == "payment.changed" and not self._active():
+                order = self.order(entity)
+                snapshot = self._snapshot(order)
+                self.store.memory(self.run_id, entity, "financial_update:" + identity(snapshot), snapshot, self.clock(), order["customer_id"])
+                # Preserve a wakeup for resumed operation without doing any action
+                # while paused/stopped. Duplicate provider hints remain idempotent.
+                self._enqueue("advance", entity, "payment:" + str(snapshot["revision"]))
             elif kind in {"advance", "payment.changed"}:
                 self._advance(entity)
             elif kind == "gmail.sync":
                 self._gmail(event)
             elif kind == "deadline":
-                order = self.order(entity)
-                if order["status"] != "completed":
-                    self.store.memory(self.run_id, entity, "deadline", {"state": "delivery_overdue", "due_at": order["delivery_due_at"]}, now, order["customer_id"])
+                self._deadline(entity, now)
             elif kind == "reconcile":
                 self._reconcile(entity)
             self.store.db.execute("UPDATE events SET state='done',lease_until=NULL,error=NULL WHERE id=?", (event["id"],))
@@ -616,6 +647,21 @@ class Business:
             self.store.db.execute("UPDATE events SET state='blocked',lease_until=NULL,error='adapter unavailable; inspect private diagnostics' WHERE id=?", (event["id"],))
         return True
 
+    def _deadline(self, order_id, now):
+        order = self.order(order_id)
+        if order["status"] in {"completed", "delivered", "cancelled", "failed"} or order["delivery_due_at"] is None or order["delivery_due_at"] > now:
+            return
+        delivery = self.store.one("SELECT * FROM effects WHERE job_id=? AND action='gmail.send' AND request LIKE ? ORDER BY attempt DESC LIMIT 1",
+                                  (order_id, '%"attachment":%'))
+        state = "delivery_overdue"
+        if delivery:
+            evidence = json.loads(delivery["result"] or "{}")
+            checked = self._validated_outcome(Outcome(delivery["state"], evidence), "gmail.send")
+            if checked.state == "succeeded" and evidence.get("delivery_state") == "confirmed":
+                return
+            state = "delivery_confirmation_overdue"
+        self.store.memory(self.run_id, order_id, "deadline", {"state": state, "due_at": order["delivery_due_at"]}, now, order["customer_id"])
+
     def retry_effect(self, action_id, *, evidence_reference):
         """Operator/provider-triggered retry only after a confirmed terminal failure."""
         text(evidence_reference, "retry evidence", 1000)
@@ -625,6 +671,9 @@ class Business:
             previous = self.store.one("SELECT * FROM effects WHERE id=? AND run_id=?", (action_id, self.run_id))
             if not previous or previous["state"] != "failed" or previous["attempt"] >= 2:
                 raise ValueError("only confirmed failures can be retried, at most twice")
+            request = json.loads(previous["request"])
+            if previous["provider"] == "tools" and request.get("maximum", 0) > 0:
+                raise ValueError("paid work requires a new approved plan and fresh reservation; never reuse a settled authorization")
             next_id = identity(action_id, "retry")
             self.store.db.execute("""INSERT OR IGNORE INTO effects
               (id,run_id,job_id,provider,action,request,state,created_at,logical_id,attempt)
@@ -638,10 +687,15 @@ class Business:
         effect = self.store.one("SELECT * FROM effects WHERE id=? AND run_id=?", (action_id, self.run_id))
         if not effect or effect["state"] not in {"running", "unknown", "succeeded"}:
             return
+        if effect["state"] == "succeeded":
+            previous = json.loads(effect["result"] or "{}")
+            if effect["action"] != "gmail.send":
+                return
+            verified = self._validated_outcome(Outcome("succeeded", previous), "gmail.send")
+            if verified.state == "succeeded" and previous.get("delivery_state") == "confirmed":
+                return
         client = self.economy if effect["provider"] == "economy" else self.tools
-        result = client.reconcile(action_id=action_id)
-        if not isinstance(result, Outcome) or result.state not in {"succeeded", "failed", "unknown"}:
-            raise Deferred("invalid reconciliation")
+        result = self._validated_outcome(client.reconcile(action_id=action_id), effect["action"])
         # A transport 'succeeded' response can initially only mean mail accepted.
         # Reconciliation can replace it with confirmed delivery/bounce evidence.
         self.store.db.execute("UPDATE effects SET state=?,result=?,reason=? WHERE id=?",

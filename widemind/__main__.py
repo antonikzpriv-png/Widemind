@@ -3,7 +3,7 @@ import importlib
 import os
 from wsgiref.simple_server import make_server
 from .business.api import API
-from .business.store import encode
+from .business.store import Store, encode
 from .worker import serve
 
 
@@ -27,11 +27,24 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     demo = sub.add_parser("demo", help="explicit offline fixture demonstration")
     demo.add_argument("--directory", required=True, help="private demo output directory")
+    adopt = sub.add_parser("adopt-run", help="classify a reviewed pre-audit database run; no external effects")
+    adopt.add_argument("--database", required=True)
+    adopt.add_argument("--run-id", required=True)
+    adopt.add_argument("--mode", required=True, choices=("live", "demo", "test"))
+    adopt.add_argument("--evidence-reference", required=True)
     worker = sub.add_parser("worker", help="host-injected persistent worker")
     worker.add_argument("--once", action="store_true")
     api = sub.add_parser("api", help="loopback API; TLS/authenticated reverse proxy required in deployment")
     api.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
+    if args.command == "adopt-run":
+        store = Store(args.database)
+        try:
+            store.adopt_run_mode(args.run_id.strip(), args.mode, args.evidence_reference)
+        finally:
+            store.close()
+        print(encode({"run_id": args.run_id.strip(), "mode": args.mode, "adopted": True}))
+        return
     if args.command == "demo":
         from .demo import demonstrate
         print(encode(demonstrate(args.directory)))
