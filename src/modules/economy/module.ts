@@ -37,7 +37,7 @@ export function createEconomyModule(
             Array.isArray(body) ||
             Object.keys(body).some((key) => !["runId", "mode"].includes(key)) ||
             typeof body.runId !== "string" ||
-            !["sandbox", "live"].includes(String(body.mode))
+            (body.mode !== "sandbox" && body.mode !== "live")
           )
             return {
               status: 422,

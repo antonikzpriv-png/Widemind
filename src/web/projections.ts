@@ -1,6 +1,7 @@
 import { callDependency } from "../runtime/dependencies.ts";
 import type { Services } from "../modules/registry.ts";
 import type {
+  Availability,
   FinancialSummary,
   PublicWebsiteData,
 } from "../contracts/index.ts";
@@ -128,6 +129,55 @@ function financialProjection(
   }
   return result;
 }
+function publicString(value: unknown, maximum: number): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximum &&
+    !/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)
+  );
+}
+function publicAvailability(value: unknown): Availability {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const row = value as Record<string, unknown>;
+    if (row.available === true) return { available: true };
+    if (row.available === false && publicString(row.reason, 2000))
+      return { available: false, reason: row.reason };
+  }
+  return { available: false, reason: "Website availability unavailable" };
+}
+function publicOfferings(value: unknown): PublicWebsiteData["offerings"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    if (
+      !publicString(row.id, 200) ||
+      !publicString(row.title, 200) ||
+      !publicString(row.description, 2000)
+    )
+      return [];
+    return [{ id: row.id, title: row.title, description: row.description }];
+  });
+}
+function publicActivity(value: unknown): PublicWebsiteData["activity"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item: unknown) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    if (
+      !publicString(row.id, 200) ||
+      !publicString(row.at, 40) ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|\+00:00)$/.test(
+        row.at,
+      ) ||
+      !Number.isFinite(Date.parse(row.at)) ||
+      !publicString(row.text, 2000)
+    )
+      return [];
+    return [{ id: row.id, at: row.at, text: row.text }];
+  });
+}
 export async function publicProjection(
   store: Store,
   services: Services,
@@ -159,17 +209,9 @@ export async function publicProjection(
           ).catch(() => null)
         : null,
     ),
-    offerings: content.offerings.map((item) => ({
-      id: item.id,
-      title: item.title,
-      description: item.description,
-    })),
-    activity: content.activity.map((item) => ({
-      id: item.id,
-      at: item.at,
-      text: item.text,
-    })),
-    availability: content.availability,
+    offerings: publicOfferings(content.offerings),
+    activity: publicActivity(content.activity),
+    availability: publicAvailability(content.availability),
   };
 }
 export function privateProjection(

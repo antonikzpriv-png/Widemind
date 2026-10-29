@@ -110,7 +110,7 @@ function equalLimit(first: BudgetLimit, second: BudgetLimit): boolean {
 export function validateSummary(value: unknown): Summary | null {
   if (value === null) return null;
   const row = object(value);
-  if (row.currency !== "USD" || !["sandbox", "live"].includes(String(row.mode)))
+  if (row.currency !== "USD" || (row.mode !== "sandbox" && row.mode !== "live"))
     throw invalid();
   if (
     typeof row.asOf !== "string" ||
@@ -192,7 +192,7 @@ function accountingReceipt(
   if (
     row.version !== 1 ||
     row.actionId !== reservation.actionId ||
-    !["succeeded", "failed"].includes(String(row.status)) ||
+    (row.status !== "succeeded" && row.status !== "failed") ||
     typeof source.billableFailure !== "boolean" ||
     typeof source.provisional !== "boolean"
   )
