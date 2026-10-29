@@ -131,7 +131,11 @@ export interface Economy {
   confirmNotPerformed?(
     reservation: Reservation,
     evidenceRef: string,
-  ): Promise<{ kind: "renewed" } | { kind: "unavailable"; reason: string }>;
+  ): Promise<
+    | { kind: "renewed" }
+    | { kind: "closed" }
+    | { kind: "unavailable"; reason: string }
+  >;
   /** Idempotent by actionId + provider/account/event ID; includes charged failures. */
   settle(
     reservation: Reservation,

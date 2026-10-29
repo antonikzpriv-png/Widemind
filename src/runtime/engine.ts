@@ -5,6 +5,7 @@ import type {
   Reservation,
   RuntimeConfig,
   RunState,
+  Json,
   ToolAction,
   ToolReceipt,
 } from "../contracts/index.ts";
@@ -81,11 +82,162 @@ function validateReceipt(receipt: ToolReceipt, action: ToolAction) {
     typeof receipt.usage.provisional !== "boolean"
   )
     throw new Error("Receipt lacks accounting flags");
-  if (
-    Buffer.byteLength(JSON.stringify(receipt)) >
-    action.limit.maxOutputBytes + 8192
-  )
-    throw new Error("Tool exceeded bounded receipt size; reconcile usage");
+}
+function boundedResult(value: unknown, maximum: number) {
+  let bytes = 0;
+  let reason: "output_limit" | "invalid_result" = "invalid_result";
+  const active = new WeakSet<object>();
+  const consume = (amount: number) => {
+    bytes += amount;
+    if (bytes > maximum) {
+      reason = "output_limit";
+      throw new Error("Output limit");
+    }
+  };
+  const string = (text: string) => {
+    consume(2);
+    for (let i = 0; i < text.length; i++) {
+      const point = text.charCodeAt(i);
+      if (point === 34 || point === 92) consume(2);
+      else if (point < 32) consume([8, 9, 10, 12, 13].includes(point) ? 2 : 6);
+      else if (point < 128) consume(1);
+      else if (point < 2048) consume(2);
+      else if (
+        point >= 0xd800 &&
+        point <= 0xdbff &&
+        text.charCodeAt(i + 1) >= 0xdc00 &&
+        text.charCodeAt(i + 1) <= 0xdfff
+      ) {
+        consume(4);
+        i++;
+      } else if (point >= 0xd800 && point <= 0xdfff) consume(6);
+      else consume(3);
+    }
+  };
+  const visit = (item: unknown, depth: number): Json => {
+    if (depth > 128) throw new Error("Output nesting");
+    if (item === null) {
+      consume(4);
+      return null;
+    }
+    if (typeof item === "string") {
+      string(item);
+      return item;
+    }
+    if (typeof item === "boolean") {
+      consume(item ? 4 : 5);
+      return item;
+    }
+    if (typeof item === "number" && Number.isFinite(item)) {
+      consume(JSON.stringify(item).length);
+      return item;
+    }
+    if (typeof item !== "object" || active.has(item))
+      throw new Error("Invalid JSON output");
+    active.add(item);
+    try {
+      consume(2);
+      if (Array.isArray(item)) {
+        const copy: Json[] = [];
+        for (let i = 0; i < item.length; i++) {
+          if (i) consume(1);
+          copy.push(visit(item[i], depth + 1));
+        }
+        return copy;
+      }
+      const prototype = Object.getPrototypeOf(item);
+      if (prototype !== Object.prototype && prototype !== null)
+        throw new Error("Output must be plain JSON");
+      const copy: Record<string, Json> = {};
+      let first = true;
+      for (const key in item) {
+        if (!Object.hasOwn(item, key)) continue;
+        if (!first) consume(1);
+        first = false;
+        string(key);
+        consume(1);
+        Object.defineProperty(copy, key, {
+          value: visit((item as Record<string, unknown>)[key], depth + 1),
+          enumerable: true,
+          configurable: true,
+          writable: true,
+        });
+      }
+      return copy;
+    } finally {
+      active.delete(item);
+    }
+  };
+  try {
+    return { result: visit(value, 0), rejected: false };
+  } catch {
+    return { result: { omitted: true, reason }, rejected: true };
+  }
+}
+function prepareReceipt(receipt: ToolReceipt, action: ToolAction) {
+  validateReceipt(receipt, action);
+  const output = boundedResult(receipt.result, action.limit.maxOutputBytes);
+  const normalized: ToolReceipt = {
+    version: 1,
+    actionId: receipt.actionId,
+    status: receipt.status,
+    result: output.result,
+    usage: {
+      actualCharge: money(receipt.usage.actualCharge.micros),
+      provider: receipt.usage.provider,
+      accountRef: receipt.usage.accountRef,
+      externalEventId: receipt.usage.externalEventId,
+      billableFailure: receipt.usage.billableFailure,
+      provisional: receipt.usage.provisional,
+      evidenceRef: receipt.usage.evidenceRef,
+    },
+  };
+  let accountingMetadataOmitted = false;
+  try {
+    if (receipt.usage.nativeAmount !== undefined) {
+      const native = receipt.usage.nativeAmount;
+      if (
+        native &&
+        [
+          native.currency,
+          native.minorUnits,
+          native.conversionRef,
+          native.rounding,
+        ].every(
+          (value) =>
+            typeof value === "string" &&
+            value.length > 0 &&
+            value.length <= 2000,
+        )
+      ) {
+        const projected = {
+          currency: native.currency,
+          minorUnits: native.minorUnits,
+          conversionRef: native.conversionRef,
+          rounding: native.rounding,
+        };
+        if (!boundedResult(projected, 8192).rejected)
+          normalized.usage.nativeAmount = projected;
+        else accountingMetadataOmitted = true;
+      } else accountingMetadataOmitted = true;
+    }
+  } catch {
+    accountingMetadataOmitted = true;
+  }
+  try {
+    if (
+      typeof receipt.externalRef === "string" &&
+      receipt.externalRef.length <= 2000
+    )
+      normalized.externalRef = receipt.externalRef;
+  } catch {
+    accountingMetadataOmitted = true;
+  }
+  return {
+    receipt: normalized,
+    outputRejected: output.rejected,
+    accountingMetadataOmitted,
+  };
 }
 export class AgentRuntime {
   readonly owner = randomUUID();
@@ -417,8 +569,7 @@ export class AgentRuntime {
           );
           return pendingState();
         }
-        if (!reconciled.evidenceRef || row.attempts >= 3 || !canStart())
-          return "waiting";
+        if (!reconciled.evidenceRef) return "waiting";
         if (this.services.economy.confirmNotPerformed) {
           const confirmation = await this.dependency(
             "economy.confirmNotPerformed",
@@ -428,12 +579,33 @@ export class AgentRuntime {
                 reconciled.evidenceRef,
               ),
           );
+          if (confirmation.kind === "closed") {
+            this.store.fenced(lease, () => {
+              this.store.db
+                .prepare(
+                  "UPDATE runtime_actions SET state='failed',reason='Confirmed no effect; execution attempt ceiling reached',updated_at=? WHERE id=?",
+                )
+                .run(Date.now(), action.actionId);
+              this.store.db
+                .prepare(
+                  "UPDATE runtime_outbox SET state='delivered',updated_at=? WHERE action_id=?",
+                )
+                .run(Date.now(), action.actionId);
+              this.store.event(
+                action.runId,
+                "action.not_performed_closed",
+                action.actionId,
+              );
+            });
+            return "done";
+          }
           if (confirmation.kind !== "renewed") {
             this.unresolved(lease, action.actionId, confirmation.reason);
             return "waiting";
           }
           if (!canStart()) return "waiting";
         }
+        if (row.attempts >= 3 || !canStart()) return "waiting";
         this.store.fenced(lease, () => {
           this.store.db
             .prepare(
@@ -550,14 +722,32 @@ export class AgentRuntime {
       }
       receipt = result.receipt;
     }
-    validateReceipt(receipt, action);
-    this.store.fenced(lease, () =>
+    const prepared = prepareReceipt(receipt, action);
+    receipt = prepared.receipt;
+    this.store.fenced(lease, () => {
       this.store.db
         .prepare(
           "UPDATE runtime_actions SET receipt_json=?,updated_at=? WHERE id=?",
         )
-        .run(JSON.stringify(receipt), Date.now(), action.actionId),
-    );
+        .run(JSON.stringify(receipt), Date.now(), action.actionId);
+      for (const [rejected, kind] of [
+        [prepared.outputRejected, "action.output_rejected"],
+        [
+          prepared.accountingMetadataOmitted,
+          "action.accounting_metadata_omitted",
+        ],
+      ] as const) {
+        if (
+          rejected &&
+          !this.store.db
+            .prepare(
+              "SELECT 1 FROM runtime_events WHERE run_id=? AND kind=? AND detail=? LIMIT 1",
+            )
+            .get(action.runId, kind, action.actionId)
+        )
+          this.store.event(action.runId, kind, action.actionId);
+      }
+    });
     const settlement = await this.dependency("economy.settle", () =>
       this.services.economy.settle(reservation!, receipt!),
     );
@@ -575,13 +765,25 @@ export class AgentRuntime {
       this.unresolved(lease, action.actionId, settlement.reason);
       return pendingState();
     }
+    const outputRejected = Boolean(
+      this.store.db
+        .prepare(
+          "SELECT 1 FROM runtime_events WHERE run_id=? AND kind='action.output_rejected' AND detail=? LIMIT 1",
+        )
+        .get(action.runId, action.actionId),
+    );
     this.store.fenced(lease, () => {
       this.store.db
         .prepare(
-          "UPDATE runtime_actions SET state=?,reason=NULL,updated_at=? WHERE id=?",
+          "UPDATE runtime_actions SET state=?,reason=?,updated_at=? WHERE id=?",
         )
         .run(
-          receipt.status === "succeeded" ? "completed" : "failed",
+          receipt.status === "succeeded" && !outputRejected
+            ? "completed"
+            : "failed",
+          outputRejected
+            ? "Tool output was unusable; confirmed outcome and charges preserved"
+            : null,
           Date.now(),
           action.actionId,
         );

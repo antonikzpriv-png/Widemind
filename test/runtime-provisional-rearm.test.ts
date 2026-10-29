@@ -83,3 +83,44 @@ test("an accounting rearm timeout never permits another execute attempt", async 
     f.close();
   }
 });
+
+test("the third definitive no-effect proof closes accounting and the outbox without a fourth attempt", async () => {
+  const f = fixture();
+  const id = f.store.create("demo");
+  f.store.control(id, "resume");
+  let executed = 0,
+    confirmed = 0;
+  f.services.tools.execute = async () => {
+    executed++;
+    return { kind: "unknown", reason: "Provider response unavailable" };
+  };
+  f.services.tools.reconcile = async () => ({
+    kind: "not_performed",
+    evidenceRef: `fixture-no-effect-${executed}`,
+  });
+  f.services.economy.confirmNotPerformed = async () => {
+    confirmed++;
+    return executed >= 3 ? { kind: "closed" } : { kind: "renewed" };
+  };
+  try {
+    await f.runtime.tick();
+    for (let i = 0; i < 3; i++) {
+      f.store.control(id, "wake");
+      await f.runtime.tick();
+    }
+    assert.equal(executed, 3);
+    assert.equal(confirmed, 3);
+    assert.equal(f.store.actions(id)[0]?.state, "failed");
+    assert.equal(f.store.actions(id)[0]?.receipt_json, null);
+    assert.match(f.store.actions(id)[0]?.reason ?? "", /Confirmed no effect/);
+    assert.equal(
+      f.db.prepare("SELECT state FROM runtime_outbox").get()?.state,
+      "delivered",
+    );
+    f.store.control(id, "wake");
+    await f.runtime.tick();
+    assert.equal(executed, 3);
+  } finally {
+    f.close();
+  }
+});
