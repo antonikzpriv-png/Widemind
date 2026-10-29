@@ -4,6 +4,7 @@ import json
 import pytest
 
 from widemind.integrated_service import IntegratedTools
+from widemind import research_runtime
 from widemind.tools.contracts import Quote, ToolError, ToolResult, ToolSpec, Usage
 from test_research_economy_http import native_economy
 from test_integrated_service import Economy, Secrets, action as fixture_action
@@ -120,3 +121,43 @@ def test_oversized_child_presentation_posts_known_native_bill_and_preserves_unus
         assert balance['available_micro_usd'] == 5_000_000 - 100
         assert tools.execute({'action': action, 'reservation': reservation}) == outcome
         assert adapter.calls == 1
+
+
+def test_parent_rechecks_terminal_receipt_after_acquiring_replacement_lease(tmp_path, monkeypatch):
+    """A newer valid lease must not turn a stale admission read into a replay."""
+    monkeypatch.delenv('WIDEMIND_RUNTIME_DATABASE', raising=False)
+    monkeypatch.setenv('WIDEMIND_TOOLS_ACCOUNT', 'dedicated-tools')
+
+    class OrchestrationFixture:
+        spec = ToolSpec('research.collect', 'Synthetic parent lease race', version=2)
+        calls = 0
+        def quote(self, args, config):
+            return Quote()
+        def execute(self, args, ctx):
+            self.calls += 1
+            return ToolResult({'unexpected_replay': True}, Usage())
+
+    economy, adapter = Economy(), OrchestrationFixture()
+    config = {'control_dir': str(tmp_path / 'control'), 'workspace_dir': str(tmp_path / 'workspace'),
+              'policy': {'profile': 'sandbox', 'allow_external_effects': True},
+              'tools': {'research.collect': {'enabled': True}}}
+    tools = IntegratedTools(config, economy, adapters=[adapter], secrets=Secrets())
+    action = fixture_action('research.collect', {'topic': 'Synthetic lease fixture'}, id='parent-admission-race')
+    reservation = economy.add(action)
+    actual_lease = research_runtime.ResearchLease
+    accepted = []
+
+    def commit_before_new_lease(journal, action_id, duration):
+        # Another worker's terminal commit occurs after _research read the old
+        # operation row, before this worker can claim the replacement lease.
+        result = tools.receipt(action, ToolResult({'accepted_by_previous_owner': True}, Usage()))
+        journal.save(action_id, status='succeeded', result=json.dumps(result))
+        accepted.append(result)
+        return actual_lease(journal, action_id, duration)
+
+    monkeypatch.setattr(research_runtime, 'ResearchLease', commit_before_new_lease)
+    outcome = tools.execute({'action': action, 'reservation': reservation})
+    assert outcome == accepted[0]
+    assert adapter.calls == 0
+    assert json.loads(tools.journal.get(action['actionId'])['result']) == accepted[0]
+    assert economy.starts == []
