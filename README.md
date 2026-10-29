@@ -10,7 +10,9 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
-Live economy, business strategy, Gmail, models, payment processing, publishing, and customer commerce are **not implemented**. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent the $5 opening grant or customer revenue.
+Economy, business, customer commerce and dedicated-account tool adapters are implemented as authenticated services. **PayPal Business** is the selected new checkout provider. Existing Stripe support is retained explicitly; it is not selected silently. Live accounts, credentials, funding, HTTPS and a real customer pilot are still required before claiming autonomous earnings.
+
+Start with [integrated setup](docs/INTEGRATED_SETUP.md) for all services, the private customer portal and payment workflow. The explicit zero-cost `demo` profile remains available for foundation-only checks.
 
 ```sh
 npm ci
@@ -79,4 +81,4 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-The application stack and local storage are selected. Hosting, domain, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+The application stack and local storage are selected. Hosting/domain and live accounts are not provisioned. The selected integration targets are PayPal Business, OpenAI and dedicated Gmail; graphics/publishing need their documented account configuration. Record these choices during implementation without inventing working credentials or integrations.

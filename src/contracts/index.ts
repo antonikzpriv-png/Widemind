@@ -56,6 +56,9 @@ export interface FinancialSummary {
   customerReceiptsMicros: Micros;
   earnedRevenueMicros: Micros;
   operatingChargesMicros: Micros;
+  processorFeesMicros?: Micros;
+  refundsMicros?: Micros;
+  adjustmentsMicros?: string;
   ownerFundingMicros: Micros;
   subsidiesMicros: Micros;
   mode: "live" | "sandbox";

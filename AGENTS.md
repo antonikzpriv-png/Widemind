@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. Live business/economy/provider capabilities remain unavailable; do not invent integrations, balances, deployment URLs, or completed live milestones.
+The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. Authenticated economy, business/customer-portal and tool adapters are integrated under services/ and src/modules/. Read docs/INTEGRATED_SETUP.md. Live credentials/accounts remain unconfigured; do not invent balances, provider verification, deployment URLs or completed live milestones.
 
 ## Working approach
 

@@ -6,7 +6,7 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below govern the typed economy interface now consumed by the persistent runtime. The foundation implements reservation/settlement wiring and explicit unavailable behavior, not the funded ledger or payment integration. No opening credit or customer revenue is invented. See [INTERFACES.md](INTERFACES.md).
+The rules below govern the typed economy interface now consumed by the persistent runtime. The integrated economy service implements the append-only ledger, reservations, verified PayPal payments and explicit unavailable behavior; live accounts/funding still require configuration. Sandbox openings are labelled test credit. See [ECONOMY_INTEGRATION.md](ECONOMY_INTEGRATION.md) and [INTERFACES.md](INTERFACES.md).
 
 ## Units
 

@@ -2,9 +2,9 @@
 
 ## Implemented stack
 
-Node.js **24.x**, TypeScript 5.9, Node's HTTP server and `node:sqlite`. Runtime dependencies: none. TypeScript and Node types are development dependencies pinned by `package-lock.json`. SQLite is a local durable file in WAL mode, with foreign keys, full synchronous commits and a five-second busy timeout. Node may emit an experimental SQLite warning depending on its 24.x release.
+Node.js **24.x**, TypeScript 5.9, Node's HTTP server and `node:sqlite`. The Node foundation has no third-party runtime dependencies. Integrated Python services have their own declared dependencies. TypeScript and Node types are development dependencies pinned by `package-lock.json`. SQLite is a local durable file in WAL mode, with foreign keys, full synchronous commits and a five-second busy timeout. Node may emit an experimental SQLite warning depending on its 24.x release.
 
-One repository produces two independent executables: web/API and worker. They share a database on **one host**, not an NFS/network volume. SQLite is sufficient for this initial single-identity deployment. Multiple workers on that host use database leases; no Redis or browser-driven scheduling is required. An always-on host/process supervisor is required; a serverless request-only deployment is not sufficient.
+The foundation produces two independent executables: web/API and worker; integrated modules also run separate local service processes. They share a database on **one host**, not an NFS/network volume. SQLite is sufficient for this initial single-identity deployment. Multiple workers on that host use database leases; no Redis or browser-driven scheduling is required. An always-on host/process supervisor is required; a serverless request-only deployment is not sufficient.
 
 ## Clean checkout
 
@@ -30,7 +30,7 @@ unset wm_password
 
 Put the resulting `scrypt:1:...` value in `WIDEMIND_OPERATOR_PASSWORD_HASH` in `.env`. The helper reads stdin, outputs only a salted scrypt hash, and never saves the password. Do not commit `.env`. The server accepts no default password. Missing configuration leaves public pages available and operator APIs unauthorized. Changing the password hash invalidates existing sessions.
 
-All npm launch/migration/hash commands load `.env` if present. Exported environment variables take precedence. Secret configuration is separate from `RuntimeConfig`; module contexts contain only configuration and the privileged database handle. Individual adapters must load their own narrowly scoped server secrets and never expose them through business snapshots, tool inputs, public data or logs.
+Npm launch/migration/hash commands load ignored `var/integration.env` first, then `.env`, when present. Exported environment variables take precedence. Secret configuration is separate from `RuntimeConfig`; module contexts contain only configuration and the privileged database handle. Individual adapters must load their own narrowly scoped server secrets and never expose them through business snapshots, tool inputs, public data or logs.
 
 ## Development
 
@@ -41,7 +41,7 @@ npm run dev                            # http://127.0.0.1:3000
 npm run worker:dev                     # persistent worker, independently watched
 ```
 
-At `/operator`, sign in, create a paused run, and Resume. In the default `foundation` profile it waits with unavailable module diagnostics; **no $5 balance is invented**. Operator controls are real server-side state changes.
+At `/operator`, sign in, create a paused run, and Resume. In the `foundation` profile without configured service endpoints it waits with unavailable module diagnostics; **no $5 balance is invented**. Operator controls are real server-side state changes.
 
 For the deterministic, zero-cost vertical slice, set `WIDEMIND_PROFILE=demo` in `.env` and restart both processes. Create a new run and Resume. The worker obtains zero-cost demo authorization, writes a real local note into a durable receipt, settles its zero usage and waits indefinitely. Inspect the action result in Operator. This does not simulate a customer, payment, opening grant or business earnings. Its financial summary remains unavailable. Switch back to `foundation` before installing production providers. A worker refuses runs from another profile.
 
@@ -72,7 +72,7 @@ Use a TLS reverse proxy for Internet exposure; configure `WIDEMIND_PUBLIC_ORIGIN
 
 For backup, stop both services and copy the database plus any remaining `-wal`/`-shm` companions together, or use SQLite's online backup facility. Never copy only a live database file while ignoring WAL. Keep private database backups outside the public web root.
 
-The control-plane process runs trusted application code. No arbitrary code/browser/shell adapter is supplied. Before adding one, execute task code under a different OS/container identity with an explicit workspace, no control-plane database/source access, no inherited provider/operator credentials, resource limits, network/account restrictions and a narrowly authorized tool gateway. A TypeScript interface is not an OS sandbox. Module code is privileged trusted deployment code, not agent-generated content.
+The control-plane process runs trusted application code. Integrated tools include optional browser and isolated code adapters; their credentials/runtime must be explicitly configured. Execute task code under a different OS/container identity with an explicit workspace, no control-plane database/source access, no inherited provider/operator credentials, resource limits, network/account restrictions and a narrowly authorized tool gateway. Local SVG/static software generation does not execute arbitrary task code. A TypeScript interface is not an OS sandbox. Module code is privileged trusted deployment code, not agent-generated content.
 
 ## States and controls
 
@@ -89,9 +89,9 @@ Resume is an explicit recorded intervention, including reactivation of stopped/f
 
 ## Implemented versus unavailable
 
-Implemented: local persistent scheduling, typed registration, migrations, durable runs/actions/outbox/results, leases/fencing, bounded attempts, recovery, operator sessions/CSRF, public/private projections, baseline run screens, zero-cost local demo.
+Implemented: persistent scheduling, typed registration, migrations, durable actions/outbox/results, leases/fencing, recovery, sessions/CSRF and public/private projections. Integrated services additionally provide append-only accounting, reservations/settlement, PayPal verification/reconciliation, opportunity/commitment memory, tool adapters, customer quotes/checkout/private delivery and operator diagnostics. See the per-service integration documents for exact capabilities and limitations.
 
-Unavailable: funded ledger/opening grant, verified customer payments, revenue/refunds, actual opportunity strategy, Gmail/accounts, models, browsing, graphics, code sandbox, publishing, customer purchase/private delivery routes, live hosting. Those require the corresponding modules and external credentials. No provider credentials are needed for the foundation tests/demo. No recurring paid planning occurs while idle. Development and hosting costs are not billed by this foundation and must be disclosed/allocated by the economy module before a real survival pilot.
+Unconfigured dependencies remain unavailable. No live opening grant, customer payment, mailbox verification, deployed website or profitable operation is established by local tests. Optional paid/network tools require explicit owner configuration; local artifacts and portal delivery work without those accounts. No recurring paid planning occurs while idle. Development/hosting costs must be disclosed and allocated before a real survival pilot.
 
 ## Durable incoming events
 
@@ -100,3 +100,7 @@ Operator can use a run's **Deliver an operator event** form, or authenticated `P
 Eligible running work wakes independently of an open webpage. Paused/stopped/failed runs retain incoming events until explicitly resumed. Business modules inspect the oldest 100 pending events in a snapshot and explicitly acknowledge IDs; consumption commits with the work plan or waiting decision. Unseen backlog batches continue without busy polling. The demo acknowledges events locally without additional tool execution or paid planning.
 
 Upgrade note: schema migration 2 adds the inbox, worker presence and unique lease tokens while preserving version-1 runs/actions/receipts. Stop the web and worker services before upgrading, back up the database correctly, run `npm run migrate`, then start both at the same revision. Do not run mixed runtime revisions against the same database. Applied migration 1 is unchanged.
+
+## Integrated providers
+
+The separate economy, tools and business services now connect through the module registry. Their installation, customer portal, selected PayPal provider and live-configuration requirements are in [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md). Earlier foundation-only receipts remain historical and do not establish live-provider verification. The default demo still uses zero-cost local work, never fabricated customer payments.

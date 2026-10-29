@@ -1,6 +1,6 @@
 # Integration contract v1
 
-Authoritative TypeScript definitions: [`src/contracts/index.ts`](../src/contracts/index.ts). These interfaces establish the foundation for economy, tools, business and website implementations. This assignment does not implement their live capabilities or coordinate other builders.
+Authoritative TypeScript definitions: [`src/contracts/index.ts`](../src/contracts/index.ts). These interfaces establish the foundation for economy, tools, business and website implementations. The implementations under `src/modules` bridge to the separately installed services; see [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and the per-service integration guides.
 
 ## Ownership and registration
 
@@ -8,6 +8,7 @@ Authoritative TypeScript definitions: [`src/contracts/index.ts`](../src/contract
 - Each subsequent module owns `src/modules/<id>/` and its tests. Export a `definition: ModuleDefinition` from `module.ts`. It declares its ID, contract version, append-only migrations and `create({db,config})` factory.
 - The loader discovers module directories automatically, in deterministic order; the compiled build discovers `module.js`. No root registry or migration list changes are required. Migration SQL runs **before** service construction. Exactly one provider per role is permitted; collisions fail startup instead of silently selecting one.
 - `demo` is a special opt-in development module; it is never loaded in the default foundation profile. Disable it before installing other providers.
+- Optional `decorate(services, context)` runs after all factories register. Trusted composition may wrap an existing provider (business adds its journaled `business.step` capability to tools); it must retain existing authorization/reconciliation behavior and must not perform external effects at construction.
 - Factories implement any of `economy`, `tools`, `business`, `website`; a single module can implement multiple roles. Missing roles get explicit unavailable implementations. Do not add fake success fallbacks.
 
 Example shape:
@@ -41,7 +42,7 @@ All economy control methods must be free, bounded local/control-plane operations
 
 ## Tools provider
 
-`capabilities()` lists actual availability. `execute(action,reservation,signal)` verifies authorization, enforces maximum provider charge/token/runtime/output limits and account scope **before** sending, and uses `actionId` for external idempotency. It must not accept unrestricted billing credentials from agent input. A bound is enforceable, not just a cost estimate. A gateway must refuse execution when the provider cannot enforce the requested limits. Keep exceptions/URLs/credentials out of public diagnostics.
+`capabilities()` lists actual availability. Optional free `refresh()` updates the capability snapshot before selection and outstanding recovery; unavailable refreshes must not produce optimistic capabilities. `execute(action,reservation,signal)` verifies authorization, enforces maximum provider charge/token/runtime/output limits and account scope **before** sending, and uses `actionId` for external idempotency. It must not accept unrestricted billing credentials from agent input. A bound is enforceable, not just a cost estimate. A gateway must refuse execution when the provider cannot enforce the requested limits. Keep exceptions/URLs/credentials out of public diagnostics.
 
 Return a confirmed `ToolReceipt` with version, exact action ID, result, status, actual usage and supporting evidence. `failed` is a confirmed outcome and can be billable. A timeout, transport error, or cancellation after submission is `unknown`, never an assumed free failure. The runtime records the receipt durably **before** settlement. It records the outbox as inflight before `execute` is called.
 
@@ -70,11 +71,13 @@ Opportunity and Order contracts include source/time, cost/revenue estimates, sco
 
 Sessions last eight hours, persist across web restarts, and are revoked on logout/password-hash rotation. Only keyed session-token hashes are stored. Sign-in attempts are durably limited to ten per remote address per fifteen-minute window; configure reverse-proxy access controls as appropriate because forwarded addresses are intentionally untrusted. Never put passwords in URLs. The web server cannot execute tools directly; it only records authenticated operator intents.
 
+The integrated shell adds public `/commerce`, private `/operator/integrations`, and self-hosted `/commerce.js`. CSP permits scripts/connections only from the same origin; provider checkout opens an allowlisted PayPal HTTPS page. Service/customer API paths are documented in [BUSINESS_INTEGRATION.md](BUSINESS_INTEGRATION.md).
+
 ### Namespaced module routes
 
 A module factory can also return `routes: ModuleRoute[]`. Each exact route is below `/api/modules/<module-id>/...`, uses GET or POST, and returns a JSON body/status. Duplicate or out-of-namespace routes fail startup. This allows commerce/provider APIs to integrate without editing the root router. It does not permit replacing core auth/control routes.
 
-`access: 'operator'` receives core session authentication, plus exact-origin and CSRF enforcement for POST. `access: 'public'` is deliberately unauthenticated by the foundation: the module **must** verify its own customer ownership, webhook signature/event deduplication, or other appropriate authority before reading private data or accepting effects. Public module handlers must never expose raw database records or act as arbitrary tool dispatch. A public route does not inherit operator privilege even when a browser has an operator cookie. Query/body/headers are request data; the `operator` flag is server-derived and always false for public routes. No server configuration secrets are included. Root handlers bound bodies to 16 KiB; use separately authorized storage URLs for larger artifacts. The baseline website renderer is server-rendered and needs no JavaScript; a richer frontend must explicitly document/review its CSP needs.
+`access: 'operator'` receives core session authentication, plus exact-origin and CSRF enforcement for POST. `access: 'public'` is deliberately unauthenticated by the foundation: the module **must** verify its own customer ownership, webhook signature/event deduplication, or other appropriate authority before reading private data or accepting effects. Public module handlers must never expose raw database records or act as arbitrary tool dispatch. A public route does not inherit operator privilege even when a browser has an operator cookie. Optional `remoteAddress` comes from the actual socket for ingress rate limiting; forwarded headers are untrusted. Query/body/headers are request data; the `operator` flag is server-derived and always false for public routes. No server configuration secrets are included. Root handlers bound bodies to 16 KiB; use separately authorized storage URLs for larger artifacts. The baseline website renderer is server-rendered and needs no JavaScript; a richer frontend must explicitly document/review its CSP needs.
 
 ## Inbox and worker status extension
 

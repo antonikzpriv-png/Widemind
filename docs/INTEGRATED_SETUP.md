@@ -1,0 +1,57 @@
+# Integrated WideMind
+
+This assembly keeps the persistent Node.js web/worker foundation and connects the separately implemented economy, tools and business modules. Each Python service gets its own virtual environment because their original packages use the same `widemind` namespace. They communicate over authenticated loopback HTTP, not by sharing/importing an agent-writable ledger.
+
+## Local installation
+
+Requirements: Node.js 24, Python 3.12+, local persistent storage. Optional browser/code capabilities need their separately documented isolation/runtime dependencies.
+
+```sh
+npm ci
+npm run services:setup             # add -- --with-tests for Python test dependencies
+npm run services:configure
+npm run migrate
+npm run services:start
+```
+
+`services:configure` creates mode-600 ignored `var/integration.env`, with distinct random internal service credentials and a stable run identifier. It refuses to overwrite existing files. It does not create a live provider account, opening grant, customer or payment. Launch commands load this file first and `.env` second; exported variables override both.
+
+In another terminal, explicitly open the sandbox run:
+
+```sh
+npm run pilot:init -- --sandbox
+npm run dev
+npm run worker:dev
+```
+
+Or launch services, web and worker together after setup/migration with `npm run dev:all`. Closing a browser never stops the worker. Configure the operator password hash as described in [FOUNDATION.md](FOUNDATION.md); it is not an internal service bearer token. Open `/operator`, resume the configured commerce run, then inspect `/operator/integrations`. `npm run services:status` checks service reachability; `npm run status` checks persistent worker observations.
+
+Customer interface: `/commerce`. Available services come from actual configured capabilities. Customers describe work, receive a private token-scoped request link, review/accept a quote, pay through the configured provider, and retrieve only their own delivery. Access tokens use URL fragments and POST bodies, not query strings or public logs. Quotes and receipts do not create money by themselves.
+
+## Payment provider choice
+
+**PayPal Business is the selected new checkout provider.** Existing Stripe implementation/configuration is preserved for compatibility with the separately developed economy module; the active provider is explicit (`WIDEMIND_PAYMENT_PROVIDER=paypal` by default). Do not silently route new checkout through another account/provider.
+
+PayPal requires a dedicated business/sandbox account, client ID, secret, merchant identity, registered webhook ID and permitted HTTPS return/cancel locations. Configure these in server secrets as documented in the economy integration guide. Configure the approved-order webhook at `/api/modules/economy/webhook`; verified approval events capture the registered order and reconcile actual provider transactions. The local service launcher automatically starts the free economy reconciliation worker once credentials are configured and the commerce run exists. For independently supervised deployment, also run `.venvs/economy/bin/python -m widemind.economy.cli worker --run-id <commerce-run-uuid>` with the economy service environment (including the legacy role-token mapping in its integration guide). Webhook acceptance alone queues work; a reconciliation worker is required to capture/read transactions. An approval page or return redirect is not settlement. The economy must verify capture/account/currency/fees/refunds through the provider before posting spendable receipts. Sandbox and live modes remain separate.
+
+The local starting credit created by `pilot:init --sandbox` is explicitly **test credit**, not a verified live $5 grant or customer revenue. Live funding requires the economy's explicit operator setup and backing/attestation process. Do not use an agent assertion as funding evidence.
+
+## Dedicated accounts and capabilities
+
+OpenAI is the selected model/image provider and Gmail the dedicated communication account. Neither is enabled by a bundled credential. Local file, SVG graphic and static software capabilities can operate without them. Private portal communications are real local deliveries, and are labelled as portal communications rather than claimed Gmail sends.
+
+Enable network tools only through the tools service's owner configuration and account scopes. Gmail requires dedicated OAuth setup and configured recipients/autonomy policy. Publishing requires configured target accounts. Code execution requires configured isolation (no arbitrary host execution fallback). Browser tools require their browser runtime. Missing capabilities remain unavailable.
+
+The managed development environment used for this work has no provider credentials and currently blocks provider API hosts. Local fixtures verify provider protocol behavior; they are not a live account check, transaction or survival pilot. Deployment must permit the selected PayPal, Google and OpenAI endpoints through its supported network configuration and use appropriately scoped secrets.
+
+## Production
+
+Build Node with `npm run build`, migrate with all old processes stopped, and supervise web, runtime worker, all three service APIs and the economy reconciliation worker independently. The process launcher supports `npm run services:start -- economy` (and `tools`/`business`) for individual services; setup uses isolated `.venvs/<service>` environments. Use TLS for public access and authenticated loopback/private service transport. Keep `var` databases/control state, integration secrets and service source inaccessible to tool execution; only the dedicated tools workspace is writable by sandboxed task code.
+
+SQLite databases and WAL must persist on the same host and be backed up consistently. Do not run mixed application versions on the same databases. The example web/worker units remain templates; they do not claim a deployed host/domain or certificate.
+
+## Verification and scope
+
+Use `npm run check`, `npm run smoke`, and `npm run browser:smoke` for the foundation and frontend. `npm run services:test` runs the independently installed Python suites (install with --with-tests). `npm run integration:smoke` starts all real local services and the persistent worker, uses an explicitly local PayPal protocol fixture, and verifies quote, acceptance, signature verification, capture, authorization, artifact delivery and exact financial totals. `npm run integration:browser` runs the same workflow with Chromium using the actual customer request/accept/download screens, phone layout and authenticated operator integration screen. It writes synthetic screenshots under ignored `var/integration-browser`. Neither command posts invented live customer revenue. Tests distinguish local artifacts, sandbox accounting and external-provider fixtures from live behavior.
+
+A real paid survival pilot still requires configured/verified business accounts, a real funded opening, an independently paying customer, delivery acceptance and measured expenses. No code test can manufacture those facts.

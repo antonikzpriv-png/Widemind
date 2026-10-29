@@ -2,9 +2,9 @@
 
 ## Current status
 
-The repository now provides the locally runnable foundation, independent worker, SQLite state, authenticated operator controls and explicit zero-cost local demonstration. It does not yet provide live business strategy, funded accounting, Gmail, payments, or a deployed website.
+The runnable foundation and integrated economy, tools, business, public commerce and operator modules are implemented. Local acceptance uses the real persistent worker and all three services with an explicitly local PayPal protocol fixture. No live payment, dedicated mailbox verification, deployed website or real survival run is claimed.
 
-Milestone 1 is locally implemented and tested; it is not a live survival pilot. Subsequent milestones remain planned. See [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
+Milestone 1 is implemented. Milestones 2–6 have working local implementations and deterministic integration coverage; live/provider acceptance remains conditional on credentials, accounts, isolation, network configuration and funding. The checkboxes below track code availability, not completed live acceptance. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and the service integration guides. Milestone 7 remains unstarted.
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 
@@ -21,11 +21,11 @@ The first business model is an experiment, not a permanent restriction. The five
 
 ## 2. Enforced economy
 
-- [ ] Implement the external ledger and $5 opening credit.
-- [ ] Reserve funds before paid actions and reconcile actual charges.
-- [ ] Track model/tool costs, fees, refunds, and the selected operating-cost boundary.
-- [ ] Implement exhaustion, revenue-crediting, and restart rules.
-- [ ] Separate test transactions, owner funding, and subsidies.
+- [x] Implement the external ledger and $5 opening credit.
+- [x] Reserve funds before paid actions and reconcile actual charges.
+- [x] Track model/tool costs, fees, refunds, and the selected operating-cost boundary.
+- [x] Implement exhaustion, revenue-crediting, and restart rules.
+- [x] Separate test transactions, owner funding, and subsidies.
 
 **Deliverable:** A budget controller used by every billable execution path.
 
@@ -33,10 +33,10 @@ The first business model is an experiment, not a permanent restriction. The five
 
 ## 3. Runtime and opportunity selection
 
-- [ ] Implement planning, execution, result evaluation, and persistent memory.
-- [ ] Let WideMind propose and compare opportunities.
-- [ ] Persist commitments, cost estimates, expected outcomes, and actual results.
-- [ ] Add bounded retries, cancellation, resumable jobs, and idle behavior.
+- [x] Implement planning, execution, result evaluation, and persistent memory.
+- [x] Let WideMind propose and compare opportunities.
+- [x] Persist commitments, cost estimates, expected outcomes, and actual results.
+- [x] Add bounded retries, cancellation, resumable jobs, and idle behavior.
 
 **Deliverable:** WideMind chooses an approach and completes a multi-step task using registered tools.
 
@@ -44,11 +44,11 @@ The first business model is an experiment, not a permanent restriction. The five
 
 ## 4. Tools and dedicated accounts
 
-- [ ] Add browser/internet, workspace files, and code-execution adapters.
-- [ ] Add Gmail reading, sending, and conversation tracking.
-- [ ] Add graphics generation/editing.
-- [ ] Add publishing through configured accounts.
-- [ ] Document credentials, quotas, account setup, and verification dependencies.
+- [x] Add browser/internet, workspace files, and code-execution adapters.
+- [x] Add Gmail reading/sending adapters and durable conversation tracking; dedicated OAuth setup remains external.
+- [x] Add local SVG generation and configured model/image adapters.
+- [x] Add publishing through configured accounts.
+- [x] Document credentials, quotas, account setup, and verification dependencies.
 
 **Deliverable:** Working adapters with structured inputs and recorded results.
 
@@ -58,11 +58,11 @@ Provider onboarding and verification may need owner input. Continue independent 
 
 ## 5. Commerce, outreach, and delivery
 
-- [ ] Implement opportunities, offers, conversations, orders, commitments, and deliverables.
-- [ ] Connect business payments through verified events.
-- [ ] Support relevant business outreach through WideMind's dedicated accounts.
-- [ ] Record recipients, replies, opt-outs, quoted terms, deadlines, and fulfillment.
-- [ ] Let WideMind choose offerings supported by its tools.
+- [x] Implement opportunities, offers, conversations, orders, commitments, and deliverables.
+- [x] Connect business payments through verified events.
+- [x] Provide configured dedicated-account email adapters and record outreach policy; live inbox acceptance remains unverified.
+- [x] Record recipients, replies, opt-outs, quoted terms, deadlines, and fulfillment.
+- [x] Let WideMind choose offerings supported by its tools.
 
 **Deliverable:** An end-to-end customer workflow from request or opportunity to paid delivery.
 
@@ -72,11 +72,11 @@ Resolve payment timing before implementation so the agent can fund the work it p
 
 ## 6. Public headquarters and private operations
 
-- [ ] Show current offerings, run status, financial summaries, and completed work.
-- [ ] Provide contact, purchase, and private delivery flows.
-- [ ] Publish a selected, redacted activity feed.
-- [ ] Add private integration setup, diagnostics, reconciliation, and pause/resume/stop controls.
-- [ ] Distinguish independent customer receipts from test payments and owner support.
+- [x] Show current offerings, run status, financial summaries, and completed work.
+- [x] Provide contact, purchase, and private delivery flows.
+- [x] Publish a selected, redacted activity feed.
+- [x] Add private integration setup, diagnostics, reconciliation, and pause/resume/stop controls.
+- [x] Distinguish independent customer receipts from test payments and owner support.
 
 **Deliverable:** A website connected to the persistent worker and ledger.
 

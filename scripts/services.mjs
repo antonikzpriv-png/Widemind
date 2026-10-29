@@ -42,6 +42,12 @@ function environment(name) {
     });
   if (name === "business")
     Object.assign(env, {
+      WIDEMIND_BUSINESS_PORT: new URL(
+        env.WIDEMIND_BUSINESS_URL ?? "http://127.0.0.1:8082",
+      ).port,
+      WIDEMIND_BUSINESS_HOST: new URL(
+        env.WIDEMIND_BUSINESS_URL ?? "http://127.0.0.1:8082",
+      ).hostname,
       WIDEMIND_BUSINESS_DB: resolve(
         env.WIDEMIND_BUSINESS_DB ?? "var/business.sqlite",
       ),
@@ -65,6 +71,15 @@ function command(name) {
     args: ["-m", module, "--host", url.hostname, "--port", url.port || "80"],
     env: environment(name),
     url: url.origin,
+    headers: {
+      Authorization:
+        "Bearer " +
+        (process.env[
+          name === "economy"
+            ? "WIDEMIND_ECONOMY_GATEWAY_TOKEN"
+            : "WIDEMIND_" + name.toUpperCase() + "_TOKEN"
+        ] ?? ""),
+    },
   };
 }
 async function configure() {
@@ -116,7 +131,10 @@ async function setup() {
         "--cache-dir",
         resolve("var/pip-cache"),
         "-e",
-        resolve("services/" + name),
+        resolve("services/" + name) +
+          (process.argv.includes("--with-tests") && name !== "business"
+            ? "[test]"
+            : ""),
       ],
       { stdio: "inherit" },
     );
@@ -129,9 +147,10 @@ async function setup() {
 async function status() {
   let failed = false;
   for (const name of names) {
-    const { url } = command(name);
+    const { url, headers } = command(name);
     try {
       const response = await fetch(url + "/health", {
+        headers,
         signal: AbortSignal.timeout(3000),
       });
       console.log(
@@ -152,6 +171,7 @@ async function status() {
 async function start(selected, includeRuntime = false) {
   const children = [];
   let stopping = false;
+  let reconciliationTimer;
   const stop = () => {
     if (stopping) return;
     stopping = true;
@@ -184,6 +204,7 @@ async function start(selected, includeRuntime = false) {
       while (Date.now() < until && !stopping) {
         try {
           const response = await fetch(spec.url + "/health", {
+            headers: spec.headers,
             signal: AbortSignal.timeout(1000),
           });
           if (response.ok) {
@@ -211,6 +232,53 @@ async function start(selected, includeRuntime = false) {
         });
       }
     }
+    const paymentsConfigured =
+      (process.env.WIDEMIND_PAYMENT_PROVIDER ?? "paypal") === "paypal"
+        ? Boolean(process.env.WIDEMIND_PAYPAL_CLIENT_ID)
+        : Boolean(process.env.WIDEMIND_STRIPE_API_KEY);
+    if (selected.includes("economy") && paymentsConfigured) {
+      let launched = false,
+        checking = false;
+      reconciliationTimer = setInterval(async () => {
+        if (launched || checking || stopping) return;
+        checking = true;
+        try {
+          const spec = command("economy"),
+            run = process.env.WIDEMIND_COMMERCE_RUN_ID;
+          if (!run) return;
+          const response = await fetch(
+            spec.url + "/v1/runs/" + encodeURIComponent(run) + "/balance",
+            { headers: spec.headers, signal: AbortSignal.timeout(1000) },
+          );
+          if (!response.ok) return;
+          launched = true;
+          const child = spawn(
+            spec.binary,
+            [
+              "-m",
+              "widemind.economy.cli",
+              "worker",
+              "--run-id",
+              run,
+              "--poll-seconds",
+              process.env.WIDEMIND_RECONCILE_POLL_SECONDS ?? "5",
+            ],
+            { env: spec.env, stdio: "inherit" },
+          );
+          children.push(child);
+          child.on("error", stop);
+          child.on("exit", () => {
+            if (!stopping) {
+              process.exitCode = 1;
+              stop();
+            }
+          });
+        } catch {
+        } finally {
+          checking = false;
+        }
+      }, 1000);
+    }
     await Promise.all(
       children.map(
         (child) =>
@@ -222,6 +290,7 @@ async function start(selected, includeRuntime = false) {
       ),
     );
   } finally {
+    clearInterval(reconciliationTimer);
     stop();
   }
 }
@@ -229,7 +298,23 @@ try {
   if (operation === "configure") await configure();
   else if (operation === "setup") await setup();
   else if (operation === "status") await status();
-  else if (operation === "start")
+  else if (operation === "test") {
+    for (const name of names) {
+      const args =
+        name === "business"
+          ? [
+              "-m",
+              "unittest",
+              "discover",
+              "-s",
+              resolve("services/business/tests"),
+              "-q",
+            ]
+          : ["-m", "pytest", resolve("services/" + name + "/tests"), "-q"];
+      const result = spawnSync(python(name), args, { stdio: "inherit" });
+      if (result.status !== 0) throw new Error("Service tests failed: " + name);
+    }
+  } else if (operation === "start")
     await start(process.argv[3] ? [process.argv[3]] : names);
   else if (operation === "all") await start(names, true);
   else throw new Error("Use configure, setup, status, start [service], or all");

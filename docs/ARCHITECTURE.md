@@ -2,7 +2,9 @@
 
 ## Status
 
-The foundation implements Node.js 24/TypeScript, a separate HTTP web process and persistent worker, and durable local SQLite storage. The component boundaries below remain the product architecture. Live economy/tools/business/commerce providers are not implemented. See [FOUNDATION.md](FOUNDATION.md) and the versioned [INTERFACES.md](INTERFACES.md) for actual commands, recovery semantics and module integration. Hosting, payment and model providers are not selected.
+Node.js 24/TypeScript serves the website and runs an independent persistent worker. The integrated economy, tools and business modules use authenticated local Python services, separate virtual environments and separate durable SQLite/control storage. The Node worker is the sole business scheduler; a separate free economy reconciliation worker processes verified provider events. Module registration composes these through typed interfaces without exposing the ledger to task code.
+
+PayPal Business, OpenAI and dedicated Gmail are the selected provider targets. Local files, SVG graphics, static software and private portal delivery operate without those credentials. Provider adapters are implemented and fixture-tested; live accounts, funding, permitted outbound network access, hosting and a domain remain external prerequisites. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md), [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
 
 ## Product requirements
 
@@ -12,7 +14,7 @@ Its intended capabilities include internet browsing, code execution, files, pers
 
 The website is its public headquarters. The agent must continue operating independently of an open webpage.
 
-## Proposed components
+## Component boundaries
 
 ### Persistent worker
 
@@ -107,10 +109,10 @@ Store times in UTC and display them with explicit timezone context. Version impo
 
 ## First integrated slice
 
-Simulated customer request → priced offer → budget-authorized tool action → deliverable → simulated payment reconciliation → updated website balance.
+Verified local acceptance flow: controlled request → priced quote → acceptance → PayPal protocol fixture → verified webhook → capture/reconciliation → budget-authorized SVG creation → private portal delivery → earned record/hold release → exact public balance. Only the external payment provider is a fixture in this acceptance test; no actual customer payment or profit is claimed.
 
 Then verify one actual paid job with real usage and payment records. Expand services through the same interfaces rather than bypassing accounting.
 
 ## Implementation decisions
 
-Select a small maintainable stack and record its actual commands. Start with one deployment and one agent identity. Separate service boundaries logically first; multiple deployable microservices are not required for the first version.
+The initial deployment stays on one persistent host with one configured commerce identity. HTTP boundaries preserve the independently implemented modules and isolate the economy from tools. Each service has a separate Python environment because their historical packages share a namespace. Run web, runtime worker, three service APIs and the economy reconciliation worker under supervision; do not use a request-only host. Hosting cost allocation must be recorded before a live survival pilot.

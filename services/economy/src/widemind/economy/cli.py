@@ -25,14 +25,14 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (default loopback)")
     parser.add_argument("--port", type=_integer_between(1, 65535), default=8080)
     commands = parser.add_subparsers(dest="command")
-    worker_command = commands.add_parser("worker", help="Run durable, model-free Stripe reconciliation")
+    worker_command = commands.add_parser("worker", help="Run durable, model-free payment reconciliation")
     worker_command.add_argument("--once", action="store_true", help="Scan pending payments and process one bounded batch, then exit")
     worker_command.add_argument("--run-id", help="Run to scan (defaults to WIDEMIND_AGENT_RUN_ID)")
     worker_command.add_argument("--batch-size", type=_integer_between(1, 100), default=10)
     worker_command.add_argument("--poll-seconds", type=_integer_between(1, 3600), default=5)
     worker_command.add_argument("--scan-interval", type=_integer_between(60, 86400), default=300,
                                 help="Minimum seconds between successful pending-payment polls")
-    recovery_command = commands.add_parser("recover-checkout", help="Read Stripe to recover an uncertain existing checkout; never creates a new session")
+    recovery_command = commands.add_parser("recover-checkout", help="Read the provider to recover an uncertain existing checkout; never creates a new session")
     recovery_command.add_argument("request_id")
     args = parser.parse_args()
     from .config import Settings
@@ -50,7 +50,7 @@ def main() -> None:
     adapter = None
     try:
         if not settings.payments_enabled:
-            parser.exit(2, "Economy configuration error: configure the Stripe account, mode, credentials and redirects for this command\n")
+            parser.exit(2, "Economy configuration error: configure the selected payment account, mode, credentials and redirects for this command\n")
         service = EconomyService(settings.database_path)
         adapter = settings.create_payments(service)
         if args.command == "recover-checkout":
