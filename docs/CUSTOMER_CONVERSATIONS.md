@@ -10,6 +10,8 @@ State is private and durable per customer/thread/request. The model sees bounded
 
 An incomplete request receives concrete questions. Complete supported requests produce a proposal with exact USD price, deliverables, exclusions, turnaround after verified funding/authorization, revision allowance, expiry, quote ID, version and digest. Negotiation is bounded by the operator's floor and standard price. Scope/price changes create a new version and supersede the old one. Questions preserve negotiated terms. Unsupported capability, capacity and cost limits are explained without repeatedly asking for already supplied requirements.
 
+Questions before a quote also receive useful answers about configured standard prices, capabilities, turnaround, revisions and exclusions, followed by the missing scope questions. These answers are explicitly preliminary and conditional; they create no quote, order or payment.
+
 Explicit acceptance takes place through the token-authenticated private customer portal and supplies the exact current quote ID/version/digest. A generic “yes”, conditional acceptance, old version, changed terms, another customer's token or pending unassessed message cannot create an order. Final validation, policy/capacity checks and order creation share one write transaction. Existing structured quotes import as version 1 without rewriting their terms. A revised historical quote uses an internal linked opportunity when necessary to preserve the original unique core quote/order.
 
 Payment remains economy-owned: “I paid”, screenshots, invoices and model assertions change no payment status or available credit. Actual checkout, verified PayPal transactions, holds and fulfillment continue through the existing services. No extra conversation ledger is created.
@@ -46,6 +48,8 @@ The floor example requires `svg-graphic` in the existing `prices` map with a sta
 
 Quiet hours are **UTC** and apply to unsolicited follow-ups, not replies to a new customer message. Equal start/end hours disable quiet hours. Follow-ups use fixed text, no inference, an overall per-thread count, a minimum interval and quote expiry. Explicit opt-outs are stored immediately without a model or operating credit; future queued sends/follow-ups are suppressed. Consent and pause/stop state are rechecked after capability/reservation I/O immediately before dispatch. Already accepted external mail cannot be recalled.
 
+A portal token controls contact for its own authenticated request, including linked quotes/orders; claiming the same email on a different public request cannot suppress another conversation. Clear phrases such as “I want to opt out”, “No more emails” and “Do not send me any more emails” take effect even while paused. Verified Gmail opt-outs and trusted owner actions can retain email-wide suppression. Later routine Gmail messages cannot turn a portal-local stop into email-wide authority, and operator hold resolution does not re-enable contact.
+
 ## API and recovery
 
 Public Node routes retain existing rate limits and token ownership:
@@ -54,7 +58,7 @@ Public Node routes retain existing rate limits and token ownership:
 - `POST /api/modules/business/message`: `{token, messageId, body, runId?}`. The server derives customer, opportunity and thread from the token; supplied email/thread IDs do not override them. Keep the same message ID/body on transport retry.
 - `POST /api/modules/business/customer`: token-scoped conversation, exact proposals, order status and private publications.
 - `POST /api/modules/business/accept`: `{token, quoteId, version, digest, runId?}` for conversational proposals. Legacy unconverted quotes retain their existing acceptance contract.
-- `POST /api/modules/business/opt-out`: token-scoped immediate suppression, including while runtime is paused/stopped. Revocation of a portal access token remains a separate action.
+- `POST /api/modules/business/opt-out`: immediate suppression for the token-owned request, including while runtime is paused/stopped. This grants no authority over other requests sharing a claimed email address. Revocation of a portal access token remains a separate action.
 - Operator-only `GET /api/modules/business/conversations`, `GET /api/modules/business/conversation?runId=...&id=...`, and `POST /api/modules/business/conversation-resolve` expose private state and evidence-backed hold resolution. Mutation requires the normal operator session, exact Origin and CSRF token, never a customer token or model flag.
 
 The protected service interfaces mirror these routes; only trusted Node/service clients receive the internal bearer. Do not expose that token or the business database to the agent workspace.
@@ -67,6 +71,6 @@ Development uses controlled addresses, local fixtures and synthetic model/provid
 
 Run `npm run services:setup -- --with-tests`, `npm run services:test`, `npm run check`, and `npm run integration:browser`. The latter uses explicit synthetic PayPal/provider boundaries and real local service processes/browser forms; it does not verify a live account. The preserved Stripe fixture demonstration is `npm run business:demo -- --fixtures` with a Python interpreter containing the root Stripe fixture dependencies selected through `WIDEMIND_TEST_PYTHON`. See the [conversation validation report](CUSTOMER_CONVERSATION_VALIDATION.md) for the actual qualified commit, results and environment limits.
 
-Migration `009_customer_conversations.sql` adds business-private state only. Stop old business writers and back up the existing business SQLite database before upgrading; start the new service to apply its additive migration. Do not apply it to an economy or standalone-tools database.
+Migration `009_customer_conversations.sql` adds business-private state; additive migration `010_conversation_consent.sql` enforces request-scoped contact permission. Stop old business writers and back up the existing business SQLite database before upgrading; start the new service to apply both. Schema-nine upgrades preserve quotes, messages and global consent, initialize local contact permission and remain idempotent across restarts. Do not apply these migrations to an economy or standalone-tools database.
 
-Build release wheels from a clean checkout/export. Reusing an old setuptools build directory after migration filenames change can retain obsolete files; verify the wheel contains Discovery migration 8 and conversation migration 9 exactly once before installation.
+Build release wheels from a clean checkout/export. Reusing an old setuptools build directory after migration filenames change can retain obsolete files; verify the wheel contains all ten migrations, including Discovery 8, conversations 9 and scoped consent 10, exactly once before installation.
