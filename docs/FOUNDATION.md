@@ -93,6 +93,8 @@ Implemented: persistent scheduling, typed registration, migrations, durable acti
 
 Unconfigured dependencies remain unavailable. No live opening grant, customer payment, mailbox verification, deployed website or profitable operation is established by local tests. Optional paid/network tools require explicit owner configuration; local artifacts and portal delivery work without those accounts. No recurring paid planning occurs while idle. Development/hosting costs must be disclosed and allocated before a real survival pilot.
 
+The alternative central Stripe workflow is available through the opt-in `brief-business` module, with dedicated Gmail/OpenAI tools and the existing root economy RPC. See [brief setup](BUSINESS_MODULE.md), [tools](BUSINESS_TOOLS.md), [UI](BUSINESS_UI.md), and the [offline demonstration](BUSINESS_DEMO.md). Choose one business/tools/economy protocol family per deployment; never combine its accounts, databases or funds with the PayPal service family.
+
 ## Durable incoming events
 
 Operator can use a run's **Deliver an operator event** form, or authenticated `POST /api/operator/runs/<uuid>/events` with `{eventId,kind,payload}`. Reuse the event ID when retrying. A first delivery returns 202, an identical retry 200, and reuse with a conflicting run/kind/payload 409. The route records the source/account as operator; body claims cannot impersonate a verified payment provider. Event payloads are private task data, never budget or configuration authority.

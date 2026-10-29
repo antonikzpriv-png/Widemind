@@ -91,6 +91,12 @@ Free asynchronous module calls are deadline-bounded by optional `RuntimeConfig.d
 
 Public module POST handlers additionally receive optional `rawBody` bytes, bounded by the same 16 KiB request cap, for exact provider-signature verification. Verify these bytes before accepting an event; re-serializing parsed JSON is not equivalent. Operator routes do not receive raw bodies, so their core form CSRF values cannot bypass the forwarding filter. The foundation supplies no provider secret or generic “verified payment” flag; each ingress implementation owns verification, account scope and provider-event deduplication.
 
+## Private server-rendered module pages
+
+A registration may supply `operatorPages`, each with an exact path below `/operator/modules/<module-id>/` and a trusted `render({query, csrf})` callback. The web host enforces its existing operator session before rendering, bounds asynchronous dependency time, and checks the session again before returning private HTML. The callback receives the current server-derived CSRF token for local forms, never the session cookie or provider secrets. Trusted renderers must escape task data. Brief module pages require no scripts. The upstream CSP retains same-origin scripts/connect for the existing customer portal, with no inline or external script permission added by these renderers.
+
+An operator POST route can declare `operatorRedirect` pointing to one of its own registered pages. Only a successful, authenticated, same-origin, CSRF-checked HTML form POST uses that fixed redirect. JSON clients retain their ordinary JSON response. The host forwards only an encoded run ID and an allowlisted business view, never an external return URL. Registration rejects out-of-namespace/duplicate pages, public redirects and unregistered redirect targets. This adds a private UI extension without exposing operator APIs to customers or allowing the browser to execute the worker.
+
 ### Integrated orchestration recovery
 
 Business bridge recovery may confirm a durable zero-cost handoff while `eventState` is still queued/running. `processed` is false and `recoveredOrchestration` true in that receipt. This confirms orchestration ownership, not provider success, final usage or customer fulfillment. It leaves core leases and uncertain inner effects untouched. The next separately authorized step can inspect due core work; reconciliation never calls the business tick itself. Missing invocation evidence yields `not_performed` with a journal reference and the same action ID is retained for the bounded retry.

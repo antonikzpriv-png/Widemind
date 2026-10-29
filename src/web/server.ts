@@ -10,7 +10,13 @@ import { Store, EventConflict } from "../runtime/store.ts";
 import { Sessions } from "../auth/sessions.ts";
 import { validPasswordHash, verifyPassword } from "../auth/password.ts";
 import { privateProjection, publicProjection } from "./projections.ts";
-import { css, loginPage, operatorPage, publicPage } from "./pages.ts";
+import {
+  css,
+  loginPage,
+  operatorPage,
+  operatorFormErrorPage,
+  publicPage,
+} from "./pages.ts";
 async function body(
   request: IncomingMessage,
   capture?: (bytes: Buffer) => void,
@@ -131,6 +137,48 @@ export function webServer(context: {
         const session = secrets.operatorPasswordHash
           ? sessions.get(request)
           : null;
+        const operatorPageRoute = (services.operatorPages ?? []).find(
+          (page) => page.path === path,
+        );
+        if (method === "GET" && operatorPageRoute) {
+          if (!session) {
+            send(
+              401,
+              loginPage(
+                !!secrets.operatorPasswordHash,
+                "Sign in to open the private business console.",
+              ),
+              "text/html",
+            );
+            return;
+          }
+          const html = await callDependency(
+            "module.operatorPage",
+            () =>
+              Promise.resolve(
+                operatorPageRoute.render({
+                  query: Object.fromEntries(
+                    new URL(request.url!, config.publicOrigin).searchParams,
+                  ),
+                  csrf: session.csrf,
+                }),
+              ),
+            config.dependencyMs ?? 5000,
+          );
+          if (sessions.get(request)?.tokenHash !== session.tokenHash) {
+            send(
+              401,
+              loginPage(
+                !!secrets.operatorPasswordHash,
+                "Your session expired. Sign in again.",
+              ),
+              "text/html",
+            );
+            return;
+          }
+          send(200, html, "text/html");
+          return;
+        }
         const moduleRoute = services.routes.find(
           (route) => route.path === path && route.method === method,
         );
@@ -216,6 +264,42 @@ export function webServer(context: {
             result.status > 599
           )
             throw new Error("Invalid module response");
+          if (
+            moduleRoute.access === "operator" &&
+            method === "POST" &&
+            moduleRoute.operatorRedirect &&
+            request.headers["content-type"]?.split(";")[0] ===
+              "application/x-www-form-urlencoded"
+          ) {
+            const destination = new URL(
+              moduleRoute.operatorRedirect,
+              config.publicOrigin,
+            );
+            if (
+              typeof input.runId === "string" &&
+              /^[a-f0-9-]{36}$/.test(input.runId)
+            )
+              destination.searchParams.set("runId", input.runId);
+            const views = [
+              "overview",
+              "opportunities",
+              "orders",
+              "finances",
+              "recovery",
+              "settings",
+            ];
+            if (typeof input.view === "string" && views.includes(input.view))
+              destination.searchParams.set("view", input.view);
+            const target = destination.pathname + destination.search;
+            if (result.status >= 200 && result.status < 300) redirect(target);
+            else
+              send(
+                result.status,
+                operatorFormErrorPage(result.body, target),
+                "text/html",
+              );
+            return;
+          }
           send(result.status, result.body);
           return;
         }
@@ -227,6 +311,7 @@ export function webServer(context: {
                   privateProjection(store, services, config.profile),
                   session.csrf,
                   config.profile,
+                  (services.operatorPages ?? []).map((page) => page.path),
                 )
               : loginPage(!!secrets.operatorPasswordHash),
             "text/html",

@@ -30,7 +30,10 @@
     "pilot:init": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/pilot-init.mjs",
     "integration:smoke": "node scripts/integration-smoke.mjs",
     "integration:browser": "node scripts/integration-smoke.mjs --browser",
-    "services:test": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs test"
+    "services:test": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs test",
+    "business:sync-inbox": "node --env-file-if-exists=.env src/modules/brief-business/sync-main.ts",
+    "business:demo": "node scripts/business-demo.mjs",
+    "business:browser": "node scripts/business-browser-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

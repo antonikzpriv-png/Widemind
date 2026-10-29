@@ -32,6 +32,23 @@ All routes below require the gateway or operator bearer identity, except `/seed`
 
 Summary separates opening grants, owner/test funding, receipts, operating charges, fees, refunds, chargebacks, reversals, adjustments and noncash metrics. Its equation includes a separate signed `otherCashMicros` aggregate for future cash categories. Summary reads never create a run or grant money. Only an explicit authenticated operator seed supplies the opening $5; repeated seeds cannot multiply it or change the mode.
 
+## Business commerce RPC
+
+The optional business module uses the same protected accounting authority for scoped Checkout and fulfillment. It does not introduce another ledger or accept customer/model claims as payment evidence. Every route below is POST under `/v1/runtime/commerce/`, requires an exact `sandbox`/`live` mode, and returns one bounded order projection with canonical decimal-string monetary amounts. The projection separates gross receipts, fees, refunds, chargebacks/reversals, held funds, earned revenue, delivery obligation and observation revision.
+
+| Route | Required body beyond `{runId,jobId,mode}` | Identity |
+| --- | --- | --- |
+| `order` | None; read-only stored verified accounting projection, no Stripe request | Gateway or operator |
+| `checkout` | `{requestId,amountMicros,currency:"USD",description}` | Operator |
+| `fulfillment` | `{idempotencyKey,deliveryReference}` | Operator |
+| `release-hold` | `{idempotencyKey,deliveryReference}` matching recorded fulfillment | Operator |
+
+Checkout freezes the original run/job/account/mode/request/price/currency binding and rejects replacement intents. USD prices must be whole cents and within Stripe's supported range. The trusted runtime tools delegate verifies the complete persisted action and accepted business quote before the one-shot central dispatch gate. Its `commerce.fulfill` path additionally requires independently authenticated delivery evidence for that exact order; a generated reference in tool input is insufficient.
+
+Fulfillment records physical delivery separately from cash and appends the earned metric supported by verified receipts. It releases permitted net customer funds only after pending refund/dispute exposure is resolved. Confirmed delivery remains recorded if payment exposure prevents release. Subsequent verified refunds, disputes and reversals append compensating earned-metric entries atomically with the native payment transaction. Existing non-business accounting is unchanged. Read-only projections never create revenue or release holds.
+
+On the Node side, configure `WIDEMIND_COMMERCE_ACCOUNT` (the dedicated logical tool-account reference) and `WIDEMIND_COMMERCE_MODE=sandbox|live` along with the existing economy URL/operator/gateway identities. Both the order reader and commerce tools use that one explicit mode. Map `commerce.checkout` and `commerce.fulfill` to provider `commerce`, the same logical account and the same mode in `WIDEMIND_RUNTIME_TOOL_PROFILES`. The native Stripe service separately requires its actual Stripe account, correctly prefixed key, webhook secret, return URLs and matching native test/live mode. See [business setup](BUSINESS_MODULE.md) and [tools prerequisites](BUSINESS_TOOLS.md). No account or payment is provisioned by enabling a module.
+
 ## Authorization and execution
 
 Authorization admission and its immutable run/action/tool/exact-limit/provider/account/mode binding commit in one accounting transaction. A replay returns the same identity only while the reservation is still usable and its configured profile still matches. Removing or changing a tool/account prevents new execution, but does not erase the original accounting identity: verified old-provider charges and observational reconciliation continue against the persisted binding and HMAC. A definitive no-effect confirmation for a retired profile closes verified zero cost and releases its cap instead of renewing execution. An already dispatched, unknown, settled or cancelled action cannot obtain a fresh execution authorization through replay. HMAC proofs are opaque and verified against the persisted binding, independently of model instructions. Editing a limit, action, tool or account cannot expand permission.
@@ -49,3 +66,5 @@ The provider/account/mode/event inbox and charge settlement commit atomically. D
 Full tool results remain in the private runtime action store. The accounting RPC ignores optional result/external-reference diagnostics rather than dropping verified actual usage because a result is large; authoritative evidence references, flags and native monetary evidence remain in accounting metadata. This boundary does not fetch paid inference, create provider accounts or claim a live payment. Provider fixtures and synthetic tool receipts are local validation only; real Stripe sandbox/live verification still requires its separately configured account, credentials, ingress and network access.
 
 Schema 5 adds native zero-cap reservations, immutable runtime authorizations and receipt-event records while preserving prior history and references. The migration temporarily disables foreign-key enforcement only on its dedicated migration connection before the transaction, checks all references before commit, then restores enforcement. Back up and stop mixed revisions before upgrading; do not rewrite applied prior migrations or clear unknown reservations to recover.
+
+The independently versioned service/PayPal ledger must use a different file. Both protocols now enforce immutable database-family ownership before migrations and on later connections, rather than trusting their shared version number or matching cash tables. See [integrated compatibility](INTEGRATED_SETUP.md#current-main-compatibility). Wrong or incomplete schema-5 families fail closed with no conversion, reservation or financial mutation.

@@ -455,13 +455,15 @@ class HTTPTransport:
 
     def request(self, method: str, url: str, *, headers: Mapping[str, str] | None = None,
                 body: bytes | None = None, timeout: float = 30, max_bytes: int = 2_000_000,
-                cancel: Callable[[], None] | None = None, public_only: bool = False) -> HTTPResponse:
+                cancel: Callable[[], None] | None = None, public_only: bool = False,
+                before_send: Callable[[], None] | None = None) -> HTTPResponse:
         if (not isinstance(method, str) or method.upper() not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
                 or type(max_bytes) is not int or not 1 <= max_bytes <= _MAX_BODY
                 or isinstance(timeout, bool) or not isinstance(timeout, (int, float))
                 or not 0 < timeout <= 600 or not math.isfinite(timeout)
                 or body is not None and (not isinstance(body, bytes) or len(body) > _MAX_BODY)
-                or type(public_only) is not bool or cancel is not None and not callable(cancel)):
+                or type(public_only) is not bool or cancel is not None and not callable(cancel)
+                or before_send is not None and not callable(before_send)):
             raise _error("invalid_http_request", "HTTP method, body, timeout, cancellation, or output limit is invalid.")
         deadline = _Deadline(float(timeout), cancel)
         deadline.check()
@@ -505,6 +507,13 @@ class HTTPTransport:
                     request_headers["proxy-authorization"] = proxy[1]
             connection = http.client.HTTPConnection(target.host, target.port)
             connection.sock = _Socket(stream)
+            # Trusted admission is separate from cancellation: exactly once,
+            # after DNS/proxy/TLS, before any final origin HTTP request bytes.
+            # No request worker survives a timed-out resolver or this callback.
+            deadline.check()
+            if before_send is not None:
+                before_send()
+            deadline.check()
             connection.request(method.upper(), request_target, body=body, headers=request_headers)
             # Parse explicitly rather than HTTPConnection.getresponse(): that
             # method may close its socket immediately for Connection: close.

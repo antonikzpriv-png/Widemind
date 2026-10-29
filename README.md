@@ -16,6 +16,10 @@ Economy, business, customer commerce and dedicated-account tool adapters are imp
 
 Start with [integrated setup](docs/INTEGRATED_SETUP.md) for all services, the private customer portal and payment workflow. The explicit zero-cost `demo` profile remains available for foundation-only checks.
 
+For the separately selected central **Stripe** deployment, the optional `brief-business` module adds durable opportunities, quotes, orders, fulfillment and customer memory. It selects authorized runtime actions rather than running another scheduler or ledger. Its dedicated tools bridge provides real Gmail and bounded sourced OpenAI research with central authorization, private recovery records and exact usage receipts. The public headquarters and six-view private console use WideClarity's monochrome style with existing session/CSRF controls. See [central brief setup](docs/BUSINESS_MODULE.md), [tools prerequisites](docs/BUSINESS_TOOLS.md), [UI](docs/BUSINESS_UI.md), [scheduled mail intake](docs/BUSINESS_SCHEDULING.md) and the [explicit offline demonstration](docs/BUSINESS_DEMO.md). This alternative is disabled by default and rejects PayPal/service credentials; choose one business/tools/economy family per deployment. Local fixture qualification is not a live payment, delivery or profit claim.
+
+The [business integration validation](docs/BUSINESS_MERGE_VALIDATION_20261029.md) records the compatible port, audit repairs, executed checks and remaining live prerequisites.
+
 ```sh
 npm ci
 cp .env.example .env

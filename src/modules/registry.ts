@@ -6,6 +6,7 @@ import type {
   Migration,
   ModuleRegistration,
   ModuleRoute,
+  OperatorPage,
   RuntimeConfig,
   Tools,
   Website,
@@ -33,6 +34,7 @@ export interface Services {
   business: Business;
   website: Website;
   routes: ModuleRoute[];
+  operatorPages?: OperatorPage[];
 }
 const unavailable = (name: string) => ({
   available: false as const,
@@ -41,6 +43,7 @@ const unavailable = (name: string) => ({
 export function unavailableServices(): Services {
   return {
     routes: [],
+    operatorPages: [],
     economy: {
       health: () => unavailable("Economy"),
       summary: async () => null,
@@ -136,6 +139,19 @@ export function registerModules(
   const roles = new Set<string>();
   for (const definition of definitions) {
     const providers = definition.create(context);
+    for (const page of providers.operatorPages ?? []) {
+      if (
+        !page.path.startsWith(`/operator/modules/${definition.id}/`) ||
+        !/^\/operator\/modules\/[a-z][a-z0-9_-]*\/[a-z0-9/-]+$/.test(
+          page.path,
+        ) ||
+        typeof page.render !== "function"
+      )
+        throw new Error("Invalid module operator page");
+      if (services.operatorPages!.some((item) => item.path === page.path))
+        throw new Error("Duplicate module operator page");
+      services.operatorPages!.push(page);
+    }
     for (const route of providers.routes ?? []) {
       if (
         !route.path.startsWith(`/api/modules/${definition.id}/`) ||
@@ -144,6 +160,15 @@ export function registerModules(
         !["public", "operator"].includes(route.access)
       )
         throw new Error("Invalid module route");
+      if (
+        route.operatorRedirect !== undefined &&
+        (route.method !== "POST" ||
+          route.access !== "operator" ||
+          !(providers.operatorPages ?? []).some(
+            (page) => page.path === route.operatorRedirect,
+          ))
+      )
+        throw new Error("Invalid module operator redirect");
       if (
         services.routes.some(
           (item) => item.path === route.path && item.method === route.method,

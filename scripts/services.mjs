@@ -19,8 +19,19 @@ const path = (name) => resolve(process.env[name] ?? "");
 const runtimeDatabase = resolve(
   process.env.WIDEMIND_DATABASE ?? "var/widemind.sqlite",
 );
+function isolatedPythonEnvironment(base = process.env) {
+  const env = { ...base };
+  // These services intentionally install the same package name in separate
+  // virtual environments. An inherited source path must not select another one.
+  delete env.PYTHONPATH;
+  delete env.PYTHONHOME;
+  return env;
+}
 function environment(name) {
-  const env = { ...process.env, WIDEMIND_RUNTIME_DATABASE: runtimeDatabase };
+  const env = {
+    ...isolatedPythonEnvironment(),
+    WIDEMIND_RUNTIME_DATABASE: runtimeDatabase,
+  };
   if (name === "economy")
     Object.assign(env, {
       WIDEMIND_OPERATOR_TOKEN: env.WIDEMIND_ECONOMY_OPERATOR_TOKEN ?? "",
@@ -126,7 +137,7 @@ async function setup() {
     const result = spawnSync(
       process.env.WIDEMIND_PYTHON ?? "python3",
       ["-m", "venv", join(".venvs", name)],
-      { stdio: "inherit" },
+      { stdio: "inherit", env: isolatedPythonEnvironment() },
     );
     if (result.status !== 0)
       throw new Error("Virtual environment creation failed: " + name);
@@ -141,7 +152,7 @@ async function setup() {
         "--upgrade",
         "pip==26.2.2",
       ],
-      { stdio: "inherit" },
+      { stdio: "inherit", env: isolatedPythonEnvironment() },
     );
     if (installer.status !== 0)
       throw new Error("Secure installer bootstrap failed: " + name);
@@ -159,7 +170,7 @@ async function setup() {
             ? "[test]"
             : ""),
       ],
-      { stdio: "inherit" },
+      { stdio: "inherit", env: isolatedPythonEnvironment() },
     );
     if (pip.status !== 0) throw new Error("Service install failed: " + name);
   }
@@ -337,7 +348,7 @@ try {
       // Unit suites use explicit local fixtures; never inherit a configured
       // deployment's authority, account credentials or private database paths.
       const testEnv = Object.fromEntries(
-        Object.entries(process.env).filter(
+        Object.entries(isolatedPythonEnvironment()).filter(
           ([key]) => !key.startsWith("WIDEMIND_"),
         ),
       );
