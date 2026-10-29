@@ -14,7 +14,7 @@ The change extends the existing PayPal business service, Gmail transport and cus
 | Final business service suite | **139 tests passed**, including 28 realistic conversation scenarios and nine actual host/portal cases |
 | `npm run integration:browser` | Passed against actual local economy/tools/business processes, persistent worker and desktop/phone Chromium forms; explicit local PayPal protocol fixture; one capture and one refund reconciled, worker hard restart, customer isolation and private SVG delivery verified |
 | Preserved Stripe `npm run business:demo -- --fixtures` | Three scenarios passed: interrupted delivery/reconciliation, pause/unavailable tools and real central-ledger exhaustion; synthetic provider/customer/payment data only |
-| Business/tools wheels | Both built successfully; conversation controller/schema/poller/migration 8 and Gmail wrapper included |
+| Business/tools wheels | Both built successfully; conversation controller/schema/poller/migration 9 and Gmail wrapper included |
 | Source/format checks | Python compilation, Prettier and `git diff --check` passed |
 
 Commands used in the checkout:
