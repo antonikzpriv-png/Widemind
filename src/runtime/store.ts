@@ -211,8 +211,21 @@ export class Store {
           .run(wakeAt, lease.runId);
     });
   }
-  plan(lease: Lease, action: ToolAction, acknowledge: string[] = []) {
+  plan(
+    lease: Lease,
+    action: ToolAction,
+    acknowledge: string[] = [],
+    revision?: number,
+  ) {
     return this.fenced(lease, () => {
+      // Planning and inbox consumption share the selection's revision fence.
+      // Checking only finish() is too late: a stale work selection could already
+      // have consumed its events and dispatched an obsolete external intent.
+      if (
+        revision !== undefined &&
+        this.run(lease.runId)?.revision !== revision
+      )
+        return null;
       const existing = this.db
         .prepare("SELECT * FROM runtime_actions WHERE run_id=? AND work_key=?")
         .get(action.runId, action.workKey) as unknown as ActionRow | undefined;

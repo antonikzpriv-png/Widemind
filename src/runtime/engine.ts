@@ -418,7 +418,16 @@ export class AgentRuntime {
         actionId: randomUUID(),
         runId: run.id,
       };
-      const row = this.store.plan(lease, action, acknowledge);
+      const row = this.store.plan(lease, action, acknowledge, run.revision);
+      if (!row) {
+        acknowledge = [];
+        finish(
+          "waiting",
+          "Run changed during selection; inspect the refreshed snapshot",
+          Date.now(),
+        );
+        return true;
+      }
       if (["completed", "failed"].includes(row.state)) {
         finish(
           "waiting",
