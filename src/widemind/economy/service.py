@@ -294,14 +294,28 @@ class EconomyService:
 
     def start_reservation(self, reservation_id):
         with self._tx() as db:
-            row = self._reservation(db, reservation_id)
-            if row['state'] != 'reserved':
-                raise EconomyError('duplicate_dispatch', 'Action already dispatched or closed; reconcile before retry')
-            if row['amount_micro_usd'] > 0 and self._balance(db, row['run_id'])['available_micro_usd'] < 0:
-                raise EconomyError('insufficient_funds', 'New liability invalidated this authorization; reconcile or cancel before dispatch')
-            db.execute("UPDATE reservations SET state='running',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
-            self._event(db, row['run_id'], 'economy.dispatched', {'reservation_id': reservation_id})
-            return self._reservation(db, reservation_id)
+            return self._start_reservation(db, reservation_id)
+
+    def _start_reservation(self, db, reservation_id):
+        """Dispatch in an existing transaction, enforcing runtime attempt limits."""
+        row = self._reservation(db, reservation_id)
+        if row['state'] != 'reserved':
+            raise EconomyError('duplicate_dispatch', 'Action already dispatched or closed; reconcile before retry')
+        if row['amount_micro_usd'] > 0 and self._balance(db, row['run_id'])['available_micro_usd'] < 0:
+            raise EconomyError('insufficient_funds', 'New liability invalidated this authorization; reconcile or cancel before dispatch')
+        dispatch = {}
+        if db.execute('SELECT 1 FROM runtime_authorizations WHERE reservation_id=?', (reservation_id,)).fetchone():
+            ordinal = db.execute('SELECT COALESCE(MAX(ordinal),0)+1 FROM runtime_dispatches WHERE reservation_id=?',
+                                 (reservation_id,)).fetchone()[0]
+            if ordinal > 3:
+                raise EconomyError('dispatch_limit', 'This runtime action reached its three-attempt dispatch limit')
+            dispatch_id = str(uuid.uuid4())
+            db.execute('INSERT INTO runtime_dispatches VALUES(?,?,?,?)',
+                       (dispatch_id, reservation_id, ordinal, now()))
+            dispatch = {'dispatch_id': dispatch_id, 'dispatch_ordinal': ordinal}
+        db.execute("UPDATE reservations SET state='running',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
+        self._event(db, row['run_id'], 'economy.dispatched', {'reservation_id': reservation_id, **dispatch})
+        return self._reservation(db, reservation_id)
 
     def cancel_reservation(self, reservation_id):
         with self._tx() as db:

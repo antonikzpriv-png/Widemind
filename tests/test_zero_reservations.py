@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from widemind.economy.reporting import audit_integrity
-from widemind.economy.service import EconomyError, EconomyService, MAX_MONEY, encode
+from widemind.economy.service import EconomyError, EconomyService, MAX_MONEY, encode, now
 
 
 class VersionFourEconomy(EconomyService):
@@ -33,6 +33,18 @@ class VersionFourEconomy(EconomyService):
             except BaseException:
                 connection.rollback()
                 raise
+
+    def _start_reservation(self, db, reservation_id):
+        # Frozen version-4 dispatch behavior: that shipped schema has no runtime
+        # authorization/dispatch tables. This fixture exercises its real rows.
+        row = self._reservation(db, reservation_id)
+        if row['state'] != 'reserved':
+            raise EconomyError('duplicate_dispatch', 'Action already dispatched or closed; reconcile before retry')
+        if self._balance(db, row['run_id'])['available_micro_usd'] < 0:
+            raise EconomyError('insufficient_funds', 'New liability invalidated this authorization; reconcile or cancel before dispatch')
+        db.execute("UPDATE reservations SET state='running',updated_at=? WHERE reservation_id=?", (now(), reservation_id))
+        self._event(db, row['run_id'], 'economy.dispatched', {'reservation_id': reservation_id})
+        return self._reservation(db, reservation_id)
 
 
 def reserve(service, action='free', amount=0):
@@ -329,3 +341,95 @@ def test_internal_settle_preserves_provisional_to_final_cost_true_up(tmp_path):
     assert service.balance('run')['reserved_micro_usd'] == 0
     assert service.reservation(row['reservation_id'])['actual_micro_usd'] == 400_000
     assert audit_integrity(service, 'run')['ok'] is True
+
+
+def bind_runtime(service, row):
+    with service._tx() as connection:
+        connection.execute('INSERT INTO runtime_authorizations VALUES(?,?,?,?,?,?,?,?,?,?)',
+                           (row['reservation_id'], row['run_id'], row['action_id'], 'local.fixture', '{}',
+                            row['provider'], row['account'], 'test', 'fixture-fingerprint', row['created_at']))
+
+
+def record_definitive_not_performed(service, row, ordinal):
+    # Fixture for the trusted runtime adapter's atomic rearm path. No external
+    # effect or charge is claimed. Parent bridge performs the evidence checks.
+    with service._tx() as connection:
+        connection.execute('INSERT INTO runtime_rearms VALUES(?,?,?,?,?)',
+                           (row['reservation_id'], ordinal, f'provider-evidence-{ordinal}',
+                            f'fingerprint-{ordinal}', row['created_at']))
+        connection.execute("UPDATE reservations SET state='reserved' WHERE reservation_id=?", (row['reservation_id'],))
+        service._event(connection, row['run_id'], 'economy.runtime_not_performed',
+                       {'reservation_id': row['reservation_id'], 'evidence_ref': f'provider-evidence-{ordinal}'})
+
+
+def test_runtime_dispatch_limit_is_enforced_by_all_core_start_paths(tmp_path):
+    service = EconomyService(tmp_path / 'dispatch.sqlite')
+    service.create_run('run')
+    row = reserve(service)
+    bind_runtime(service, row)
+    for ordinal in range(1, 4):
+        service.start_reservation(row['reservation_id'])
+        with service._read() as connection:
+            dispatches = connection.execute('SELECT ordinal FROM runtime_dispatches WHERE reservation_id=? ORDER BY ordinal',
+                                            (row['reservation_id'],)).fetchall()
+            assert [entry[0] for entry in dispatches] == list(range(1, ordinal + 1))
+        record_definitive_not_performed(service, row, ordinal)
+        assert audit_integrity(service, 'run')['ok'] is True
+    with pytest.raises(EconomyError) as error:
+        service.start_reservation(row['reservation_id'])
+    assert error.value.code == 'dispatch_limit'
+    assert service.reservation(row['reservation_id'])['state'] == 'reserved'
+    assert service.balance('run')['posted_micro_usd'] == 5_000_000
+    with service._read() as connection:
+        assert connection.execute('SELECT count(*) FROM runtime_dispatches').fetchone()[0] == 3
+
+
+def test_runtime_dispatch_and_state_change_share_one_transaction(tmp_path):
+    service = EconomyService(tmp_path / 'dispatch.sqlite')
+    service.create_run('run')
+    row = reserve(service)
+    bind_runtime(service, row)
+    with pytest.raises(sqlite3.IntegrityError):
+        with service._tx() as connection:
+            service._start_reservation(connection, row['reservation_id'])
+            connection.execute('INSERT INTO runtime_dispatches VALUES(?,?,?,?)',
+                               ('invalid-fourth', row['reservation_id'], 4, row['created_at']))
+    assert service.reservation(row['reservation_id'])['state'] == 'reserved'
+    with service._read() as connection:
+        assert connection.execute('SELECT count(*) FROM runtime_dispatches').fetchone()[0] == 0
+    service.start_reservation(row['reservation_id'])
+    assert service.reservation(row['reservation_id'])['state'] == 'running'
+    with service._read() as connection:
+        assert connection.execute('SELECT ordinal FROM runtime_dispatches').fetchone()[0] == 1
+
+
+def test_runtime_dispatch_rearm_history_is_immutable_and_evidence_not_reusable(tmp_path):
+    service = EconomyService(tmp_path / 'dispatch.sqlite')
+    service.create_run('run')
+    row = reserve(service)
+    bind_runtime(service, row)
+    service.start_reservation(row['reservation_id'])
+    record_definitive_not_performed(service, row, 1)
+    service.start_reservation(row['reservation_id'])
+    with service._tx() as connection:
+        for table, message in (('runtime_dispatches', 'immutable runtime dispatch'), ('runtime_rearms', 'immutable runtime rearm')):
+            for statement in (f'UPDATE {table} SET created_at=\'modified\'', f'DELETE FROM {table}',
+                              f'INSERT OR REPLACE INTO {table} SELECT * FROM {table}'):
+                with pytest.raises(sqlite3.IntegrityError, match=message):
+                    connection.execute(statement)
+        with pytest.raises(sqlite3.IntegrityError, match='immutable runtime rearm'):
+            connection.execute('INSERT INTO runtime_rearms VALUES(?,?,?,?,?)',
+                               (row['reservation_id'], 2, 'provider-evidence-1', 'other-fingerprint', row['created_at']))
+        with pytest.raises(sqlite3.IntegrityError, match='FOREIGN KEY constraint failed'):
+            connection.execute('INSERT INTO runtime_rearms VALUES(?,?,?,?,?)',
+                               (row['reservation_id'], 3, 'unperformed-dispatch', 'fingerprint-3', row['created_at']))
+
+
+def test_legacy_nonruntime_reservation_does_not_create_runtime_dispatch_records(tmp_path):
+    service = EconomyService(tmp_path / 'dispatch.sqlite')
+    service.create_run('run')
+    row = reserve(service)
+    service.start_reservation(row['reservation_id'])
+    record_charge(service, row, 0)
+    with service._read() as connection:
+        assert connection.execute('SELECT count(*) FROM runtime_dispatches').fetchone()[0] == 0

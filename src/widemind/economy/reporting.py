@@ -168,7 +168,7 @@ def _audit_snapshot(db, run_id, mode, max_records, version):
     reservation_events = {}
     authorizations = {}
     provisional_events = {}
-    states = {"economy.reserved": "reserved", "economy.dispatched": "running", "economy.cost_unknown": "unknown", "economy.charge_settled": "settled", "economy.reservation_cancelled": "cancelled"}
+    states = {"economy.reserved": "reserved", "economy.dispatched": "running", "economy.runtime_not_performed": "reserved", "economy.cost_unknown": "unknown", "economy.charge_settled": "settled", "economy.reservation_cancelled": "cancelled"}
     for row, data in sorted(events, key=lambda item: item[0]["sequence"]):
         if row["type"] == "economy.hold_changed" and isinstance(data.get("hold_id"), str):
             hold_events[data["hold_id"]] = data

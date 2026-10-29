@@ -39,3 +39,23 @@ CREATE TRIGGER runtime_receipts_no_update BEFORE UPDATE ON runtime_receipts BEGI
 CREATE TRIGGER runtime_receipts_no_delete BEFORE DELETE ON runtime_receipts BEGIN SELECT RAISE(ABORT,'immutable runtime receipt'); END;
 CREATE TRIGGER runtime_receipts_no_replace BEFORE INSERT ON runtime_receipts WHEN EXISTS(SELECT 1 FROM runtime_receipts WHERE provider=NEW.provider AND account=NEW.account AND mode=NEW.mode AND event_id=NEW.event_id) BEGIN SELECT RAISE(ABORT,'immutable runtime receipt'); END;
 CREATE TRIGGER runtime_receipts_binding_guard BEFORE INSERT ON runtime_receipts WHEN NOT EXISTS(SELECT 1 FROM reservations r JOIN runs u ON u.run_id=r.run_id WHERE r.reservation_id=NEW.reservation_id AND r.provider=NEW.provider AND r.account=NEW.account AND u.mode=NEW.mode) BEGIN SELECT RAISE(ABORT,'runtime receipt does not match accounting reservation'); END;
+CREATE TABLE runtime_dispatches (
+ dispatch_id TEXT NOT NULL PRIMARY KEY,
+ reservation_id TEXT NOT NULL REFERENCES reservations(reservation_id),
+ ordinal INTEGER NOT NULL CHECK(typeof(ordinal)='integer' AND ordinal BETWEEN 1 AND 3),
+ created_at TEXT NOT NULL, UNIQUE(reservation_id,ordinal)
+);
+CREATE TABLE runtime_rearms (
+ reservation_id TEXT NOT NULL REFERENCES reservations(reservation_id),
+ dispatch_ordinal INTEGER NOT NULL, evidence_ref TEXT NOT NULL,
+ fingerprint TEXT NOT NULL, created_at TEXT NOT NULL,
+ PRIMARY KEY(reservation_id,dispatch_ordinal), UNIQUE(reservation_id,evidence_ref),
+ FOREIGN KEY(reservation_id,dispatch_ordinal) REFERENCES runtime_dispatches(reservation_id,ordinal)
+);
+CREATE TRIGGER runtime_dispatches_no_update BEFORE UPDATE ON runtime_dispatches BEGIN SELECT RAISE(ABORT,'immutable runtime dispatch'); END;
+CREATE TRIGGER runtime_dispatches_no_delete BEFORE DELETE ON runtime_dispatches BEGIN SELECT RAISE(ABORT,'immutable runtime dispatch'); END;
+CREATE TRIGGER runtime_dispatches_no_replace BEFORE INSERT ON runtime_dispatches WHEN EXISTS(SELECT 1 FROM runtime_dispatches WHERE dispatch_id=NEW.dispatch_id) OR EXISTS(SELECT 1 FROM runtime_dispatches WHERE reservation_id=NEW.reservation_id AND ordinal=NEW.ordinal) BEGIN SELECT RAISE(ABORT,'immutable runtime dispatch'); END;
+CREATE TRIGGER runtime_dispatches_binding_guard BEFORE INSERT ON runtime_dispatches WHEN NOT EXISTS(SELECT 1 FROM runtime_authorizations WHERE reservation_id=NEW.reservation_id) BEGIN SELECT RAISE(ABORT,'runtime dispatch requires a bound authorization'); END;
+CREATE TRIGGER runtime_rearms_no_update BEFORE UPDATE ON runtime_rearms BEGIN SELECT RAISE(ABORT,'immutable runtime rearm'); END;
+CREATE TRIGGER runtime_rearms_no_delete BEFORE DELETE ON runtime_rearms BEGIN SELECT RAISE(ABORT,'immutable runtime rearm'); END;
+CREATE TRIGGER runtime_rearms_no_replace BEFORE INSERT ON runtime_rearms WHEN EXISTS(SELECT 1 FROM runtime_rearms WHERE reservation_id=NEW.reservation_id AND dispatch_ordinal=NEW.dispatch_ordinal) OR EXISTS(SELECT 1 FROM runtime_rearms WHERE reservation_id=NEW.reservation_id AND evidence_ref=NEW.evidence_ref) BEGIN SELECT RAISE(ABORT,'immutable runtime rearm'); END;
