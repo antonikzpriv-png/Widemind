@@ -40,6 +40,11 @@ def main():
     initialize = sub.add_parser("initialize", help="explicit production/test-provider run setup; never creates a customer payment")
     initialize.add_argument("--evidence-reference", required=True)
     sub.add_parser("check-config", help="report safe local provider readiness; makes no provider calls")
+    sync = sub.add_parser("sync-payments", help="enqueue bounded verified-payment reconciliation; no customer money is invented")
+    sync.add_argument("--request-id", required=True)
+    inbox = sub.add_parser("sync-inbox", help="enqueue a configured Gmail sync through the gateway")
+    inbox.add_argument("--request-id", required=True)
+    inbox.add_argument("--cursor")
     worker = sub.add_parser("worker", help="host-injected persistent worker")
     worker.add_argument("--once", action="store_true")
     api = sub.add_parser("api", help="loopback API; TLS/authenticated reverse proxy required in deployment")
@@ -69,6 +74,16 @@ def main():
         serve_demo(args.directory, port=args.port, token_file=args.token_file, seed=args.seed)
         return
     factory = host_factory()
+    if args.command in {"sync-payments", "sync-inbox"}:
+        business = factory()
+        try:
+            event_id = business.notify(source="operator-cli", external_id=args.request_id,
+                kind="payments.reconcile" if args.command == "sync-payments" else "gmail.sync",
+                payload={} if args.command == "sync-payments" else {"cursor": args.cursor})
+            print(encode({"event_id": event_id, "queued": True}))
+        finally:
+            business.close()
+        return
     if args.command == "worker":
         business = factory()
         path = business.store.db.execute("PRAGMA database_list").fetchone()[2]

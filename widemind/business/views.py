@@ -33,15 +33,28 @@ def financial_summary(business):
     if callable(balance):
         try:
             current = balance(run_id=business.run_id)
-            if isinstance(current, dict) and current.get("mode") == business.mode and current.get("currency") == "USD":
-                for key in (*keys, "spendable_micro_usd", "posted_micro_usd", "reserved_micro_usd", "holds_micro_usd",
-                            "opening_micro_usd", "owner_funding_micro_usd", "subsidies_micro_usd"):
-                    if type(current.get(key)) is int:
-                        result[key] = current[key]
-                result["source"] = "economy"
-                result["costs_final"] = current.get("costs_final", False) is True
+            mandatory = (*keys, "spendable_micro_usd", "posted_micro_usd", "reserved_micro_usd", "holds_micro_usd")
+            valid = (isinstance(current, dict) and current.get("mode") == business.mode and
+                     current.get("currency") == "USD" and current.get("run_id", business.run_id) == business.run_id and
+                     all(type(current.get(key)) is int for key in mandatory))
+            if not valid:
+                raise ValueError("incomplete economy balance")
+            for key in (*mandatory, "opening_micro_usd", "owner_funding_micro_usd", "subsidies_micro_usd"):
+                if type(current.get(key)) is int:
+                    result[key] = current[key]
+            result["source"] = "economy"
+            result["costs_final"] = current.get("costs_final", False) is True
         except Exception:
-            result["economy_unavailable"] = True
+            for key in list(result):
+                if key.endswith("_micro_usd"):
+                    result[key] = None
+            result.update({"economy_unavailable": True, "source": "unavailable", "costs_final": False})
+    elif business.mode == "live" or getattr(business, "uses_fixtures", True) is False:
+        for key in list(result):
+            if key.endswith("_micro_usd"):
+                result[key] = None
+        result.update({"economy_unavailable": True, "source": "unavailable", "costs_final": False})
+
     return result
 
 
@@ -81,7 +94,7 @@ def console_view(business):
             "customers": business.store.all("SELECT id,email,opted_out,created_at FROM customers WHERE run_id=? ORDER BY created_at DESC LIMIT 500", (business.run_id,)),
             "effects": business.store.all("SELECT id,job_id,provider,action,state,attempt,reason FROM effects WHERE run_id=? ORDER BY created_at DESC,id DESC LIMIT 500", (business.run_id,)),
             "events": business.store.all("SELECT id,kind,state,due_at,error FROM events WHERE run_id=? ORDER BY due_at DESC LIMIT 500", (business.run_id,)),
-            "integrations": integration_status(business)}
+            "integrations": integration_status(business), "memories": business.recall()}
 
 
 def public_view(business, contact_email=None):

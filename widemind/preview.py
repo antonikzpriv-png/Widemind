@@ -3,6 +3,7 @@ import multiprocessing
 import os
 from pathlib import Path
 import secrets
+import signal
 from wsgiref.simple_server import make_server, WSGIRequestHandler
 from .business.api import API
 from .demo import demonstrate, make_demo
@@ -45,16 +46,27 @@ def serve_demo(directory, *, port, token_file, seed=False):
     def factory():
         business, _ = make_demo(directory)
         return business
-    app = API(factory, operator_token=token, contact_email="customer@example.invalid")
+    app = API(factory, operator_token=token, contact_email="widemind-demo@example.invalid")
+    # Bind first: a busy port must not launch a second worker.
+    server = make_server("127.0.0.1", port, app, handler_class=QuietHandler)
     context = multiprocessing.get_context("spawn")
     worker = context.Process(target=_worker, args=(str(directory),), name="widemind-demo-worker")
-    worker.start()
+    previous = signal.getsignal(signal.SIGTERM)
+    def stop(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, stop)
     try:
+        worker.start()
         print(f"Offline demo UI on loopback port {port}; operator token is in the configured private file. No live effects.", flush=True)
-        with make_server("127.0.0.1", port, app, handler_class=QuietHandler) as server:
+        with server:
             server.serve_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
+        server.server_close()
+        signal.signal(signal.SIGTERM, previous)
         # Only the child this preview created; persisted effects survive restart.
-        if worker.is_alive():
-            worker.terminate()
-        worker.join(timeout=5)
+        if worker.pid is not None:
+            if worker.is_alive():
+                worker.terminate()
+            worker.join(timeout=5)

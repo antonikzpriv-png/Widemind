@@ -107,11 +107,15 @@ class API:
             signature = environ.get("HTTP_STRIPE_SIGNATURE", "")
             business = self.factory()
             handler = getattr(business.economy, "handle_webhook", None)
-            if business.mode != "live" or not callable(handler):
+            provider_profile = business.mode == "live" or (business.mode == "test" and
+                getattr(business, "execution_profile", None) == "provider-test" and getattr(business, "uses_fixtures", True) is False)
+            if not provider_profile or not callable(handler):
                 raise ValueError("verified webhook handler not configured")
             jobs = handler(raw, signature)
             event = json.loads(raw)
             external = str(event["id"])
+            if event.get("type") == "balance.available":
+                business.notify(source="stripe", external_id=external + ":balance-sync", kind="payments.reconcile", payload={})
             for job in jobs:
                 # Money stays in economy; business receives hints only.
                 if business.store.one("SELECT id FROM orders WHERE id=? AND run_id=?", (job, business.run_id)):

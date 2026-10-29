@@ -372,6 +372,11 @@ class EconomyService:
             self._action(action_id,"release",run_id,job_id,request,outcome)
             return outcome
 
+    def validate_price(self, *, amount_micro_usd, currency):
+        """Local quote feasibility, before a customer sees an unsupported offer."""
+        return (type(amount_micro_usd) is int and 500_000 <= amount_micro_usd <= 10**12 and
+                amount_micro_usd % 10_000 == 0 and currency == "USD" and self.stripe is not None)
+
     def payment_link(self, *, run_id, job_id, action_id, amount_micro_usd, currency):
         _money(amount_micro_usd)
         if amount_micro_usd <= 0 or currency != "USD" or amount_micro_usd % 10000:

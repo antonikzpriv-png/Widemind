@@ -67,7 +67,7 @@ class Business:
         return self.runtime.state(self.run_id) in {"active", "waiting"}
 
     def notify(self, *, source, external_id, kind, payload, due_at=None):
-        if kind not in {"select", "offer", "advance", "payment.changed", "gmail.sync", "deadline", "reconcile"}:
+        if kind not in {"select", "offer", "advance", "payment.changed", "gmail.sync", "deadline", "reconcile", "payments.reconcile"}:
             raise ValueError("unsupported event")
         due = self.clock() if due_at is None else due_at
         if type(due) not in {int, float} or not math.isfinite(due) or due < 0:
@@ -137,6 +137,9 @@ class Business:
                 raise ValueError("quote is not available for acceptance")
             if self._opted_out(quote["customer_id"]):
                 raise ValueError("customer opted out")
+            price_check = getattr(self.economy, "validate_price", None)
+            if callable(price_check) and not price_check(amount_micro_usd=quote["price_micro_usd"], currency="USD"):
+                raise ValueError("payment provider no longer supports these quote terms")
             open_count = self.store.one("SELECT COUNT(*) AS n FROM orders WHERE run_id=? AND status NOT IN ('completed','cancelled','failed')", (self.run_id,))["n"]
             if open_count >= self.policy.max_open_orders:
                 raise ValueError("commitment capacity reached")
@@ -346,10 +349,19 @@ class Business:
             plan = service.plan(json.loads(opportunity["scope"]), self.policy.max_job_micro_usd)
             integer(plan.maximum_micro_usd, "service cost", 0, self.policy.max_job_micro_usd)
             price = self.policy.prices[service.name]
+            price_check = getattr(self.economy, "validate_price", None)
+            if callable(price_check) and not price_check(amount_micro_usd=price, currency="USD"):
+                return {"feasible": False, "reason": "configured payment provider does not support this price"}
             if price <= plan.maximum_micro_usd:
                 return {"feasible": False, "reason": "nonpositive expected contribution"}
             if not self.tools.available(plan.action) or not self.tools.available("gmail.send"):
                 return {"feasible": False, "reason": "required tool unavailable"}
+            validate = getattr(self.tools, "validate_arguments", None)
+            if callable(validate):
+                for action, arguments in ((plan.action, plan.arguments), ("gmail.send", {"to": self.store.one("SELECT email FROM customers WHERE id=?", (opportunity["customer_id"],))["email"]})):
+                    readiness = validate(action, arguments)
+                    if not isinstance(readiness, dict) or readiness.get("ready") is not True:
+                        return {"feasible": False, "reason": "configured tool arguments require operator review"}
         except (ValueError, KeyError, TypeError):
             return {"feasible": False, "reason": "scope or configured price requires revision"}
         return {"feasible": True, "expected_cost_micro_usd": plan.maximum_micro_usd,
@@ -526,6 +538,9 @@ class Business:
                 raise Deferred("configured per-job budget reduced")
             if not self.tools.available(plan.action):
                 raise Deferred("fulfillment tool unavailable")
+            validate = getattr(self.tools, "validate_arguments", None)
+            if callable(validate) and validate(plan.action, plan.arguments).get("ready") is not True:
+                raise Deferred("fulfillment source or capability configuration changed")
             reservation = self._effect(order_id, f"reserve:{order['funding_round']}", "economy", "reserve", {"maximum": order["cost_micro_usd"]},
                 lambda aid: self.economy.reserve(run_id=self.run_id, job_id=order_id, action_id=aid,
                     maximum_micro_usd=order["cost_micro_usd"]))
@@ -625,7 +640,9 @@ class Business:
                     {"message_reference": reference, "reason": "invalid request or unconfirmed commercial terms"}, self.clock())
         cursor = batch.get("next_cursor")
         if cursor and cursor != event["payload"].get("cursor"):
-            self.notify(source="gmail-cursor", external_id=str(cursor), kind="gmail.sync", payload={"cursor": cursor})
+            cycle = event["payload"].get("cycle", event["id"])
+            self.notify(source="gmail-cursor", external_id=identity(cycle, cursor),
+                        kind="gmail.sync", payload={"cursor": cursor, "cycle": cycle})
 
     def _gmail_message(self, message):
         message_id = text(message.get("message_id"), "message_id", 300)
@@ -666,7 +683,7 @@ class Business:
         with self.store.transaction():
             event = self.store.one("""SELECT * FROM events WHERE run_id=? AND
                 ((state='queued' AND due_at<=?) OR (state='running' AND lease_until<=?))
-                AND (? OR kind IN ('reconcile','payment.changed')) ORDER BY due_at,id LIMIT 1""", (self.run_id, now, now, active))
+                AND (? OR kind IN ('reconcile','payment.changed','payments.reconcile')) ORDER BY due_at,id LIMIT 1""", (self.run_id, now, now, active))
             if not event:
                 return False
             if event["attempts"] >= 5:
@@ -691,6 +708,23 @@ class Business:
                 self._advance(entity)
             elif kind == "gmail.sync":
                 self._gmail(event)
+            elif kind == "payments.reconcile":
+                operation = getattr(self.economy, "reconcile_payments", None)
+                if not callable(operation):
+                    raise Deferred("payment reconciliation is not configured")
+                result = operation(run_id=self.run_id, limit=5, cursor=event["payload"].get("cursor"), time_budget_seconds=10)
+                if not isinstance(result, dict) or not isinstance(result.get("job_ids"), list):
+                    raise ValueError("invalid reconciliation batch")
+                for job in result["job_ids"]:
+                    if self.store.one("SELECT id FROM orders WHERE id=? AND run_id=?", (job, self.run_id)):
+                        self._enqueue("payment.changed", job, "sync:" + event["id"])
+                cursor = result.get("next_cursor")
+                if not result.get("complete"):
+                    if not cursor or cursor == event["payload"].get("cursor"):
+                        raise Deferred("provider reconciliation needs operator review")
+                    root = event["payload"].get("root", event["id"])
+                    self.notify(source="economy-batch", external_id=root + ":" + str(cursor),
+                        kind="payments.reconcile", payload={"cursor": cursor, "root": root}, due_at=self.clock() + 1)
             elif kind == "deadline":
                 self._deadline(entity, now)
             elif kind == "reconcile":
