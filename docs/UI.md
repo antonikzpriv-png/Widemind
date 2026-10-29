@@ -21,6 +21,8 @@ The console includes:
 - Activity & recovery: durable event states and explicit reconciliation/retry requests.
 - Settings: operator policy, goals, enabled capabilities, prices, prioritization, budgets, and reported provider readiness.
 
+Records are paginated with outstanding commitments prioritized. Overview counters cover the full run rather than only the visible page. Stored order payments are labelled as cached observations with their last observed time; run balances come from the economy or remain unavailable. Command completion schedules a fresh read so an older in-flight response cannot undo the visible result of Pause or another mutation.
+
 The bearer token exists in the JavaScript module's memory only. It is cleared from the input immediately and never written to browser storage or URLs. Locking the console clears the token, pending requests, private view/dialog content, and run identifiers. A late response from an old authentication session cannot restore private state. A late order response cannot replace a newer dialog.
 
 Customer-supplied strings and artifacts are rendered with DOM text nodes, never inserted as HTML. A deliverable download uses the authenticated order response and a short-lived local Blob URL. An operator must use the configured private token; it is not a customer portal credential.
@@ -39,7 +41,7 @@ The explicit test-mode browser harness uses a local HTTP fixture server and no p
 python tests/ui_browser.py
 ```
 
-It requires Playwright and a Chromium executable (`chromium` on PATH or Playwright's installed browser). It checks structured public email requests, desktop/tablet/mobile widths including 320px, all six sections, authentication failure/success, no credential persistence, XSS-safe rendering, intake/source URLs, private downloads, runtime commands, reconciliation, stale-dialog protection, lock cleanup, provider-test labeling, and public dependency failure. It is separate from the standard-library backend unit suite. Tests and fixture customers are not live business evidence.
+It requires Playwright and a Chromium executable (`chromium` on PATH or Playwright's installed browser). Its 73 checks cover structured public email requests, desktop/tablet/mobile widths including 320px, all six sections, authentication failure/success, no credential persistence, XSS-safe rendering, intake/source URLs, private downloads, runtime commands, reconciliation, stale-dialog and mutation/refresh protection, pagination, cached payment labels, lock cleanup, provider-test labeling, and public dependency failure. It is separate from the standard-library backend unit suite. Tests and fixture customers are not live business evidence.
 
 The static UI needs the packaged asset serving, API read projections, and configured business clients supplied by the main application. Deployment still requires TLS, proper operator access control, private data storage, and provider setup; the frontend does not substitute for them.
 

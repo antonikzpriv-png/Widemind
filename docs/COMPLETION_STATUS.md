@@ -2,6 +2,8 @@
 
 This report separates implemented code, local validation, and external live qualification. It never treats fixtures as a customer, a settlement, or earned money.
 
+**Integration status:** this report describes `codex/widemind-complete`, the separate Python application. Current remote main `63f8b1f` uses a different Node/TypeScript foundation and protected economy/SDK; this business implementation has not been integrated there. Do not merge this branch directly over that foundation. See the [full application audit](FULL_APP_AUDIT_20261029.md) for findings, repaired defects and the required port boundaries.
+
 | Requested point | Implemented code | Qualification status |
 | --- | --- | --- |
 | Visual UI | Public headquarters and authenticated six-view console; WideClarity monochrome visual style; structured customer request composer; private artifact downloads and recovery controls | Browser fixture tests and actual API/independent-worker checks passed; responsive 320–1440px, no private data in public projection, memory-only bearer authentication |
@@ -39,7 +41,7 @@ In another terminal:
 python tests/ui_integrated_browser.py --base-url http://127.0.0.1:8080 --token-file /tmp/widemind-ui-operator-token --allow-offline-mutations
 ```
 
-The integrated test refuses provider-test/live targets, reads the owner-only token file without logging it, mutates only labelled demo work, restores the policy, and never invents payments for added requests. The UI fixture suite has 56 checks and integrated suite has 63 checks. **166 backend tests pass**. Python compilation, JavaScript syntax, wheel build/installation, static resource serving outside the checkout, and repeatable packaged demos also pass. Remote CI/Windows and actual live providers are not claimed as qualified.
+The integrated test refuses provider-test/live targets, reads the owner-only token file without logging it, mutates only labelled demo work, restores the policy, and never invents payments for added requests. The UI fixture suite has 73 checks and integrated suite has 63 checks. **201 backend tests pass**. Python compilation, JavaScript syntax, wheel build/installation, static resource serving outside the checkout, and repeatable packaged demos also pass. Remote CI/Windows, the different current-main runtime and actual live providers are not claimed as qualified.
 
 The full provider workflow test uses the **actual** `Business`, `EconomyService`, `RuntimeControl`, `LiveTools`, `GmailClient`, `OpenAIResearch`, and `StripeClient` classes. Its network boundary is an explicitly offline fixture. It verifies authenticated request → accepted offer → acceptance → payment link → signed Stripe event + verified read → one model request and usage charge → persisted deliverable → verified recipient acknowledgment → earned revenue → duplicate-event immunity → post-delivery refund retaining fees and cost. This is contract/integration evidence, not live-service qualification.
 

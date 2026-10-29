@@ -8,6 +8,8 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
+This branch contains a separate Python application. The [29 October full audit](docs/FULL_APP_AUDIT_20261029.md) found that current main has moved to a different Node/TypeScript foundation; the business module has not been ported there. This branch must not be merged directly over that foundation.
+
 WideMind now has a responsive public website and private operator console, a durable business/fulfillment worker, exact-money economy, Stripe Checkout and signed webhooks, dedicated Gmail OAuth/read/send, bounded sourced OpenAI research, and persistent runtime controls. The UI follows WideClarity's monochrome visual style.
 
 The production clients are implemented. Live operation still requires the owner's configured credentials, controlled accounts, approved network access and deployment isolation. Local provider tests use explicit offline transports; no independent paying customer or real earnings are claimed. See [completion evidence and remaining setup](docs/COMPLETION_STATUS.md).
