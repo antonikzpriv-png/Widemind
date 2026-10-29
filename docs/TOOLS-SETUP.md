@@ -13,6 +13,7 @@ There is no timer that makes paid model calls while idle.
 ```sh
 python -m venv .venv
 . .venv/bin/activate
+python -m pip install --upgrade pip==26.2.2
 python -m pip install -e '.[test,graphics,browser]'
 python -m pytest -q
 ```

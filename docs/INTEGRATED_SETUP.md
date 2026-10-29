@@ -14,6 +14,8 @@ npm run migrate
 npm run services:start
 ```
 
+`services:setup` first upgrades the installer in each isolated environment to pip 26.2.2. The tools packages require cryptography 50.x, including the bundled OpenSSL security fixes, and the optional graphics extra requires Pillow 13.x; rerun setup when upgrading an older checkout.
+
 `services:configure` creates mode-600 ignored `var/integration.env`, with distinct random internal service credentials and a stable run identifier. It refuses to overwrite existing files. It does not create a live provider account, opening grant, customer or payment. Launch commands load this file first and `.env` second; exported variables override both.
 
 In another terminal, explicitly open the sandbox run:
@@ -55,3 +57,11 @@ SQLite databases and WAL must persist on the same host and be backed up consiste
 Use `npm run check`, `npm run smoke`, and `npm run browser:smoke` for the foundation and frontend. `npm run services:test` runs the independently installed Python suites (install with --with-tests). `npm run integration:smoke` starts all real local services and the persistent worker, uses an explicitly local PayPal protocol fixture, and verifies quote, acceptance, signature verification, capture, authorization, artifact delivery and exact financial totals. `npm run integration:browser` runs the same workflow with Chromium using the actual customer request/accept/download screens, phone layout and authenticated operator integration screen. It writes synthetic screenshots under ignored `var/integration-browser`. Neither command posts invented live customer revenue. Tests distinguish local artifacts, sandbox accounting and external-provider fixtures from live behavior.
 
 A real paid survival pilot still requires configured/verified business accounts, a real funded opening, an independently paying customer, delivery acceptance and measured expenses. No code test can manufacture those facts.
+
+## Audit behavior updates
+
+The headquarters now receives available offerings and selected completions from the business service. `WIDEMIND_COMMERCE_RUN_ID` also fixes the public financial identity; creating another run does not change those totals. `/api/public` includes additive `financialRunId`.
+
+A recovered `business.step` receipt describes the zero-cost orchestration handoff, not successful fulfillment. Queued core work, running event leases and uncertain paid effects retain their own states. Only a missing bridge invocation permits same-ID dispatch retry. Pausing during publication leaves work queued for explicit Resume. Capability reads are cached only within one host request and run outside business write transactions; policy/input changes are checked again before committing an offer.
+
+PayPal capture/refund webhooks reconcile from fresh authenticated resource reads after the privacy-minimized durable queue. Private economy diagnostics also expose reconciliation task status. Unsupported provider event types remain unresolved for operator review; automated PayPal dispute/chargeback ingestion is not implemented. No webhook payload or model assertion supplies an invented financial adjustment.

@@ -60,7 +60,7 @@ Opportunity and Order contracts include source/time, cost/revenue estimates, sco
 
 `publicContent()` returns deliberately curated offerings/activity/availability. This is a projection contract for integrating the full headquarters later. The foundation serves these through its public page/API. An optional trusted `renderPublic(data)` can supply the public HTML shell using only the public projection; the common CSP remains in force. Customer purchase/delivery endpoints require a separately authenticated implementation and must never expose operator APIs.
 
-- `GET /` and `GET /api/public`: allowlisted run metadata, authoritative summary or null, curated content. No raw receipts, action inputs, messages, reasons or secrets.
+- `GET /` and `GET /api/public`: additive `financialRunId` identifies the selected financial run; configured `RuntimeConfig.publicRunId` comes from `WIDEMIND_COMMERCE_RUN_ID`, with latest-run selection retained only when it is absent. Otherwise these return allowlisted run metadata, authoritative summary or null, curated content. No raw receipts, action inputs, messages, reasons or secrets.
 - `GET /operator`: login or authenticated run/status screens.
 - `POST /api/operator/login`: `{password}`; exact Origin header required; sets HttpOnly/SameSite=Strict cookie and returns CSRF token.
 - `GET /api/operator/status`: session required; private runs/actions/events/module health and CSRF token. Reservation authorization is omitted even here.
@@ -90,3 +90,9 @@ A trusted, authenticated ingress adapter can call `Store.deliverEvent(runId,even
 Free asynchronous module calls are deadline-bounded by optional `RuntimeConfig.dependencyMs` (default 5000). Timeouts do not prove that idempotent authorization or settlement did not happen: implementations must retain the existing action/event idempotency semantics. Tool exceptions after dispatch are unknown effects and remain on the reconciliation queue. Synchronous module code must remain bounded; timer races cannot preempt CPU-blocking code. A queue lease now includes an independent unique token, preventing an old lease from matching a deleted/recreated idle job even when its numeric fence resets.
 
 Public module POST handlers additionally receive optional `rawBody` bytes, bounded by the same 16 KiB request cap, for exact provider-signature verification. Verify these bytes before accepting an event; re-serializing parsed JSON is not equivalent. Operator routes do not receive raw bodies, so their core form CSRF values cannot bypass the forwarding filter. The foundation supplies no provider secret or generic “verified payment” flag; each ingress implementation owns verification, account scope and provider-event deduplication.
+
+### Integrated orchestration recovery
+
+Business bridge recovery may confirm a durable zero-cost handoff while `eventState` is still queued/running. `processed` is false and `recoveredOrchestration` true in that receipt. This confirms orchestration ownership, not provider success, final usage or customer fulfillment. It leaves core leases and uncertain inner effects untouched. The next separately authorized step can inspect due core work; reconciliation never calls the business tick itself. Missing invocation evidence yields `not_performed` with a journal reference and the same action ID is retained for the bounded retry.
+
+Tool reconciliation binds the complete saved action and reservation ID before returning a cached receipt or invoking an adapter. A matching action ID alone cannot authorize changed inputs or a receipt from another run.

@@ -1,5 +1,7 @@
 # Integrated implementation and verification
 
+This is the historical integration baseline. The subsequent [implementation audit](IMPLEMENTATION_AUDIT.md) records reproduced defects, corrections, security updates and current checks.
+
 Verified locally on 2026-10-29 with Node 24.19.0 and Python 3.12.14. Application source is `6d34f617d9c0d60ef1302fd491ee08671be295d4`, which includes main `1ac5f08` and preserves its standalone tools package. The subsequent evidence commit contains documentation and synthetic test captures only.
 
 ## Implemented behavior

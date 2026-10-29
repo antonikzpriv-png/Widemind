@@ -7,6 +7,7 @@ import re
 import secrets
 import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from .engine import Business, Deferred
 from .store import Store, encode, identity
@@ -64,12 +65,18 @@ class Host:
     def work(self,business):
         row=business.store.one("SELECT id,CASE WHEN state='running' AND lease_until>due_at THEN lease_until ELSE due_at END AS due_at,attempts FROM events WHERE run_id=? AND state IN ('queued','running') ORDER BY due_at,id LIMIT 1",(business.run_id,))
         return {'eventId':row['id'] if row else None,'attempt':row['attempts'] if row else 0,'dueAt':row['due_at'] if row else None,'runtimeState':self.runtime.state(business.run_id)}
+    def offerings(self,business):
+        return [{'id':s.name,'title':s.name.replace('-',' ').title(),'description':'Scoped work with private delivery and verified payment before fulfillment.','priceMicros':str(business.policy.prices.get(s.name,0)),'capability':s.capability,'available':s.capability in business.policy.capabilities and business.tools.available({'research':'research.collect','graphics':'graphics.create','software':'software.create'}[s.capability]),'reason':'Requires configured collection tools and funded runtime'} for s in business.services.values()]
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
         try:
             if path=='/v1/work-state':self.observe_payments(business);return self.work(business)
-            if path=='/v1/offerings':
-                return {'available':True,'offerings':[{'id':s.name,'title':s.name.replace('-',' ').title(),'description':'Scoped work with private delivery and verified payment before fulfillment.','priceMicros':str(business.policy.prices.get(s.name,0)),'capability':s.capability,'available':s.capability in business.policy.capabilities and business.tools.available({'research':'research.collect','graphics':'graphics.create','software':'software.create'}[s.capability]),'reason':'Requires configured collection tools and funded runtime'} for s in business.services.values()]}
+            if path=='/v1/offerings':return {'available':True,'offerings':self.offerings(business)}
+            if path=='/v1/public':
+                return {'availability':{'available':True},'offerings':[{key:item[key] for key in ('id','title','description')} for item in self.offerings(business) if item['available']],
+                        'activity':[{'id':identity(run,'public',item['kind'],item['service'],item['at_utc_epoch']),
+                                     'at':datetime.fromtimestamp(item['at_utc_epoch'],timezone.utc).isoformat(),
+                                     'text':f"Completed {item['service'].replace('-',' ')} work."} for item in business.public_activity()]}
             if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,))}
             if path=='/v1/recovery':
                 effect=business.store.one('SELECT * FROM effects WHERE id=? AND run_id=?',(payload['actionId'],run))
@@ -150,12 +157,18 @@ class Host:
                 if row and row['state']=='completed':return json.loads(row['result'])
                 if row:
                     observed=business.store.one('SELECT state FROM events WHERE id=? AND run_id=?',(row['event_id'],run))
-                    if observed and observed['state'] in {'done','blocked','failed'}:
-                        # The core already committed its exact event outcome. This
-                        # observes orchestration completion, not business/job success.
-                        result={'kind':'completed','processed':True,'eventState':observed['state'],**self.work(business)}
+                    if observed and observed['state'] in {'queued','running','done','blocked','failed'}:
+                        # Only finish the zero-cost orchestration receipt. The core
+                        # queue, lease and uncertain effects remain untouched. A next
+                        # authorized step can resume due core work; reconciliation
+                        # itself never invokes tick() or repeats any provider effect.
+                        result={'kind':'completed','processed':observed['state'] in {'done','blocked','failed'},'eventState':observed['state'],'recoveredOrchestration':True,**self.work(business)}
                         business.store.db.execute("UPDATE host_invocations SET state='completed',result=? WHERE action_id=?",(encode(result),row['action_id']))
                         return result
+                else:
+                    # Invocation is journaled before core work. A late request and
+                    # same-ID retry still compete for that single durable claim.
+                    return {'kind':'not_performed','evidenceRef':'business-journal:never-dispatched:'+payload['actionId']}
                 return {'kind':'unknown','reason':'business step outcome requires reconciliation; no blind replay'}
             raise ValueError('unknown route')
         finally:business.store.close()

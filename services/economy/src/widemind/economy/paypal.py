@@ -192,14 +192,25 @@ class PayPalPayments:
     @_bounded_operation
     def process_verified_event(self,event,digest):
         resource=event.get('data',{}).get('object',{});kind=event['type']
-        order_id=resource.get('supplementary_data',{}).get('related_ids',{}).get('order_id')
-        if kind.startswith('CHECKOUT.ORDER.'):order_id=resource.get('id')
-        extra_refund=None
-        if not order_id and ('REFUND' in kind or 'REFUNDED' in kind):
-            parents=[urlsplit(link.get('href','')) for link in resource.get('links',[]) if link.get('rel')=='up']
-            paths=[link.path for link in parents if link.hostname in {self.provider_host,urlsplit(self.base).hostname} and re.fullmatch(r'/v2/payments/captures/[A-Za-z0-9_-]+',link.path)]
+        resource_id=_id(resource.get('id'));order_id=None;extra_refund=None
+        # The durable queue deliberately retains only the resource ID. Recover
+        # all mappings with authenticated reads, including old queued records;
+        # webhook supplementary fields and financial amounts are not authority.
+        if kind.startswith('CHECKOUT.ORDER.'):
+            order_id=resource_id
+        elif 'REFUND' in kind:
+            refund=self._request('GET',f'/v2/payments/refunds/{resource_id}')
+            if refund.get('id')!=resource_id:raise EconomyError('invalid_provider_record','PayPal refund ID mismatch',502)
+            parents=[urlsplit(link.get('href','')) for link in refund.get('links',[]) if link.get('rel')=='up']
+            paths=[link.path for link in parents if link.scheme=='https' and link.hostname in {self.provider_host,urlsplit(self.base).hostname} and re.fullmatch(r'/v2/payments/captures/[A-Za-z0-9_-]+',link.path)]
             if len(paths)==1:
-                capture=self._request('GET',paths[0]);order_id=capture.get('supplementary_data',{}).get('related_ids',{}).get('order_id');extra_refund=_id(resource.get('id'))
+                capture=self._request('GET',paths[0])
+                if capture.get('id')!=paths[0].rsplit('/',1)[1]:raise EconomyError('invalid_provider_record','PayPal parent capture ID mismatch',502)
+                order_id=capture.get('supplementary_data',{}).get('related_ids',{}).get('order_id');extra_refund=resource_id
+        elif kind in {'PAYMENT.CAPTURE.COMPLETED','PAYMENT.CAPTURE.PENDING','PAYMENT.CAPTURE.DENIED','PAYMENT.CAPTURE.DECLINED'}:
+            capture=self._request('GET',f'/v2/payments/captures/{resource_id}')
+            if capture.get('id')!=resource_id:raise EconomyError('invalid_provider_record','PayPal capture ID mismatch',502)
+            order_id=capture.get('supplementary_data',{}).get('related_ids',{}).get('order_id')
         if not order_id:raise EconomyError('payment_mapping_unknown','PayPal event requires an order binding',409)
         if kind=='CHECKOUT.ORDER.APPROVED':self.capture(order_id,'event-'+event['id'])
         else:self.reconcile(order_id,extra_refund)

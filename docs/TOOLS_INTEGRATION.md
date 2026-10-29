@@ -4,6 +4,7 @@ The Node web/worker use a separate Python 3.11+ service with **no independent wa
 
 ```sh
 python3 -m venv .venvs/tools
+.venvs/tools/bin/python -m pip install --upgrade pip==26.2.2
 .venvs/tools/bin/python -m pip install -e 'services/tools[test]'
 .venvs/tools/bin/python -m pytest services/tools/tests -q
 ```
@@ -68,3 +69,5 @@ The journal now hashes the owner-selected adapter configuration, policy, workspa
 When `WIDEMIND_RUNTIME_DATABASE` is configured, active adapter checks read the matching runtime run through a read-only SQLite connection. A stopped/missing run or unreadable control plane fails closed; pause permits an already-active operation to finish. Explicit `/cancel` and runtime stop both reach supported adapter cancellation, including business-internal tool calls. Observational reconciliation remains available after stop and never labels an accepted external effect undone.
 
 The business RPC response includes `state`/`data` expected by its protocol, while retaining `status`/`result` aliases. Business recovery can send only `{action_id}`; the service reloads the original durable action/reservation instead of requiring a caller to reconstruct execution parameters.
+
+The integrated and standalone tools manifests now require cryptography 50.x; their optional graphics extra requires Pillow 13.x. Reinstall the graphics extra explicitly when upgrading an environment that already has Pillow. Reconciliation checks the complete original action/reservation fingerprint before returning any cached receipt, including a confirmed result. Upgrading does not migrate encrypted secret material or alter the Fernet format.

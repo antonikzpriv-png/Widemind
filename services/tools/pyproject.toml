@@ -8,11 +8,11 @@ version = "0.1.0"
 description = "Budget-authorized, durable tools for WideMind's dedicated workspace and accounts"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["cryptography>=44,<47"]
+dependencies = ["cryptography>=50,<51"]
 
 [project.optional-dependencies]
 browser = ["playwright>=1.50,<2"]
-graphics = ["Pillow>=11,<13"]
+graphics = ["Pillow>=13,<14"]
 test = ["pytest>=8,<10"]
 
 [project.scripts]

@@ -315,11 +315,22 @@ class Business:
                 "goals": list(self.policy.goals), "plan": asdict(plan)}
 
     def _select(self):
+        # Capability reads can block on a service. Never hold the business write
+        # lock across them; revalidate the policy and immutable opportunity input
+        # before committing assessments or allocating experiment allowances.
+        policy_document = encode(self.policy.document())
+        candidates = self.store.all("SELECT * FROM opportunities WHERE run_id=? AND status='received' ORDER BY created_at,id LIMIT 100", (self.run_id,))
+        assessments = [(opportunity, self._assess(opportunity)) for opportunity in candidates]
         with self.store.transaction():
-            candidates = self.store.all("SELECT * FROM opportunities WHERE run_id=? AND status='received' ORDER BY created_at,id LIMIT 100", (self.run_id,))
+            saved = self.store.one("SELECT document FROM settings WHERE run_id=?", (self.run_id,))
+            if encode(Policy(**json.loads(saved['document'])).document()) != policy_document:
+                self._enqueue("select", self.run_id, "policy:" + identity(saved['document'], self.clock()))
+                return
             feasible = []
-            for opportunity in candidates:
-                assessment = self._assess(opportunity)
+            for opportunity, assessment in assessments:
+                current = self.store.one("SELECT * FROM opportunities WHERE id=? AND run_id=?", (opportunity['id'], self.run_id))
+                if current != opportunity:
+                    continue
                 self.store.db.execute("UPDATE opportunities SET assessment=?,status=? WHERE id=?",
                     (encode(assessment), "assessed" if assessment["feasible"] else "needs_review", opportunity["id"]))
                 self.store.memory(self.run_id, opportunity["id"], "assessment:" + identity(assessment), assessment, self.clock(), opportunity["customer_id"])
@@ -638,6 +649,11 @@ class Business:
                 self._reconcile(entity)
             self.store.db.execute("UPDATE events SET state='done',lease_until=NULL,error=NULL WHERE id=?", (event["id"],))
         except (Deferred, ValueError, KeyError, TypeError) as exc:
+            if isinstance(exc, Deferred) and event['kind'] in {'select', 'offer', 'advance'} and not self._active():
+                # Preserve interrupted work for an explicit operator resume.
+                # Existing effect IDs/receipts still prevent duplicate paid work.
+                self.store.db.execute("UPDATE events SET state='queued',lease_until=NULL,error=NULL WHERE id=?", (event['id'],))
+                return True
             # No paid retries or token spinning. New external signal/operator event
             # must explicitly wake blocked work after fixing the cause.
             self.store.db.execute("UPDATE events SET state='blocked',lease_until=NULL,error=? WHERE id=?", (str(exc)[:500], event["id"]))

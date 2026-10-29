@@ -75,6 +75,9 @@ export const definition: ModuleDefinition = {
               "operator",
               `/v1/runs/${runId}/payments`,
             ),
+            reconciliation: await client!
+              .request("operator", "/v1/reconciliation/tasks")
+              .catch(() => null),
             integrity: await client!.request(
               "operator",
               `/v1/runs/${runId}/integrity`,

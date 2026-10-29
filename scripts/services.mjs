@@ -122,6 +122,21 @@ async function setup() {
     );
     if (result.status !== 0)
       throw new Error("Virtual environment creation failed: " + name);
+    const installer = spawnSync(
+      python(name),
+      [
+        "-m",
+        "pip",
+        "install",
+        "--cache-dir",
+        resolve("var/pip-cache"),
+        "--upgrade",
+        "pip==26.2.2",
+      ],
+      { stdio: "inherit" },
+    );
+    if (installer.status !== 0)
+      throw new Error("Secure installer bootstrap failed: " + name);
     const pip = spawnSync(
       python(name),
       [

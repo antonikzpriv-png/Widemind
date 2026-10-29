@@ -222,6 +222,7 @@ export interface PublicRun {
 }
 export interface PublicWebsiteData {
   version: 1;
+  financialRunId?: ID | null;
   runs: PublicRun[];
   financial: FinancialSummary | null;
   offerings: Array<{ id: string; title: string; description: string }>;
@@ -242,6 +243,8 @@ export interface RuntimeConfig {
   host: string;
   port: number;
   publicOrigin: string;
+  /** Explicit commerce identity for public financial publication. */
+  publicRunId?: ID;
   profile: "foundation" | "demo";
   secureCookies: boolean;
   leaseMs: number;

@@ -78,3 +78,33 @@ test("recovered queued work refreshes actual capabilities before dispatch", asyn
     f.close();
   }
 });
+
+test("public finance stays bound to the commerce run when another run is created", async () => {
+  const { publicProjection } = await import("../src/web/projections.ts");
+  const f = fixture("foundation");
+  try {
+    const commerce = f.store.create("foundation", 1000);
+    const unrelated = f.store.create("foundation", 2000);
+    const inspected: string[] = [];
+    f.services.economy.summary = async (id) => {
+      inspected.push(id);
+      return null;
+    };
+    assert.equal(
+      (await publicProjection(f.store, f.services, 5000, commerce))
+        .financialRunId,
+      commerce,
+    );
+    assert.deepEqual(inspected, [commerce]);
+    inspected.length = 0;
+    assert.equal(
+      (await publicProjection(f.store, f.services, 5000, "missing-commerce"))
+        .financialRunId,
+      null,
+    );
+    assert.deepEqual(inspected, []);
+    assert.notEqual(commerce, unrelated);
+  } finally {
+    f.close();
+  }
+});

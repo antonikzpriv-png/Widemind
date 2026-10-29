@@ -140,3 +140,34 @@ test("business configuration rejects remote plain HTTP and missing credentials",
     createBusinessClient({ WIDEMIND_BUSINESS_URL: "http://127.0.0.1:8082" }),
   );
 });
+
+test("business response bound cancels an oversized stream before it finishes", async () => {
+  let acknowledgeClose!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    acknowledgeClose = resolve;
+  });
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write(Buffer.alloc(2_100_000, 32));
+    response.on("close", () => {
+      acknowledgeClose();
+    });
+    // Deliberately leave the upstream response open.
+  });
+  try {
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const client = createBusinessClient({
+      WIDEMIND_BUSINESS_URL: `http://127.0.0.1:${address.port}`,
+      WIDEMIND_BUSINESS_TOKEN: "b".repeat(48),
+    })!;
+    await assert.rejects(client.request("/v1/status", {}), /exceeds bound/);
+    await closed;
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

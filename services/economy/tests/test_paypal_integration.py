@@ -117,3 +117,21 @@ def test_refund_webhook_maps_through_authenticated_capture_parent(tmp_path):
     service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');fixture=PayPalFixture();provider=adapter(service,fixture);provider.create_checkout('run','checkout','job',10_000_000);provider.capture('ORDER_1','capture');fixture.refunded=True
     event={'id':'EVENT_REFUND','type':'PAYMENT.CAPTURE.REFUNDED','data':{'object':{'id':'REFUND_1','links':[{'rel':'up','href':'https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE_1'}]}}}
     provider.process_verified_event(event,'a'*64);assert service.balance('run')['posted_micro_usd']==12_500_000
+
+@pytest.mark.parametrize('kind,resource_id,refund,expected',[('PAYMENT.CAPTURE.COMPLETED','CAPTURE_1',False,14_500_000),('PAYMENT.CAPTURE.REFUNDED','REFUND_1',True,12_500_000)])
+def test_verified_capture_and_refund_events_survive_minimal_durable_queue(tmp_path,kind,resource_id,refund,expected):
+    settings=configuration(tmp_path);service=EconomyService(settings.database_path);service.create_run('run')
+    fixture=PayPalFixture();provider=adapter(service,fixture);provider.create_checkout('run','checkout','job',10_000_000)
+    fixture.captured=True;fixture.refunded=refund
+    with TestClient(create_app(settings,service=service,payments=provider)) as app:
+        event={'id':'QUEUED_PROVIDER_EVENT','event_type':kind,'resource':{'id':resource_id,'private_customer':'must not enter queue','supplementary_data':{'related_ids':{'order_id':'UNTRUSTED_EVENT_ORDER'}}}}
+        raw=json.dumps(event).encode();headers={name:'fixture-value' for name in ('paypal-auth-algo','paypal-cert-url','paypal-transmission-id','paypal-transmission-sig','paypal-transmission-time')}
+        for _ in range(2):assert app.post('/v1/webhooks/paypal',content=raw,headers=headers).status_code==202
+        worker=ReconciliationWorker(app.app.state.reconciliation_queue,provider)
+        assert worker.run_once()['completed']==1
+        assert worker.run_once()['processed']==0
+        assert service.balance('run')['posted_micro_usd']==expected
+        with service._read() as db:
+            payload=db.execute('SELECT payload FROM reconciliation_jobs').fetchone()[0]
+            assert 'private_customer' not in payload
+            assert 'UNTRUSTED_EVENT_ORDER' not in payload

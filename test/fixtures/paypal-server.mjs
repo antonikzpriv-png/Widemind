@@ -138,6 +138,14 @@ export async function paypalFixture() {
   return {
     url: "http://127.0.0.1:" + server.address().port,
     stats: () => ({ orders: orders.size, captured, refunds }),
+    simulateExternalRefund(orderId, amount) {
+      const order = orders.get(orderId);
+      if (!order?.captured || order.refund)
+        throw new Error("Fixture refund requires one captured order");
+      order.refund = { currency_code: "USD", value: amount };
+      refunds++;
+      return orderId.replace("ORDER", "REFUND");
+    },
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }

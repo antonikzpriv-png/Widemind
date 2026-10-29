@@ -50,9 +50,12 @@ export async function publicProjection(
   store: Store,
   services: Services,
   dependencyMs = 5000,
+  publicRunId?: string,
 ): Promise<PublicWebsiteData> {
   const runs = store.runs();
-  const latest = runs[0];
+  const latest = publicRunId
+    ? runs.find((run) => run.id === publicRunId)
+    : runs[0];
   const content = await callDependency(
     "website.publicContent",
     () => services.website.publicContent(),
@@ -67,6 +70,7 @@ export async function publicProjection(
   }));
   return {
     version: 1,
+    financialRunId: latest?.id ?? null,
     runs: runs.map(publicRun),
     financial: financialProjection(
       latest

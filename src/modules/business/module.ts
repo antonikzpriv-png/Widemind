@@ -15,7 +15,9 @@ interface Work {
   runtimeState: string;
 }
 interface Step {
-  kind: "completed" | "unknown";
+  kind: "completed" | "unknown" | "not_performed";
+  evidenceRef?: string;
+  recoveredOrchestration?: boolean;
   processed?: boolean;
   eventState?: string;
   reason?: string;
@@ -46,6 +48,7 @@ function receipt(action: ToolAction, step: Step): ToolReceipt {
     result: {
       processed: step.processed === true,
       eventState: step.eventState ?? "unknown",
+      recoveredOrchestration: step.recoveredOrchestration === true,
       transport: "private-business-portal",
     },
     usage: {
@@ -216,6 +219,23 @@ export const definition: ModuleDefinition = {
       },
     });
     return {
+      website: {
+        health: () => ({ available: true }),
+        publicContent: async () => {
+          if (!client.runId)
+            return {
+              offerings: [],
+              activity: [],
+              availability: {
+                available: false,
+                reason: "Commerce run is not configured",
+              },
+            };
+          return client.request("/v1/public", {
+            runId: run(client.runId, true),
+          });
+        },
+      },
       business: {
         health: () => ({ available: true }),
         selectWork: async (snapshot) => {
@@ -403,6 +423,8 @@ export const definition: ModuleDefinition = {
             runId: action.runId,
             actionId: action.actionId,
           });
+          if (result.kind === "not_performed" && result.evidenceRef)
+            return { kind: "not_performed", evidenceRef: result.evidenceRef };
           return result.kind === "completed"
             ? { kind: "receipt", receipt: receipt(action, result) }
             : {

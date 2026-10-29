@@ -13,5 +13,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip==26.2.2
       - run: python -m pip install -e '.[test,graphics,browser]'
       - run: python -m pytest -q

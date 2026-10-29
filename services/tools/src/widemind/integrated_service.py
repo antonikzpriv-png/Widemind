@@ -99,8 +99,11 @@ class Journal:
         with self.connection() as db:
             row=db.execute('SELECT * FROM operations WHERE id=?',(id,)).fetchone()
             return dict(row) if row else None
+    @staticmethod
+    def fingerprint(action,reservation):
+        return hashlib.sha256(canonical({'action':action,'reservation_id':reservation['reservationId']}).encode()).hexdigest()
     def prepare(self,action,reservation,owner_fingerprint):
-        fingerprint=hashlib.sha256(canonical({'action':action,'reservation_id':reservation['reservationId']}).encode()).hexdigest()
+        fingerprint=self.fingerprint(action,reservation)
         with self.connection() as db:
             db.execute('BEGIN IMMEDIATE');old=db.execute('SELECT * FROM operations WHERE id=?',(action['actionId'],)).fetchone()
             if old:
@@ -252,6 +255,7 @@ class IntegratedTools:
         else:action,reservation,business=self.normalize(payload)
         row=self.journal.get(action['actionId'])
         if row is None:return {'kind':'not_performed','evidenceRef':'tools-journal:never-dispatched:'+action['actionId']}
+        if row['fingerprint']!=self.journal.fingerprint(action,reservation):raise ToolError('conflict','Reconciliation parameters differ from the original durable action.')
         self.verify(action,reservation,completed=bool(row['result'] and json.loads(row['result']).get('kind')=='receipt'))
         if row['result'] is not None:
             known=json.loads(row['result'])

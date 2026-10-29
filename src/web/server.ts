@@ -111,6 +111,7 @@ export function webServer(context: {
             store,
             services,
             config.dependencyMs ?? 5000,
+            config.publicRunId,
           );
           send(
             200,

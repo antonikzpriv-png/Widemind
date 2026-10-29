@@ -40,6 +40,16 @@ class Integration(unittest.TestCase):
         self.economy.settle('reservation-1',result['receipt']);self.assertEqual(self.tools.execute({'action':a,'reservation':reservation}),result);self.assertEqual(len(self.economy.starts),1)
         other=IntegratedTools(self.config,self.economy,secrets=Secrets());self.assertEqual(other.reconcile({'action':a,'reservation':reservation}),result)
         self.assertFalse((self.root/'control/control.sqlite3').exists(),'Integrated service must not create the legacy wallet')
+    def test_reconciliation_rejects_changed_action_and_cross_run_cached_receipt(self):
+        a=action();result,r=self.execute(a)
+        changed=copy.deepcopy(a);changed['input']['path']='different.txt'
+        with self.assertRaises(Exception):self.tools.reconcile({'action':changed,'reservation':r})
+        other=copy.deepcopy(a);other['runId']='another-run'
+        other_reservation=self.economy.add(other,'reservation-other')
+        with self.assertRaises(Exception):self.tools.reconcile({'action':other,'reservation':other_reservation})
+        self.assertEqual(self.tools.reconcile({'action':a,'reservation':r}),result)
+        self.assertEqual(len(self.economy.starts),1)
+
     def test_binding_mismatch_and_limits_fail_before_effect(self):
         a=action();r=self.economy.add(a);self.economy.rows['reservation-1']['run_id']='other-run'
         with self.assertRaises(Exception):self.tools.execute({'action':a,'reservation':r})

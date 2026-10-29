@@ -53,12 +53,16 @@ class RuntimeState:
 class ToolsClient:
     def __init__(self,env,mode):
         self.mode=mode
+        self._capabilities=None
         self.http=HTTP(env.get('WIDEMIND_TOOLS_URL','http://127.0.0.1:8081'),env.get('WIDEMIND_TOOLS_TOKEN',''))
     def available(self,action):
         if action=='gmail.send': return True # dedicated customer portal is an actual local delivery transport
         try:
-            result=self.http.request('/capabilities')
-            items=result.get('capabilities',[]) if isinstance(result,dict) else result
+            if self._capabilities is None:
+                self._capabilities=[]
+                result=self.http.request('/capabilities')
+                self._capabilities=result.get('capabilities',[]) if isinstance(result,dict) else result
+            items=self._capabilities
             for item in items:
                 if item.get('id',item.get('name'))==action:
                     health=item.get('availability',item.get('available',False))

@@ -66,6 +66,8 @@ try {
     WIDEMIND_TOOLS_STATE: join(directory, "tools/control"),
     WIDEMIND_TOOLS_WORKSPACE: join(directory, "tools/workspace"),
     WIDEMIND_PROFILE: "foundation",
+    WIDEMIND_LEASE_MS: "3000",
+    WIDEMIND_IDLE_MS: "1000",
     WIDEMIND_HOST: "127.0.0.1",
     WIDEMIND_PORT: String(web),
     WIDEMIND_PUBLIC_ORIGIN: origin,
@@ -159,7 +161,7 @@ try {
     "x-csrf-token": login.value.csrf,
   };
   await post("/api/operator/runs/" + runId + "/resume", {}, headers);
-  launch(["src/runtime/main.ts"]);
+  let worker = launch(["src/runtime/main.ts"]);
   console.log("INTEGRATION request -> quote");
   let offerings;
   await waitFor(async () => {
@@ -291,8 +293,14 @@ try {
   });
   assert.equal(invalid.ok, false);
   assert.equal(provider.stats().captured, 0);
+  // Kill the actual worker with an accepted commitment outstanding. Payment
+  // reconciles while it is down; a new process must recover durable work.
+  const exited = new Promise((resolve) => worker.once("exit", resolve));
+  worker.kill("SIGKILL");
+  await exited;
   await post("/api/modules/economy/webhook", approval, paypalHeaders);
   await post("/api/modules/economy/webhook", approval, paypalHeaders);
+  worker = launch(["src/runtime/main.ts"]);
   console.log("INTEGRATION payment captured -> delivery");
   await waitFor(async () => {
     await readCustomer();
@@ -375,6 +383,22 @@ try {
       ),
       true,
     );
+    await browser.click("#business-policy button");
+    await browser.waitFor(() =>
+      browser.evaluate(
+        "document.querySelector('#operator-message').textContent==='Policy saved.'",
+      ),
+    );
+    await browser.fill(
+      "#business-reconcile input[name=actionId]",
+      "nonexistent-controlled-effect",
+    );
+    await browser.click("#business-reconcile button");
+    await browser.waitFor(() =>
+      browser.evaluate(
+        "document.querySelector('#operator-message').textContent.includes('unavailable')",
+      ),
+    );
     await browser.screenshot("integrations-phone");
     assert.deepEqual(browser.errors, []);
   }
@@ -387,7 +411,17 @@ try {
   const before = provider.stats();
   await readCustomer();
   assert.deepEqual(provider.stats(), before);
+  await post("/api/operator/runs", {}, headers);
   const publicData = await (await fetch(origin + "/api/public")).json();
+  assert.equal(publicData.financialRunId, runId);
+  assert.ok(publicData.offerings.some((item) => item.id === "svg-graphic"));
+  assert.ok(publicData.activity.some((item) => /completed/i.test(item.text)));
+  const curated = JSON.stringify({
+    offerings: publicData.offerings,
+    activity: publicData.activity,
+  });
+  assert.equal(curated.includes("controlled-customer"), false);
+  assert.equal(curated.includes("Local integration pilot"), false);
   assert.equal(publicData.financial.mode, "sandbox");
   assert.ok(BigInt(publicData.financial.customerReceiptsMicros) > 0n);
   assert.ok(BigInt(publicData.financial.earnedRevenueMicros) > 0n);
@@ -410,18 +444,63 @@ try {
       BigInt(financial.reservedMicros) -
       BigInt(financial.holdsMicros),
   );
+  if (withBrowser) {
+    await browser.navigate(origin + "/");
+    assert.equal(
+      await browser.evaluate(
+        "document.body.textContent.includes('$6.90 spendable')",
+      ),
+      true,
+    );
+    assert.equal(
+      await browser.evaluate(
+        "document.body.textContent.includes('Completed svg graphic work.')",
+      ),
+      true,
+    );
+    assert.equal(
+      await browser.evaluate(
+        "document.documentElement.scrollWidth<=innerWidth",
+      ),
+      true,
+    );
+    await browser.screenshot("headquarters-phone");
+  }
+  const refundId = provider.simulateExternalRefund(paymentId, "2.00");
+  const refundEvent = {
+    id: "CONTROLLED_REFUND_EVENT",
+    event_type: "PAYMENT.CAPTURE.REFUNDED",
+    resource: { id: refundId },
+  };
+  await post("/api/modules/economy/webhook", refundEvent, paypalHeaders);
+  await post("/api/modules/economy/webhook", refundEvent, paypalHeaders);
+  let afterRefund;
+  await waitFor(async () => {
+    afterRefund = await (await fetch(origin + "/api/public")).json();
+    return afterRefund.financial?.refundsMicros === "2000000";
+  }, "queued externally initiated PayPal refund");
+  assert.equal(afterRefund.financial.postedMicros, "4900000");
+  assert.equal(afterRefund.financial.spendableMicros, "4900000");
+  assert.equal(provider.stats().captured, 1);
+  assert.equal(provider.stats().refunds, 1);
+  if (withBrowser) assert.deepEqual(browser.errors, []);
   const report = {
     passed: true,
     externalPayment:
       "explicit local PayPal protocol fixture; no actual payment",
     actualServices: ["economy", "tools", "business"],
     persistentWorker: true,
+    hardWorkerRestart: true,
+    publicHeadquartersWired: true,
+    publicFinancialRunPinned: true,
     browserCustomerAndOperator: withBrowser,
     customerIsolation: true,
     privateDelivery: true,
     artifact: delivery.filename,
-    providerEffects: before,
-    financial: publicData.financial,
+    queuedCaptureAndRefundEvents: true,
+    providerEffects: provider.stats(),
+    financialBeforeRefund: publicData.financial,
+    financial: afterRefund.financial,
   };
   await mkdir("var", { recursive: true });
   await writeFile(

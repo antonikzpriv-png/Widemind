@@ -84,13 +84,123 @@ class HostTests(unittest.TestCase):
         self.assertEqual(other['statusCode'],409)
         self.assertEqual(self.host.handle('/v1/customer',{'runId':'run-1','token':'x'*43})['opportunityId'],self.request()['opportunityId'])
     def test_outer_step_is_idempotent_and_unknown_is_never_blindly_repeated(self):
-        self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'});request={'runId':'run-1','actionId':'outer-durable','eventId':work['eventId']};first=self.host.handle('/v1/step',request);self.assertEqual(self.host.handle('/v1/step',request),first);self.assertEqual(self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'not-started'})['kind'],'unknown')
+        self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'});request={'runId':'run-1','actionId':'outer-durable','eventId':work['eventId']};first=self.host.handle('/v1/step',request);self.assertEqual(self.host.handle('/v1/step',request),first);self.assertEqual(self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'not-started'})['kind'],'not_performed')
     def test_interrupted_bridge_receipt_recovers_from_exact_completed_core_event(self):
         self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'});request={'runId':'run-1','actionId':'outer-crash-window','eventId':work['eventId']};self.host.handle('/v1/step',request)
         business=self.host.business('run-1')
         try:business.store.db.execute("UPDATE host_invocations SET state='running',result=NULL WHERE action_id=?",('outer-crash-window',))
         finally:business.store.close()
         result=self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'outer-crash-window'});self.assertEqual(result['kind'],'completed');self.assertEqual(result['eventState'],'done');self.assertEqual(self.fixture.creation_calls,0)
+    def test_restart_before_core_dispatch_observes_durable_queue_without_running_it(self):
+        self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'})
+        business=self.host.business('run-1')
+        try:
+            business.store.db.execute("INSERT INTO host_invocations VALUES (?,?,?,'running',NULL,?)",('outer-before-dispatch','run-1',work['eventId'],time.time()))
+        finally:business.store.close()
+        result=self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'outer-before-dispatch'})
+        self.assertEqual(result['kind'],'completed');self.assertFalse(result['processed']);self.assertEqual(result['eventState'],'queued')
+        self.assertEqual(self.fixture.creation_calls,0)
+        self.assertEqual(self.host.handle('/v1/work-state',{'runId':'run-1'})['eventId'],work['eventId'])
+        self.assertTrue(self.step('recovered')['processed'])
+
+    def test_restart_during_core_processing_retains_unknown_effect_and_event_lease(self):
+        self.request();work=self.host.handle('/v1/work-state',{'runId':'run-1'})
+        business=self.host.business('run-1')
+        try:
+            business.store.db.execute("UPDATE events SET state='running',lease_until=?,attempts=1 WHERE id=?",(time.time()+120,work['eventId']))
+            business.store.db.execute("INSERT INTO host_invocations VALUES (?,?,?,'running',NULL,?)",('outer-active','run-1',work['eventId'],time.time()))
+            business.store.db.execute("INSERT INTO effects(id,run_id,job_id,provider,action,request,state,created_at,logical_id,attempt) VALUES (?,?,?,?,?,?,'unknown',?,?,0)",('pending-effect','run-1','job-uncertain','tools','graphics.create','{}',time.time(),'pending-effect'))
+        finally:business.store.close()
+        result=self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'outer-active'})
+        self.assertEqual(result['kind'],'completed');self.assertFalse(result['processed']);self.assertEqual(result['eventState'],'running')
+        self.assertGreater(result['dueAt'],time.time())
+        business=self.host.business('run-1')
+        try:self.assertEqual(business.store.one("SELECT state FROM effects WHERE id='pending-effect'")['state'],'unknown')
+        finally:business.store.close()
+        self.assertEqual(self.fixture.creation_calls,0)
+
+    def test_never_dispatched_outer_action_has_definitive_journal_evidence(self):
+        result=self.host.handle('/v1/reconcile',{'runId':'run-1','actionId':'not-started'})
+        self.assertEqual(result['kind'],'not_performed');self.assertIn('not-started',result['evidenceRef'])
+
+    def test_public_headquarters_has_only_available_offerings_and_curated_activity(self):
+        self.test_complete_portal_order_uses_verified_payment_and_one_authorized_creation()
+        result=self.host.handle('/v1/public',{'runId':'run-1'})
+        self.assertTrue(result['availability']['available'])
+        self.assertEqual([o['id'] for o in result['offerings']],['svg-graphic'])
+        self.assertEqual(len(result['activity']),1)
+        text=json.dumps(result)
+        self.assertNotIn('real-input',text);self.assertNotIn('Requested graphic',text);self.assertNotIn('customerToken',text)
+        self.assertIn('completed',result['activity'][0]['text'].lower())
+
+    def test_selection_does_not_hold_business_write_lock_while_checking_tool_service(self):
+        self.request();business=self.host.business('run-1');observed=[]
+        original=business.tools.available
+        def checked(action):
+            observed.append(business.store.db.in_transaction)
+            return original(action)
+        business.tools.available=checked
+        try:
+            self.assertTrue(business.tick())
+            self.assertTrue(observed)
+            self.assertFalse(any(observed))
+        finally:business.store.close()
+
+    def test_capabilities_are_read_once_per_request_not_once_per_opportunity(self):
+        self.request();self.request('another','y'*43)
+        business=self.host.business('run-1');reads=[];original=business.tools.http.request
+        def checked(path,*args,**kwargs):
+            reads.append(path);return original(path,*args,**kwargs)
+        business.tools.http.request=checked
+        try:
+            self.assertTrue(business.tick())
+            self.assertEqual(reads.count('/capabilities'),1)
+        finally:business.store.close()
+
+    def test_pause_during_portal_publication_keeps_event_queued_for_resume(self):
+        self.request();self.step('select');business=self.host.business('run-1');original=business._email
+        def paused(*args,**kwargs):
+            with sqlite3.connect(self.runtime) as db:db.execute("UPDATE runtime_runs SET state='paused',desired='pause'")
+            return original(*args,**kwargs)
+        business._email=paused
+        try:
+            self.assertTrue(business.tick())
+            self.assertEqual(business.store.one("SELECT state FROM events WHERE kind='offer'")['state'],'queued')
+        finally:business.store.close()
+        with sqlite3.connect(self.runtime) as db:db.execute("UPDATE runtime_runs SET state='active',desired='run'")
+        self.step('resumed')
+        customer=self.host.handle('/v1/customer',{'runId':'run-1','token':'x'*43})
+        self.assertEqual(customer['quotes'][0]['status'],'offered')
+
+    def test_policy_changes_during_capability_read_cannot_commit_a_stale_quote(self):
+        self.request();business=self.host.business('run-1');original=business.tools.available;changed=[]
+        def checked(action):
+            if not changed:
+                changed.append(True)
+                other=self.host.business('run-1')
+                try:
+                    policy=other.policy.document();policy['capabilities']=[]
+                    from widemind.business.policy import Policy
+                    other.configure(Policy(**policy))
+                finally:other.store.close()
+            return original(action)
+        business.tools.available=checked
+        try:
+            self.assertTrue(business.tick())
+            self.assertEqual(business.store.all('SELECT id FROM quotes'),[])
+        finally:business.store.close()
+        self.step('new-policy')
+        self.assertEqual(self.host.handle('/v1/customer',{'runId':'run-1','token':'x'*43})['quotes'],[])
+
+    def test_unavailable_capability_service_is_not_retried_for_each_candidate(self):
+        self.request();self.request('another','y'*43);business=self.host.business('run-1');calls=[]
+        def unavailable(*args,**kwargs):calls.append(args);raise OSError('controlled fixture outage')
+        business.tools.http.request=unavailable
+        try:
+            self.assertTrue(business.tick());self.assertEqual(len(calls),1)
+            self.assertEqual(business.store.all('SELECT id FROM quotes'),[])
+        finally:business.store.close()
+
     def test_stopped_runtime_preserves_customer_read_access_but_does_no_work(self):
         self.request()
         with sqlite3.connect(self.runtime) as db:db.execute("UPDATE runtime_runs SET desired='stop',state='stopped'")

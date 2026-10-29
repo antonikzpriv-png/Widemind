@@ -53,9 +53,25 @@ export function createBusinessClient(
         redirect: "error",
         signal: AbortSignal.timeout(path === "/v1/step" ? 120000 : 15000),
       });
-      const value = await response.text();
-      if (Buffer.byteLength(value) > 2_000_000)
-        throw new Error("Business response exceeds bound");
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Business service returned no body");
+      try {
+        while (true) {
+          const part = await reader.read();
+          if (part.done) break;
+          size += part.value.byteLength;
+          if (size > 2_000_000) {
+            await reader.cancel();
+            throw new Error("Business response exceeds bound");
+          }
+          chunks.push(part.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      const value = Buffer.concat(chunks).toString("utf8");
       if (!response.ok) throw new BusinessApiError(response.status);
       return JSON.parse(value) as T;
     },
