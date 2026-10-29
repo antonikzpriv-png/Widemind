@@ -31,7 +31,7 @@ def fixture():
                     "spendable_micro_usd": None, "refunds_micro_usd": 0},
         "opportunities": [{"id": "a" * 40, "service": "research-brief", "status": "offered", "scope": {"topic": TOPIC, "sections": ["Overview"], "min_sources": 2}, "assessment": {"feasible": True, "expected_cost_micro_usd": 250000}, "customer_id": "customer1", "priority": 1, "origin": "inbound", "created_at": NOW}],
         "quotes": [{"id": "q" * 40, "opportunity_id": "a" * 40, "status": "offered", "scope": {"topic": TOPIC}, "price_micro_usd": 2000000, "cost_micro_usd": 250000, "expires_at": NOW + 172800, "turnaround_seconds": 86400}],
-        "orders": [{"id": "b" * 40, "customer_id": "customer1", "service": "research-brief", "status": "ready", "scope": {"topic": TOPIC}, "payment": {"status": "settled", "receipts_micro_usd": 2000000, "refunds_micro_usd": 0, "earned_micro_usd": 0}, "delivery_due_at": NOW + 86400, "delivery_obligation_open": True}],
+        "orders": [{"id": "b" * 40, "customer_id": "customer1", "service": "research-brief", "status": "ready", "scope": {"topic": TOPIC}, "payment": {"status": "settled", "receipts_micro_usd": 2000000, "refunds_micro_usd": 0, "earned_micro_usd": 0}, "payment_source": "cached_order_snapshot", "payment_observed_at": NOW, "delivery_due_at": NOW + 86400, "delivery_obligation_open": True}],
         "customers": [{"id": "customer1", "email": "customer@example.invalid", "opted_out": False}],
         "effects": [{"id": "c" * 40, "job_id": "b" * 40, "action": "gmail.send", "provider": "tools", "state": "unknown", "attempt": 0, "reason": "Delivery response lost"}],
         "events": [{"id": "d" * 40, "kind": "advance", "state": "blocked", "due_at": NOW, "error": "external outcome uncertain"}],
@@ -42,8 +42,9 @@ def fixture():
 @contextmanager
 def fixture_server():
     requests = []
+    controls = {"hold_next_console": False, "console_ready": threading.Event(), "console_release": threading.Event(), "console_requests": 0}
     data = fixture()
-    data['orders'].append({**data['orders'][0], 'id': 'e' * 40, 'scope': {'topic': 'Older delayed order'}})
+    data['orders'].append({**data['orders'][0], 'id': 'e' * 40, 'scope': {'topic': 'Older delayed order'}, 'payment_observed_at': None})
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -66,7 +67,13 @@ def fixture_server():
             if self.headers.get("Authorization") != f"Bearer {TOKEN}":
                 return self.send({"error": "authentication required"}, status=401)
             if path == "/api/v1/console":
-                return self.send(data)
+                controls['console_requests'] += 1
+                snapshot = json.loads(json.dumps(data))
+                if controls['hold_next_console']:
+                    controls['hold_next_console'] = False
+                    controls['console_ready'].set()
+                    controls['console_release'].wait(timeout=10)
+                return self.send(snapshot)
             if path.startswith("/api/v1/orders/"):
                 order = dict(data["orders"][0])
                 order["id"] = path.rsplit("/", 1)[-1]
@@ -90,8 +97,9 @@ def fixture_server():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}", requests
+        yield f"http://127.0.0.1:{server.server_port}", requests, controls
     finally:
+        controls['console_release'].set()
         server.shutdown()
         server.server_close()
         thread.join()
@@ -104,7 +112,7 @@ def main():
         if not condition:
             raise AssertionError(message)
         checks += 1
-    with fixture_server() as (url, requests), sync_playwright() as playwright:
+    with fixture_server() as (url, requests, controls), sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True, executable_path=shutil.which("chromium") or None)
         page = browser.new_page(viewport={"width": 1440, "height": 1000})
         errors = []
@@ -122,6 +130,12 @@ def main():
         command = json.loads(parse_qs(urlsplit(draft.get_attribute('href')).query)['body'][0])
         check(command['type'] == 'request' and command['service'] == 'research-brief', 'public draft matches Gmail command contract')
         check(command['scope']['topic'] == 'Explicit customer request fixture', 'public draft preserves requested scope')
+        page.locator('textarea[name="source_urls"]').fill('https:example.com/a\nhttps:example.org/b')
+        page.get_by_role('button', name='Prepare email draft', exact=True).click()
+        check(not page.locator('a[href^="mailto:"]').count(), 'malformed HTTPS sources cannot enter a customer draft')
+        page.locator('textarea[name="source_urls"]').fill('https://example.com/a\nhttps://example.com/a')
+        page.get_by_role('button', name='Prepare email draft', exact=True).click()
+        check('unique' in page.locator('#dialog-content .dialog-message').inner_text(), 'duplicate source URLs are rejected before email composition')
         page.locator('#close-dialog').click()
         for width in [1440, 1024, 390, 320]:
             page.set_viewport_size({"width": width, "height": 950})
@@ -156,6 +170,8 @@ def main():
         recorded = next(item for item in requests if item['path'] == '/api/v1/opportunities')
         check(recorded['body']['scope']['source_urls'] == ['https://example.com/source', 'https://example.org/source'], "research URLs forwarded as structured scope")
         page.locator('[data-view="orders"]').click()
+        check('cached historical snapshots' in page.locator('#view').inner_text(), 'order financial values are explicitly historical')
+        check('Observation time unavailable' in page.locator('#view').inner_text(), 'missing snapshot observation time is explicit')
         page.locator('.table-button').first.click()
         page.get_by_role('button', name='Download private deliverable').wait_for()
         check(page.locator('#dialog-content').inner_text().find('# PRIVATE FIXTURE') >= 0, "authenticated artifact renders as text")
@@ -172,11 +188,28 @@ def main():
         page.wait_for_timeout(600)
         check(page.locator('#dialog-title').inner_text() == TOPIC, 'late order response cannot replace a newer dialog')
         page.locator('#close-dialog').click()
+        # A real deferred HTTP read captures Active before the mutation. The
+        # successful command must await a subsequent read and discard that copy.
+        reads_before = controls['console_requests']
+        controls['hold_next_console'] = True
+        page.locator('#refresh').click()
+        deadline = time.monotonic() + 5
+        while not controls['console_ready'].is_set() and time.monotonic() < deadline:
+            page.wait_for_timeout(10)
+        check(controls['console_ready'].is_set(), 'concurrent refresh reached the deferred HTTP response')
         page.get_by_role('button', name='Pause', exact=True).click()
         page.locator('input[name="evidence"]').fill('Actual operator pause for testing')
         page.get_by_role('button', name='Record and schedule').click()
+        deadline = time.monotonic() + 5
+        while not any(item['path'] == '/api/v1/runtime' for item in requests) and time.monotonic() < deadline:
+            page.wait_for_timeout(10)
+        check(any(item['path'] == '/api/v1/runtime' for item in requests), 'pause command completed while the older read was pending')
+        page.wait_for_timeout(50)
+        check(page.locator('#detail-dialog').is_visible(), 'command waits for a read newer than its mutation')
+        controls['console_release'].set()
         page.locator('#detail-dialog').wait_for(state='hidden')
         check(page.locator('#run-state').inner_text() == 'Paused', "runtime control reflects server state")
+        check(controls['console_requests'] >= reads_before + 2, 'a completed command queues a fresh HTTP read after the older refresh')
         page.locator('[data-view="recovery"]').click()
         page.get_by_role('button', name='Reconcile outcome').click()
         page.locator('input[name="evidence"]').fill('Inspect the persisted provider effect')
@@ -194,12 +227,17 @@ def main():
         # Provider-test is not described as an offline fixture demonstration.
         provider = fixture()
         provider.update(execution_profile='provider-test', uses_fixtures=False)
+        provider['summary'].update(economy_unavailable=True, source='unavailable', receipts_micro_usd=None, earned_micro_usd=None)
         page.route('**/api/v1/console', lambda route: route.fulfill(content_type='application/json', body=json.dumps(provider)))
         page.locator('#operator-token').fill(TOKEN)
         page.get_by_role('button', name='Connect', exact=False).click()
         page.locator('#workspace').wait_for(state='visible')
         check('external calls enabled' in page.locator('#console-mode').inner_text(), 'provider-test explicitly warns about real external actions')
         check('fixture' not in page.locator('#console-mode').inner_text(), 'provider-test is not mislabeled offline')
+        page.locator('[data-view="finances"]').click()
+        check('The current economy is unavailable.' in page.locator('#view').inner_text(), 'economy failure does not present order snapshots as current money')
+        check('Cached payment' in page.locator('thead').inner_text(), 'order payment status is labeled as cached')
+        check('UTC' in page.locator('tbody').inner_text(), 'payment observation timestamp is displayed')
         page.get_by_role('button', name='Lock console').click()
         page.route('**/api/v1/public', lambda route: route.fulfill(status=503, content_type='application/json', body=json.dumps({'error': 'dependency unavailable'})))
         page.goto(url)

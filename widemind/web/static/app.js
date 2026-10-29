@@ -1,7 +1,7 @@
 /* WideMind's UI reads persisted facts and submits explicit operator commands.
    Credentials live only in this module's memory; customer data never becomes HTML. */
 const $ = (selector, parent = document) => parent.querySelector(selector);
-const state = { token: '', epoch: 0, data: null, view: 'overview', pending: new Set(), refreshing: false, dialogEpoch: 0 };
+const state = { token: '', epoch: 0, data: null, view: 'overview', pending: new Set(), refreshing: false, refreshPromise: null, refreshQueued: false, refreshGeneration: 0, dialogEpoch: 0 };
 const labels = { overview: ['The next useful step.', 'A current view of opportunities, commitments, and measured results.'], opportunities: ['Opportunities', 'Assess what is feasible, review scoped offers, and record actual customer acceptance.'], orders: ['Orders & delivery', 'Keep the agreed work, payment, and delivery obligation visible throughout fulfillment.'], finances: ['Money, with context.', 'Cash received is different from earned revenue. Open commitments and measured costs stay visible.'], recovery: ['Activity & recovery', 'Inspect unresolved effects before retrying. An uncertain outcome is not permission to send or spend again.'], settings: ['The operating boundaries.', 'Configure the business goals and capabilities. Accounts and provider secrets stay in the control plane.'] };
 
 function node(tag, attrs = {}, children = []) {
@@ -61,6 +61,7 @@ async function api(path, { method = 'GET', body, authenticated = true } = {}) {
     if (response.status === 401 && authenticated) { lock('The token was not accepted, or this session is no longer authorized.'); throw new Error('STALE_SESSION'); }
     let result;
     try { result = await response.json(); } catch { throw new Error('The server did not return a usable response.'); }
+    if (authenticated && epoch !== state.epoch) throw new Error('STALE_SESSION');
     if (!response.ok) throw new Error(result.error || `The request was not accepted (${response.status}).`);
     return result;
   } catch (error) {
@@ -107,11 +108,13 @@ function publicRequestDialog(offer, contact) {
     event.preventDefault(); replace(result);
     try {
       let scope;
+      if (!form.elements.topic.value.trim()) throw new Error('Enter a topic or job title.');
       if (research) {
         const sections = textLines(form.elements.sections.value), sources = textLines(form.elements.source_urls.value);
         if (!sections.length || sections.length > 8 || new Set(sections).size !== sections.length || sections.some(value => value.length > 100)) throw new Error('Use one to eight unique section headings of up to 100 characters.');
         if (sources.length > 10) throw new Error('Use at most ten source URLs.');
-        for (const value of sources) { const parsed = new URL(value); if (parsed.protocol !== 'https:' || parsed.username || parsed.password || /[\s\x00-\x1f\x7f]/.test(value)) throw new Error('Source URLs must be valid HTTPS addresses without credentials.'); }
+        if (new Set(sources).size !== sources.length) throw new Error('Source URLs must be unique.');
+        for (const value of sources) { const parsed = new URL(value); if (!/^https:\/\//i.test(value) || value.length > 2048 || parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password || /[\s\x00-\x1f\x7f]/.test(value)) throw new Error('Source URLs must be valid HTTPS addresses without credentials, up to 2048 characters.'); }
         const minimum = integerValue(form, 'min_sources', 1); if (minimum > 10) throw new Error('Use at most ten minimum sources.'); if (sources.length && sources.length < minimum) throw new Error('Provide at least the agreed minimum number of source URLs, or leave sources empty for configured research.');
         scope = { topic: form.elements.topic.value.trim(), sections, min_sources: minimum, ...(sources.length ? { source_urls: sources } : {}) };
       } else {
@@ -135,7 +138,7 @@ function renderPublicActivity(target, activities) {
 }
 
 function lock(reason = '') {
-  state.token = ''; state.data = null; state.epoch += 1; state.refreshing = false;
+  state.token = ''; state.data = null; state.epoch += 1; state.refreshing = false; state.refreshPromise = null; state.refreshQueued = false; state.refreshGeneration += 1;
   for (const controller of state.pending) controller.abort();
   state.pending.clear();
   if ($('#detail-dialog').open) $('#detail-dialog').close();
@@ -148,26 +151,40 @@ function lock(reason = '') {
   $('#operator-token').value = ''; $('#login-error').textContent = reason; $('#login-error').hidden = !reason;
   $('#operator-token').focus();
 }
-async function refresh({ focus = false } = {}) {
-  if (state.refreshing || !state.token) return;
+function refresh({ focus = false, afterMutation = false } = {}) {
+  if (!state.token) return Promise.resolve();
+  if (afterMutation) state.refreshGeneration += 1;
+  state.refreshQueued = true;
+  if (state.refreshing) return state.refreshPromise;
+  state.refreshPromise = readConsole(focus);
+  return state.refreshPromise;
+}
+async function readConsole(focus) {
   state.refreshing = true; const epoch = state.epoch;
   $('#refresh').disabled = true;
   try {
-    const data = await api('/api/v1/console');
-    if (epoch !== state.epoch) return;
-    state.data = data;
-    $('#login').hidden = true; $('#workspace').hidden = false;
-    for (const id of ['refresh', 'sign-out', 'run-state']) $(`#${id}`).hidden = false;
-    $('#run-state').textContent = human(data.runtime_state); $('#run-state').dataset.state = data.runtime_state || 'unavailable';
-    $('#run-label').textContent = `Run ${data.run_id || 'unavailable'}`;
-    modeBanner($('#console-mode'), data.mode, data.execution_profile, data.uses_fixtures);
-    $('#updated-at').textContent = `Refreshed ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC' }).format(new Date())} UTC`;
-    renderRuntime(); renderView(focus);
+    do {
+      state.refreshQueued = false;
+      const generation = state.refreshGeneration;
+      const data = await api('/api/v1/console');
+      if (epoch !== state.epoch) return;
+      // A command completed after this read began. Its caller must await a newer
+      // read, and the older snapshot must not replace the current controls.
+      if (generation !== state.refreshGeneration) { state.refreshQueued = true; continue; }
+      state.data = data;
+      $('#login').hidden = true; $('#workspace').hidden = false;
+      for (const id of ['refresh', 'sign-out', 'run-state']) $(`#${id}`).hidden = false;
+      $('#run-state').textContent = human(data.runtime_state); $('#run-state').dataset.state = data.runtime_state || 'unavailable';
+      $('#run-label').textContent = `Run ${data.run_id || 'unavailable'}`;
+      modeBanner($('#console-mode'), data.mode, data.execution_profile, data.uses_fixtures);
+      $('#updated-at').textContent = `Refreshed ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'UTC' }).format(new Date())} UTC`;
+      renderRuntime(); renderView(focus);
+    } while (state.refreshQueued && state.token && epoch === state.epoch);
   } catch (error) {
     if (error.message === 'STALE_SESSION') return;
     if (!state.data) { state.token = ''; $('#login-error').textContent = error.message; $('#login-error').hidden = false; }
     else message(`Refresh failed. Displayed records may be stale. ${error.message}`, 'error');
-  } finally { if (epoch === state.epoch) { state.refreshing = false; $('#refresh').disabled = false; } }
+  } finally { if (epoch === state.epoch) { state.refreshing = false; state.refreshPromise = null; $('#refresh').disabled = false; } }
 }
 function renderRuntime() {
   const target = $('#runtime-actions');
@@ -225,13 +242,19 @@ function opportunitiesView(view) {
 }
 function ordersView(view) {
   const records = list(state.data.orders); view.append(heading(...labels.orders));
+  view.append(paymentSnapshotNotice());
   const results = node('div');
   const filters = filterBar('Search orders or customers', [...new Set(records.map(item => item.status))].sort(), (query, status, count) => {
     const filtered = records.filter(item => (!status || item.status === status) && `${subject(item)} ${customer(item.customer_id)} ${item.id}`.toLowerCase().includes(query));
     count.textContent = `${filtered.length} ${filtered.length === 1 ? 'order' : 'orders'}`;
-    replace(results, filtered.length ? table(['Order', 'Stage', 'Cash received', 'Earned', 'Delivery due'], filtered.map(item => { const payment = parse(item.payment); return node('tr', {}, [td(recordLink(subject(item), `${customer(item.customer_id)} · ${short(item.id)}`, () => orderDialog(item.id))), td(pill(item.status)), td(money(payment.receipts_micro_usd), 'money'), td(money(payment.earned_micro_usd), 'money'), td(when(item.delivery_due_at))]); })) : empty('No orders match this view. Accepted scoped offers become orders.'));
+    replace(results, filtered.length ? table(['Order', 'Stage', 'Cached cash received', 'Cached earned', 'Payment observed', 'Delivery due'], filtered.map(item => { const payment = parse(item.payment); return node('tr', {}, [td(recordLink(subject(item), `${customer(item.customer_id)} · ${short(item.id)}`, () => orderDialog(item.id))), td(pill(item.status)), td(money(payment.receipts_micro_usd), 'money'), td(money(payment.earned_micro_usd), 'money'), td(paymentObserved(item)), td(when(item.delivery_due_at))]); })) : empty('No orders match this view. Accepted scoped offers become orders.'));
   });
   view.append(filters.element, results); filters.update();
+}
+function paymentObserved(order) { return order.payment_observed_at == null ? 'Observation time unavailable' : when(order.payment_observed_at); }
+function paymentSnapshotNotice() {
+  const unavailable = state.data.summary?.economy_unavailable || state.data.summary?.source === 'unavailable';
+  return node('p', { class: 'notice financial-note', text: `${unavailable ? 'The current economy is unavailable. ' : ''}Order payment amounts and statuses are cached historical snapshots last observed by the worker. They may differ from current payment status, receipts, refunds, or earnings.` });
 }
 function financesView(view) {
   const summary = state.data.summary || {}, orders = list(state.data.orders);
@@ -239,8 +262,8 @@ function financesView(view) {
   view.append(node('div', { class: 'metric-grid' }, [metric('Cash received', money(summary.receipts_micro_usd), 'Verified settlement, not a delivery claim'), metric('Earned revenue', money(summary.earned_micro_usd), 'Recognized by the economy after fulfillment'), metric('Operating charges', money(summary.operating_cost_micro_usd), 'Actual or explicitly provisional costs'), metric('Spendable credit', money(summary.spendable_micro_usd), 'After spending reservations and holds')]));
   const details = [['Opening credit', summary.opening_micro_usd], ['Owner funding', summary.owner_funding_micro_usd], ['Refunds / chargebacks', summary.refunds_micro_usd], ['Processor fees', summary.fees_micro_usd], ['Reserved spending', summary.reserved_micro_usd], ['Customer / refund holds', summary.holds_micro_usd], ['Subsidies', summary.subsidies_micro_usd]];
   view.append(node('div', { class: 'split-grid' }, [panel('Funding and exposure', 'USD · exact micro-USD records', node('div', { class: 'panel-body' }, [facts(details.map(([name, value]) => [name, money(value)]))])), panel('Delivery obligations', `${orders.filter(item => item.delivery_obligation_open).length} open`, node('div', { class: 'panel-body' }, [node('p', { class: 'financial-note', text: 'Receipts for unfinished work may be held or refundable. Cancelling an order does not issue a refund or erase the original costs.' }), node('p', { class: 'financial-note', text: 'Unavailable values are not zero. The economy defines the operating-cost boundary and remains authoritative for every amount.' })]))]));
-  const rows = orders.map(order => { const payment = parse(order.payment); return node('tr', {}, [td(recordLink(subject(order), short(order.id), () => orderDialog(order.id))), td(pill(payment.status || 'unavailable')), td(money(payment.receipts_micro_usd), 'money'), td(money(payment.refunds_micro_usd), 'money'), td(money(payment.earned_micro_usd), 'money'), td(order.delivery_obligation_open ? 'Open commitment' : 'No open delivery obligation')]); });
-  view.append(node('h2', { class: 'subheading', text: 'Order-level records' }), rows.length ? table(['Order', 'Payment', 'Receipts', 'Refunds', 'Earned', 'Obligation'], rows) : empty('No order-level financial records yet.'));
+  const rows = orders.map(order => { const payment = parse(order.payment); return node('tr', {}, [td(recordLink(subject(order), short(order.id), () => orderDialog(order.id))), td(pill(payment.status || 'unavailable')), td(money(payment.receipts_micro_usd), 'money'), td(money(payment.refunds_micro_usd), 'money'), td(money(payment.earned_micro_usd), 'money'), td(paymentObserved(order)), td(order.delivery_obligation_open ? 'Open commitment' : 'No open delivery obligation')]); });
+  view.append(node('h2', { class: 'subheading', text: 'Order-level records' }), paymentSnapshotNotice(), rows.length ? table(['Order', 'Cached payment', 'Cached receipts', 'Cached refunds', 'Cached earned', 'Payment observed', 'Obligation'], rows) : empty('No order-level financial records yet.'));
 }
 function recoveryView(view) {
   view.append(heading(...labels.recovery));
@@ -305,7 +328,7 @@ async function formAction(form, action) {
   catch (error) { if (error.message !== 'STALE_SESSION' && epoch === state.epoch) form.append(dialogNotice(error.message, 'error')); }
   finally { if (epoch === state.epoch) submits.forEach(item => { item.disabled = false; }); }
 }
-async function mutate(path, payload) { const result = await api(path, { method: 'POST', body: payload }); await refresh(); return result; }
+async function mutate(path, payload) { const epoch = state.epoch; const result = await api(path, { method: 'POST', body: payload }); await refresh({ afterMutation: true }); if (epoch !== state.epoch) throw new Error('STALE_SESSION'); return result; }
 function opportunityDialog() {
   const content = openDialog('Add a real opportunity', 'Request intake');
   const form = node('form'), services = Object.keys(state.data.policy?.prices || {});
@@ -351,7 +374,7 @@ async function orderDialog(id) {
     if (epoch !== state.epoch || dialogEpoch !== state.dialogEpoch || !$('#detail-dialog').open) return;
     $('#dialog-title').textContent = subject(order);
     const scope = parse(order.scope), payment = parse(order.payment), artifact = parse(order.artifact, null);
-    replace(content, facts([['Order', order.id], ['Customer', customer(order.customer_id)], ['Status', pill(order.status)], ['Delivery due', when(order.delivery_due_at)], ['Open delivery obligation', order.delivery_obligation_open ? 'Yes' : 'No'], ['Cash received', money(payment.receipts_micro_usd)], ['Refunded', money(payment.refunds_micro_usd)], ['Earned revenue', money(payment.earned_micro_usd)], ['Payment', pill(payment.status || 'unavailable')], ['Delivery reference', order.delivery_reference || 'Not confirmed']]));
+    replace(content, paymentSnapshotNotice(), facts([['Order', order.id], ['Customer', customer(order.customer_id)], ['Status', pill(order.status)], ['Delivery due', when(order.delivery_due_at)], ['Open delivery obligation', order.delivery_obligation_open ? 'Yes' : 'No'], ['Cached cash received', money(payment.receipts_micro_usd)], ['Cached refunded', money(payment.refunds_micro_usd)], ['Cached earned revenue', money(payment.earned_micro_usd)], ['Cached payment status', pill(payment.status || 'unavailable')], ['Payment snapshot observed', paymentObserved(order)], ['Delivery reference', order.delivery_reference || 'Not confirmed']]));
     content.append(node('h3', { class: 'subheading', text: 'Agreed scope' }), code(scope));
     const actions = node('div', { class: 'form-actions' });
     if (!['completed', 'cancelled', 'failed'].includes(order.status)) actions.append(button('Schedule a wakeup', () => evidenceDialog('Schedule an order wakeup', 'This queues an event. The worker still checks runtime state, payment, capabilities, and budget before taking an action.', async evidence => { await sendEvent('advance', order.id, evidence); }), 'small'));
