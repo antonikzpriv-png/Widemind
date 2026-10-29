@@ -12,6 +12,8 @@ import type {
 } from "../contracts/index.ts";
 import { migrate } from "../db/migrate.ts";
 export interface ModuleContext {
+  /** Private construction input; never part of RuntimeConfig or public projections. */
+  env?: NodeJS.ProcessEnv;
   db: DatabaseSync;
   config: RuntimeConfig;
 }

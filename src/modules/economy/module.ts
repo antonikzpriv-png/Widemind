@@ -5,9 +5,10 @@ import type { ModuleContext, ModuleDefinition } from "../registry.ts";
 import { EconomyClient, bridgeSettings } from "./client.ts";
 
 export function createEconomyModule(
-  { db, config }: ModuleContext,
-  env: NodeJS.ProcessEnv = process.env,
+  context: ModuleContext,
+  env: NodeJS.ProcessEnv = context.env ?? process.env,
 ): ReturnType<ModuleDefinition["create"]> {
+  const { db, config } = context;
   const settings = bridgeSettings(env);
   if (!settings) return {};
   if (config.profile !== "foundation")

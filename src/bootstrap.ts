@@ -10,7 +10,10 @@ export async function bootstrap(env: NodeJS.ProcessEnv = process.env) {
       config,
       secrets,
       db,
-      services: registerModules({ db, config }, await discoverModules(config)),
+      services: registerModules(
+        { db, config, env },
+        await discoverModules(config),
+      ),
     };
   } catch (error) {
     db.close();

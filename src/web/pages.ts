@@ -9,13 +9,25 @@ export const escape = (value: unknown) =>
         char
       ]!,
   );
+/** Exact USD display; sub-cent charges remain visible without floating-point rounding. */
+export function displayUsd(micros: string): string {
+  if (!/^(0|-?[1-9][0-9]*)$/.test(micros) || micros.length > 129)
+    throw new Error("Invalid financial display value");
+  const value = BigInt(micros),
+    absolute = value < 0n ? -value : value;
+  let fraction = (absolute % 1000000n).toString().padStart(6, "0");
+  fraction = fraction.endsWith("0000")
+    ? fraction.slice(0, 2)
+    : fraction.replace(/0+$/, "");
+  return `${value < 0n ? "-" : ""}$${absolute / 1000000n}.${fraction}`;
+}
 function layout(title: string, body: string) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · WideMind</title><link rel="stylesheet" href="/style.css"></head><body><header><a href="/" class="brand">W<span>•</span> WideMind</a><nav aria-label="Primary"><a href="/">Headquarters</a><a href="/operator">Operator</a></nav></header><main>${body}</main><footer>Persistent agent runtime · Times shown in UTC · Foundation v0.1</footer></body></html>`;
 }
 export function publicPage(data: PublicWebsiteData) {
   return layout(
     "Headquarters",
-    `<p class="eyebrow">AN OPEN-ENDED BUSINESS EXPERIMENT</p><h1>A small beginning.<br>A durable mind.</h1><p class="lead">WideMind’s intended starting operating credit is $5. It will choose useful work, deliver it, and use verified earnings to continue.</p><section class="notice"><h2>Foundation is running</h2><p>The background worker runs separately from this website. Live business, payment and account adapters are not included in this foundation.</p></section><div class="grid"><section><h2>Operating funds</h2><strong>${data.financial ? `${escape(data.financial.spendableMicros)} micro-USD spendable` : "Unverified / unavailable"}</strong><p>${data.financial ? `Accounting mode: ${escape(data.financial.mode)}. As of ${escape(data.financial.asOf)}.` : "No opening grant, customer payment, or balance is assumed."}</p></section><section><h2>Current runs</h2>${data.runs.length ? data.runs.map((run) => `<article><span class="pill">${escape(run.state)}</span> <span>${escape(run.profile)}</span><p><code>${escape(run.runId)}</code></p><p>Updated ${escape(run.updatedAt)}</p>${run.nextWakeAt ? `<p>Scheduled wake ${escape(run.nextWakeAt)}</p>` : ""}</article>`).join("") : "<p>No runs have been created.</p>"}</section></div><section><h2>Available offerings</h2>${data.offerings.length ? data.offerings.map((item) => `<article><h3>${escape(item.title)}</h3><p>${escape(item.description)}</p></article>`).join("") : "<p>Unavailable until a business module and delivery/payment capabilities are configured.</p>"}</section><section><h2>Selected public activity</h2>${data.activity.length ? data.activity.map((item) => `<p><time>${escape(item.at)}</time> ${escape(item.text)}</p>`).join("") : "<p>No curated public activity yet. Private action logs are never used as a public feed.</p>"}</section>`,
+    `<p class="eyebrow">AN OPEN-ENDED BUSINESS EXPERIMENT</p><h1>A small beginning.<br>A durable mind.</h1><p class="lead">WideMind’s intended starting operating credit is $5. It will choose useful work, deliver it, and use verified earnings to continue.</p><section class="notice"><h2>Foundation is running</h2><p>The background worker runs separately from this website. Operating funds come from verified accounting records. Sandbox totals represent test funds; live payment acceptance requires a configured business account.</p></section><div class="grid"><section><h2>Operating funds</h2><strong>${data.financial ? `${escape(displayUsd(data.financial.spendableMicros))} spendable` : "Unverified / unavailable"}</strong><p>${data.financial ? `Accounting mode: ${escape(data.financial.mode)}. As of ${escape(data.financial.asOf)}.` : "No opening grant, customer payment, or balance is assumed."}</p></section><section><h2>Current runs</h2>${data.runs.length ? data.runs.map((run) => `<article><span class="pill">${escape(run.state)}</span> <span>${escape(run.profile)}</span><p><code>${escape(run.runId)}</code></p><p>Updated ${escape(run.updatedAt)}</p>${run.nextWakeAt ? `<p>Scheduled wake ${escape(run.nextWakeAt)}</p>` : ""}</article>`).join("") : "<p>No runs have been created.</p>"}</section></div><section><h2>Available offerings</h2>${data.offerings.length ? data.offerings.map((item) => `<article><h3>${escape(item.title)}</h3><p>${escape(item.description)}</p></article>`).join("") : "<p>Unavailable until a business module and delivery/payment capabilities are configured.</p>"}</section><section><h2>Selected public activity</h2>${data.activity.length ? data.activity.map((item) => `<p><time>${escape(item.at)}</time> ${escape(item.text)}</p>`).join("") : "<p>No curated public activity yet. Private action logs are never used as a public feed.</p>"}</section>`,
   );
 }
 export function loginPage(configured: boolean, message = "") {
