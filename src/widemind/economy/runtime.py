@@ -361,9 +361,19 @@ class RuntimeBridge:
                 # Provider event IDs identify observations; a later final observation
                 # can legitimately use a different ID. The native charge identity is
                 # stable for the attempt so provisional-to-final posting is a delta.
-                self.service._settle(db, binding['reservation_id'], int(usage.actualCharge.micros), usage.provider,
-                                     usage.accountRef, 'rt:' + binding['reservation_id'], usage=details,
-                                     outcome='unknown' if usage.provisional else receipt.status)
+                native = db.execute('SELECT * FROM charges WHERE reservation_id=?', (binding['reservation_id'],)).fetchone()
+                if (native and not usage.provisional and native['amount_micro_usd'] == int(usage.actualCharge.micros)
+                        and native['outcome'] == receipt.status):
+                    # New provider observations of the same final economic charge
+                    # remain auditable without posting the already settled cost again.
+                    self.service._event(db, binding['run_id'], 'economy.runtime_receipt_observed',
+                                        {'reservation_id': binding['reservation_id'], 'external_event_id': usage.externalEventId,
+                                         'actual_micro_usd': int(usage.actualCharge.micros), 'outcome': receipt.status,
+                                         'usage': details})
+                else:
+                    self.service._settle(db, binding['reservation_id'], int(usage.actualCharge.micros), usage.provider,
+                                         usage.accountRef, 'rt:' + binding['reservation_id'], usage=details,
+                                         outcome='unknown' if usage.provisional else receipt.status)
                 db.execute('INSERT INTO runtime_receipts VALUES(?,?,?,?,?,?,?,?)',
                            (binding['provider'], binding['account'], binding['mode'], usage.externalEventId,
                             binding['reservation_id'], event_fingerprint, encode(result), now()))

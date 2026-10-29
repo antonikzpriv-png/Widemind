@@ -396,3 +396,33 @@ def test_retire_all_profiles_keeps_persistent_key_and_reconciles_old_liability(s
         assert response.status_code == 200 and response.json() == {'kind': 'settled'}
     assert service.balance('run')['posted_micro_usd'] == -1000000
     assert service.balance('run')['reserved_micro_usd'] == 0
+
+
+def test_fresh_final_observation_preserves_evidence_without_reposting_charge(setup):
+    settings, service, client = setup
+    seed(setup)
+    reservation = post(setup, 'authorize', request())['reservation']
+    first = receipt(reservation, cost='100000', event='final-observation-1')
+    assert post(setup, 'settle', {'reservation': reservation, 'receipt': first}) == {'kind': 'settled'}
+    balance = service.balance('run')
+    entries = service.ledger('run')
+    second = receipt(reservation, cost='100000', event='final-observation-2')
+    second['usage']['evidenceRef'] = 'fresh-authoritative-provider-evidence'
+    second['usage']['nativeAmount'] = {'currency': 'USD', 'minorUnits': '10', 'conversionRef': 'identity-USD', 'rounding': 'exact'}
+    assert post(setup, 'settle', {'reservation': reservation, 'receipt': second}) == {'kind': 'settled'}
+    assert post(setup, 'settle', {'reservation': reservation, 'receipt': second}) == {'kind': 'settled'}
+    assert service.balance('run') == balance
+    assert service.ledger('run') == entries
+    observed = [event for event in service.events('run') if event['type'] == 'economy.runtime_receipt_observed']
+    assert len(observed) == 1
+    assert observed[0]['data']['external_event_id'] == 'final-observation-2'
+    assert observed[0]['data']['usage']['evidenceRef'] == second['usage']['evidenceRef']
+    assert observed[0]['data']['usage']['nativeAmount'] == second['usage']['nativeAmount']
+    with service._read() as db:
+        assert db.execute('SELECT COUNT(*) FROM runtime_receipts').fetchone()[0] == 2
+    for changed in (receipt(reservation, cost='100001', event='conflicting-cost'),
+                    receipt(reservation, cost='100000', event='conflicting-outcome', failed=True),
+                    receipt(reservation, cost='100000', event='late-new-provisional', provisional=True)):
+        assert post(setup, 'settle', {'reservation': reservation, 'receipt': changed})['kind'] == 'unavailable'
+    assert service.balance('run') == balance
+    assert service.reservation(reservation['reservationId'])['state'] == 'settled'
