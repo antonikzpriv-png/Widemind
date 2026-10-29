@@ -666,6 +666,67 @@ class ConversationScenarios(unittest.TestCase):
         self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM quotes')['n'], 2)
         self.assertEqual(self.store.one('SELECT * FROM quotes WHERE id=?', (legacy['id'],)), legacy)
 
+    def test_initial_questions_answer_policy_facts_without_inventing_a_quote(self):
+        cases = [
+            ('How much do you charge for a simple SVG graphic?', 'svg-graphic', 'USD 2.00'),
+            ('How long would an SVG graphic take?', 'svg-graphic', '24 hours'),
+            ('Do you make SVG graphics?', 'svg-graphic', 'simple SVG graphic'),
+            ('How many revisions would an SVG include?', 'svg-graphic', '0 revisions'),
+            ('Does that include hosting?', 'software-starter', 'excludes hosting'),
+        ]
+        for index, (body, service, expected) in enumerate(cases):
+            with self.subTest(body=body):
+                cid = self.send(body, interpretation('question', service), thread=f'portal:prequote-{index}')
+                view = self.business.conversation_view(cid)
+                reply = view['messages'][-1]['body']
+                self.assertEqual(view['status'], 'collecting')
+                self.assertIsNone(view['currentQuote'])
+                self.assertIn(expected, reply)
+                self.assertIn('not a quote or commitment', reply)
+                self.assertIn('To prepare an exact quote', reply)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM orders')['n'], 0)
+        self.assertEqual(self.store.one('SELECT COUNT(*) AS n FROM quotes')['n'], 0)
+        self.assertEqual(self.economy.money_mutations, [])
+
+    def test_initial_capability_question_lists_only_enabled_services(self):
+        self.business.configure(replace(self.policy, capabilities=('graphics',)))
+        cid = self.send('What kinds of work do you offer?', interpretation('question'))
+        reply = self.business.conversation_view(cid)['messages'][-1]['body']
+        self.assertIn('simple SVG graphic', reply)
+        self.assertNotIn('software starter', reply)
+        self.assertNotIn('research brief', reply)
+        self.assertIsNone(self.business.conversation_view(cid)['currentQuote'])
+
+    def test_clear_natural_opt_outs_are_immediate_while_paused_and_model_unavailable(self):
+        self.runtime.current = 'paused'
+        self.tools.model_available = False
+        bodies = ['I want to opt out.', 'No more emails, please.',
+                  'Please do not send me any more emails.', 'Please opt me out.',
+                  'I would like to opt-out.', "I'm opting out.", 'Take me off your mailing list.']
+        for index, body in enumerate(bodies):
+            with self.subTest(body=body):
+                email = f'controlled-optout-{index}@example.invalid'
+                cid = self.send(body, thread=f'portal:clear-optout-{index}', email=email, process=False)
+                view = self.business.conversation_view(cid)
+                self.assertEqual(view['status'], 'opted_out')
+                self.assertEqual(view['messages'][-1]['status'], 'opted_out')
+                self.assertEqual(self.store.one('SELECT opted_out FROM customers WHERE email=?', (email,))['opted_out'], 1)
+        self.assertEqual(self.model_calls(), [])
+        self.assertEqual(self.economy.calls, [])
+        self.assertEqual(self.store.all("SELECT * FROM conversation_messages WHERE direction='outbound'"), [])
+
+    def test_opt_out_questions_negation_and_quoted_history_do_not_assume_consent(self):
+        self.runtime.current = 'paused'
+        bodies = ['How do I opt out?', 'I do not want to opt out.',
+                  'I still want updates.\n> I want to opt out.',
+                  'I still want updates.\nOn Thursday the customer wrote:\nNo more emails, please.']
+        for index, body in enumerate(bodies):
+            with self.subTest(body=body):
+                email = f'controlled-keep-{index}@example.invalid'
+                cid = self.send(body, thread=f'portal:keep-optin-{index}', email=email, process=False)
+                self.assertNotEqual(self.business.conversation_view(cid)['status'], 'opted_out')
+                self.assertEqual(self.store.one('SELECT opted_out FROM customers WHERE email=?', (email,))['opted_out'], 0)
+
     def test_already_accepted_structured_order_stays_frozen_in_ordinary_conversation(self):
         op, legacy = self._legacy_structured_quote()
         order_id = self.business.accept(legacy['id'], customer_email=CUSTOMER,

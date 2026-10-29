@@ -22,7 +22,8 @@ def opted_out(body):
     # Suppress contact immediately, even when no model or operating credit exists.
     newest = re.split(r'(?im)^\s*>|^On .{0,300}wrote:\s*$', body, maxsplit=1)[0]
     return bool(re.search(r"(?i)\b(unsubscribe|stop (?:emailing|contacting|messaging)(?: me)?|do not (?:email|contact|message) me|don't (?:email|contact|message) me|remove me from (?:your|the) list)\b", newest)
-                or re.fullmatch(r'(?i)\s*(?:please\s+)?stop[.!\s]*', newest))
+                or re.fullmatch(r'(?i)\s*(?:please\s+)?(?:stop|opt(?:\s+me)?[\s-]?out)[.!\s]*', newest)
+                or re.search(r"(?i)\b(?:i(?:\s+(?:want|wish)|(?:'d|\s+would)\s+like)\s+to\s+opt[\s-]?out|i(?:\s+am|'m)\s+opting[\s-]out|no more (?:e-?mails?|messages?|updates?)|(?:do not|don't|stop)\s+(?:send|sending)\s+(?:me\s+)?(?:(?:any\s+)?more\s+)?(?:e-?mails?|messages?|updates?)|take me off (?:your|the|this) (?:mailing )?list)\b", newest))
 
 
 class ProposalUnavailable(ValueError):
@@ -308,6 +309,40 @@ class Conversations:
             return ['What title and description should the '+('SVG graphic' if service == 'svg-graphic' else 'static HTML starter')+' use?']
         return ['Would you like a sourced research brief, a simple SVG graphic, or a static HTML software starter? What should it accomplish?']
 
+    def _prequote_answer(self, body, service, scope):
+        """Answer initial sales questions from policy without inventing a quote."""
+        p = self.b.policy
+        names = {'research-brief': 'a sourced research brief', 'svg-graphic': 'a simple SVG graphic',
+                 'software-starter': 'a static HTML software starter'}
+        enabled = [item.name for item in self.b.services.values()
+                   if item.capability in p.capabilities and item.name in p.prices]
+        selected = [service] if service in enabled else enabled
+        question = body.casefold()
+        if not selected:
+            answer = 'No service is currently enabled for a new quote.'
+        elif re.search(r'\b(price|cost|much|charge|budget|rates?)\b', question):
+            prices = []
+            for name in selected:
+                amount = p.prices[name]
+                prices.append(f"{names.get(name, name)}: USD {amount//1000000}.{amount%1000000//10000:02d}")
+            answer = 'Our configured standard prices are '+ '; '.join(prices)+'.'
+        elif re.search(r'\b(when|turnaround|deadline|time|days?|hours?|long)\b', question):
+            seconds = p.turnaround_seconds
+            turnaround = f'{seconds//3600} hours' if seconds % 3600 == 0 else f'{seconds//60} minutes' if seconds % 60 == 0 else f'{seconds} seconds'
+            answer = f'The configured standard turnaround is {turnaround} after verified funding and operating authorization.'
+        elif re.search(r'\b(revisions?|changes?|edits?)\b', question):
+            answer = f'The standard proposal allowance is {p.conversation_revision_allowance} revisions; the exact allowance will be stated in your quote.'
+        elif re.search(r'\b(exclusions?|hosting|deploy|accounts?|subscriptions?)\b', question):
+            answer = 'Standard work excludes hosting, deployment, subscriptions and access to third-party accounts.'
+        else:
+            answer = 'The configured service types are '+ '; '.join(names.get(name, name) for name in selected)+'.'
+        answer += ' This is indicative information, not a quote or commitment; exact scope, tool availability, capacity and verified funding still need confirmation.'
+        if service in enabled:
+            answer += ' To prepare an exact quote, '+ ' '.join(self._questions(service, scope))
+        elif enabled:
+            answer += ' Which of these supported options should we scope, and what should it accomplish?'
+        return answer
+
     @staticmethod
     def _answer_question(body, proposal):
         question = body.casefold()
@@ -434,7 +469,8 @@ class Conversations:
                     self._set_status(thread['id'], 'collecting')
                     if intent in {'change','request','clarify'}:
                         self.s.db.execute("UPDATE conversation_proposals SET status='superseded' WHERE conversation_id=? AND status='offered'", (thread['id'],))
-                    response = 'Thanks — before I can quote this, '+ ' '.join(self._questions(service, scope))+' I will confirm a price and exact scope before any commitment.'
+                    response = (self._prequote_answer(msg['body'], service, scope) if intent == 'question' else
+                                'Thanks — before I can quote this, '+ ' '.join(self._questions(service, scope))+' I will confirm a price and exact scope before any commitment.')
             self.s.db.execute("UPDATE conversation_messages SET status='applied',interpretation=? WHERE id=?", (encode(action), msg['id']))
             self._prepare(thread, msg['id'], response)
 
