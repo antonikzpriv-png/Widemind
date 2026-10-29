@@ -14,7 +14,10 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The foundation currently contains documentation only. Do not invent existing scripts, passing tests, deployment URLs, integrations, or completed milestones.
+The original foundation was documentation only. The current tools slice is
+described in docs/TOOLS-SETUP.md and docs/CAPABILITIES.md. Do not infer live
+provider verification, a deployed worker, payments, or completed business
+milestones from fixture tests.
 
 ## Working approach
 
@@ -57,7 +60,10 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-There are no established build or test commands yet. When scaffolding the application, add real commands and document how to run them.
+Install `python -m pip install -e '.[test,graphics,browser]'`, then run
+`python -m pytest -q`. Read docs/TOOLS-SETUP.md for optional sandbox checks and
+external dependencies. Never enable live mail or production publishing merely
+to run tests.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.

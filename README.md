@@ -8,7 +8,15 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
-This repository contains the project foundation and implementation plan. The runtime, website, Gmail integration, tools, and payments are **planned, not implemented**.
+This repository now includes a runnable Python tools gateway: budget reservations,
+durable action receipts, private secret storage, workspace deliverables, and
+configurable provider adapters. Start with [setup](docs/TOOLS-SETUP.md) and the
+[capability/status table](docs/CAPABILITIES.md). Provider access requires owner
+configuration; fixture verification does not imply live account verification.
+
+The autonomous business scheduler, website, payment settlement, and public
+activity projection remain planned. The tools runtime does not claim revenue or
+an autonomous survival result.
 
 Start with [AGENTS.md](AGENTS.md) for developer instructions and [the roadmap](docs/ROADMAP.md) for implementation milestones.
 
@@ -57,7 +65,11 @@ Public activity uses a deliberately selected projection of events. Customer conv
 
 ## Start building
 
-Choose and document a small, maintainable stack, then implement the first runnable milestone. No dependency manifest, build command, or deployment configuration has been established yet.
+Python 3.11+ on Linux, SQLite, and an owner-controlled CLI form the tools slice.
+Install with `python -m pip install -e '.[test,graphics,browser]'` and run
+`python -m pytest -q`. Browser automation additionally requires a working
+sandboxed Chromium installation; generated Python runs require Docker and an
+owner-approved pinned image. See [setup](docs/TOOLS-SETUP.md).
 
 The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
 
@@ -65,4 +77,7 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-Application stack, hosting, domain/path, model provider, Gmail account, payment processor, and graphics/publishing providers have not been configured. Record these choices during implementation without inventing working credentials or integrations.
+Hosting, domain/path, dedicated provider accounts, live tariffs, payment
+processor, and publishing destination still need owner configuration. No live
+credentials, email sends, paid generation, or production publication were used
+to build this tools slice.

@@ -6,7 +6,11 @@ Each survival run starts with $5 of operating credit. Real earnings replenish it
 
 The accounting system enforces this independently of the agent. Generated invoices, promised payments, and agent statements cannot create credit.
 
-The rules below are a proposed implementation contract. No ledger or payment integration exists yet.
+The tools slice implements integer USD reservations, owner opening grants,
+append-only operating charges, and uncertain-liability recovery in
+`src/widemind/control.py`. Payment integration, customer/refund holds, external
+invoice reconciliation, and the broader business lifecycle below remain
+requirements. The ledger is not evidence of customer revenue or paid survival.
 
 ## Units
 

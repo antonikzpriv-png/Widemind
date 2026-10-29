@@ -1,5 +1,6 @@
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -53,3 +54,27 @@ def test_secret_encryption_durable_update_private_permissions(tmp_path):
     assert (store.root/"secrets.key").stat().st_mode & 0o777 == 0o600
     with pytest.raises(ToolError):
         store.get("../arbitrary")
+
+
+def test_concurrent_secret_initialization_and_updates_do_not_lose_key_or_values(tmp_path):
+    root = tmp_path/"private"
+    def create(i):
+        store = SecretStore(root)
+        store.set("fixture-"+str(i),str(i))
+        return store
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(create,range(24)))
+    store = SecretStore(root)
+    assert [store.get("fixture-"+str(i)) for i in range(24)] == [str(i) for i in range(24)]
+
+
+def test_secret_size_failure_preserves_existing_store(tmp_path):
+    store = SecretStore(tmp_path/"private")
+    for i in range(5):
+        store.set("large-"+str(i),"x"*2_000_000)
+    before = (store.root/"secrets.enc").read_bytes()
+    with pytest.raises(ToolError,match="exceed"):
+        store.set("too-large","y"*2_000_000)
+    assert (store.root/"secrets.enc").read_bytes() == before
+    assert store.get("large-0") == "x"*2_000_000
+    assert store.get("too-large") is None

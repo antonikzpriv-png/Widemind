@@ -1,0 +1,31 @@
+{
+  "control_dir": "/srv/widemind/private/control",
+  "workspace_dir": "/srv/widemind/workspace",
+  "workspace_limits": {
+    "max_file_bytes": 8000000,
+    "max_total_bytes": 64000000,
+    "max_files": 1000,
+    "max_depth": 16
+  },
+  "policy": {
+    "profile": "development",
+    "allow_external_effects": false,
+    "allowed_email_recipients": [],
+    "allow_any_email_recipient": false,
+    "network": {
+      "trusted_fixture_origins": [],
+      "public_proxy_guarded": false
+    }
+  },
+  "tools": {
+    "files": {"enabled": true},
+    "graphics": {"enabled": true},
+    "ai.generate": {"enabled": false},
+    "image.generate": {"enabled": false},
+    "research.fetch": {"enabled": false},
+    "browser.read": {"enabled": false},
+    "gmail": {"enabled": false},
+    "code.execute": {"enabled": false},
+    "publish.artifact": {"enabled": false}
+  }
+}

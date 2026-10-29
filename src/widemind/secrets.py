@@ -6,6 +6,8 @@ import json
 import os
 import re
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -18,17 +20,41 @@ class SecretStore:
     def __init__(self, directory: str | Path):
         self.root = private_directory(Path(directory))
         self._key = self.root / "secrets.key"
-        try:
-            fd = os.open(self._key, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        except FileExistsError:
-            pass
-        else:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(Fernet.generate_key())
-                stream.flush()
-                os.fsync(stream.fileno())
-        self._check(self._key)
-        self._cipher = Fernet(self._key.read_bytes())
+        with self._lock():
+            if not self._key.exists():
+                fd, tmp = tempfile.mkstemp(dir=self.root,prefix=".key-")
+                try:
+                    with os.fdopen(fd,"wb") as stream:
+                        stream.write(Fernet.generate_key())
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    os.link(tmp,self._key,follow_symlinks=False)
+                    directory = os.open(self.root,os.O_RDONLY|os.O_DIRECTORY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+                finally:
+                    os.unlink(tmp)
+            self._check(self._key)
+            if self._key.stat().st_size != 44:
+                raise ToolError("configuration", "Secret encryption key is malformed; restore the private owner backup.")
+            self._cipher = Fernet(self._key.read_bytes())
+
+    @contextmanager
+    def _lock(self):
+        fd = os.open(self.root / "secrets.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd,"r+b") as lock:
+            end = time.monotonic()+5
+            while True:
+                try:
+                    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= end:
+                        raise ToolError("busy", "Secret store is busy; retry this administrative operation later.") from None
+                    time.sleep(.02)
+            yield
 
     @staticmethod
     def _check(path: Path) -> None:
@@ -61,12 +87,12 @@ class SecretStore:
         self._name(name)
         if not isinstance(value, str) or len(value.encode()) > 2_000_000:
             raise ToolError("invalid_input", "Secret must be a bounded string.")
-        fd = os.open(self.root / "secrets.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "r+b") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        with self._lock():
             values = self._read()
             values[name] = value
             payload = self._cipher.encrypt(json.dumps(values).encode())
+            if len(payload) > 16_000_000:
+                raise ToolError("output_limit", "Secret update would exceed the encrypted store limit; existing values retained.")
             fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".secret-")
             try:
                 with os.fdopen(fd, "wb") as stream:

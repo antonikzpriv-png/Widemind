@@ -1,11 +1,51 @@
+# Local secrets and account sessions
+.env
+.env.*
+!.env.example
+/secrets/
+/credentials/
+/browser-profiles/
+/.auth/
+/playwright/.auth/
+*.pem
+*.key
+*.p12
+*.pfx
+client_secret*.json
+credentials*.json
+token*.json
+
+# Private runtime data and artifacts
+/data/
+/runtime/
+/artifacts/private/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+
+# JavaScript build/dependency outputs, if selected
+node_modules/
+.next/
+dist/
+build/
+coverage/
+
+# Python build/dependency outputs, if selected
 .venv/
+venv/
 __pycache__/
 *.py[cod]
-*.egg-info/
 .pytest_cache/
-build/
-dist/
 .coverage
+htmlcov/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Tools package and private owner configuration
+*.egg-info/
 owner-config.json
 control/
 workspace/

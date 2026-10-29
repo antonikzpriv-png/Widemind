@@ -104,7 +104,7 @@ class Gateway:
         ctx = ToolContext(action_id=row["id"],run_id=row["run_id"],reservation_id=row["reservation_id"],
                           config=json.loads(row["config"]),policy=json.loads(row["policy"]),
                           workspace=self.workspace,secrets=self.secrets,transport=self.transport,
-                          state=JournalState(self.store,claim),deadline=time.monotonic()+seconds,
+                          state=JournalState(self.store,claim,row["id"]),deadline=time.monotonic()+seconds,
                           authorize=lambda: self.store.authorize(row["id"],claim,reconciliation=reconciliation),
                           cancelled=lambda: False if reconciliation else bool(self.store.get(row["id"])["cancelled"]),
                           job_id=row["job_id"])
@@ -138,6 +138,7 @@ class Gateway:
             quote = Quote(**json.loads(old["quote"]))
         else:
             try:
+                self._seconds(config)
                 if config.get("enabled") is not True:
                     raise Unavailable("Enable this tool in private owner configuration; see status and setup documentation.")
                 availability = adapter.availability(config,self.secrets)
@@ -147,8 +148,11 @@ class Gateway:
             except ToolError as exc:
                 quote, error = Quote(), exc
         row, fresh = self.store.prepare(action_id=action_id,run_id=run_id,job_id=job_id,tool=tool,
-                                        version=adapter.spec.version,arguments=arguments,config=config,policy=policy,quote=quote)
-        seconds = self._seconds(config)
+                                        version=old["version"] if old else adapter.spec.version,
+                                        arguments=arguments,config=config,policy=policy,quote=quote)
+        if row["version"] != adapter.spec.version and row["status"] not in {"succeeded","failed","unavailable","cancelled"}:
+            raise ToolError("adapter_version", "Recover this pending action using its original adapter version.")
+        seconds = 120 if error else self._seconds(config)
         claim = self.store.claim(action_id,seconds)
         if claim is None:
             return self.store.receipt(action_id)
@@ -172,7 +176,8 @@ class Gateway:
         current = self.store.get(row["id"])
         if isinstance(exc, KeyboardInterrupt):
             self.store.cancel(row["id"])
-        uncertain = isinstance(exc, Uncertain) or bool(current["dispatched"])
+        local_state = json.loads(current["state"])
+        uncertain = isinstance(exc, Uncertain) or bool(current["dispatched"]) or bool(local_state.get("local_intent"))
         status = "uncertain" if uncertain else ("cancelled" if isinstance(exc,KeyboardInterrupt) or getattr(exc,"code",None) == "cancelled" else
                                                  "unavailable" if isinstance(exc,Unavailable) else "failed")
         code = exc.code if isinstance(exc,ToolError) else "cancelled" if isinstance(exc,KeyboardInterrupt) else "adapter_error"
@@ -187,6 +192,8 @@ class Gateway:
         if row["status"] == "planned":
             raise ToolError("not_dispatched", "Action has not started; execute its original input to claim it.")
         adapter = self._adapter(row["tool"])
+        if row["version"] != adapter.spec.version:
+            raise ToolError("adapter_version", "Recover this pending action using its original adapter version.")
         config = json.loads(row["config"])
         seconds = self._seconds(config)
         claim = self.store.claim(action_id,seconds,reconciliation=True)

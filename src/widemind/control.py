@@ -133,8 +133,14 @@ class ControlStore:
 
     def cancel(self, action_id):
         with self.connection(True) as db:
-            if db.execute("UPDATE actions SET cancelled=1 WHERE id=?", (action_id,)).rowcount != 1:
+            row = db.execute("SELECT status FROM actions WHERE id=?", (action_id,)).fetchone()
+            if not row:
                 raise ToolError("not_found", "Action does not exist.")
+            if row["status"] == "planned":
+                db.execute("UPDATE actions SET cancelled=1,status='cancelled',remaining=0,reservation_status='settled',updated=? WHERE id=?",
+                           (time.time(),action_id))
+            else:
+                db.execute("UPDATE actions SET cancelled=1 WHERE id=?", (action_id,))
 
     def get(self, action_id):
         with self.connection() as db:
@@ -218,7 +224,22 @@ class ControlStore:
                 raise ToolError("accounting", "Usage units must be nonnegative integers.")
         if result is None and usage is not None:
             result = ToolResult({}, usage)
-        encoded_result = json_text(asdict(result), 4_000_000) if result else None
+        try:
+            encoded_result = json_text(asdict(result), 4_000_000) if result else None
+        except ToolError:
+            # Result presentation failure is not proof that a paid call was
+            # free. Preserve the known charge and a bounded usage receipt.
+            bounded_usage = None
+            if usage is not None:
+                bounded_units = dict(list(usage.units.items())[:256])
+                bounded_usage = Usage(usage.cost_microusd,bounded_units,
+                                      usage.provider_request_id[:256] if isinstance(usage.provider_request_id,str) else None,
+                                      usage.provisional,{"receipt":"Result exceeded JSON/output bounds; full outcome needs reconciliation."})
+            usage = bounded_usage
+            result = ToolResult({"output_unavailable":"Result exceeded finite JSON/output limits."},usage or Usage(None))
+            encoded_result = json_text(asdict(result), 1_000_000)
+            status = "uncertain"
+            error = {"code":"output_limit","message":"Measured usage retained; reconcile the bounded result receipt."}
         with self.connection(True) as db:
             row = db.execute("SELECT * FROM actions WHERE id=?", (action_id,)).fetchone()
             if row["claim"] != claim:
@@ -256,27 +277,37 @@ class ControlStore:
 
 
 class JournalState:
-    def __init__(self, store: ControlStore, claim: str):
-        self.store, self.claim = store, claim
+    def __init__(self, store: ControlStore, claim: str, action_id: str):
+        self.store, self.claim, self.action_id = store, claim, action_id
+
+    def _bound(self, action_id):
+        if action_id != self.action_id:
+            raise ToolError("authorization", "Action state cannot access another action.")
 
     def load(self, action_id):
-        return json.loads(self.store.get(action_id)["state"])
+        self._bound(action_id)
+        row = self.store.get(action_id)
+        if row["claim"] != self.claim or row["lease"] < time.time():
+            raise ToolError("authorization", "Action state read requires its unexpired current lease.")
+        return json.loads(row["state"])
 
     def update(self, action_id, patch: Mapping):
+        self._bound(action_id)
         if not isinstance(patch, Mapping):
             raise ToolError("invalid_input", "Action state patch must be an object.")
         with self.store.connection(True) as db:
-            row = db.execute("SELECT state,claim FROM actions WHERE id=?", (action_id,)).fetchone()
-            if not row or row["claim"] != self.claim:
+            row = db.execute("SELECT state,claim,lease FROM actions WHERE id=?", (action_id,)).fetchone()
+            if not row or row["claim"] != self.claim or row["lease"] < time.time():
                 raise ToolError("authorization", "Action state write requires its current lease.")
             state = json.loads(row["state"])
             state.update(patch)
             db.execute("UPDATE actions SET state=?,updated=? WHERE id=?", (json_text(state,32_000_000),time.time(),action_id))
 
     def dispatched(self, action_id, intent: Mapping):
+        self._bound(action_id)
         with self.store.connection(True) as db:
-            row = db.execute("SELECT intents,claim FROM actions WHERE id=?", (action_id,)).fetchone()
-            if not row or row["claim"] != self.claim:
+            row = db.execute("SELECT intents,claim,lease FROM actions WHERE id=?", (action_id,)).fetchone()
+            if not row or row["claim"] != self.claim or row["lease"] < time.time():
                 raise ToolError("authorization", "Dispatch requires its current lease.")
             intents = json.loads(row["intents"])
             if len(intents) >= 32:

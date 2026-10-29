@@ -58,9 +58,11 @@ def main(argv=None):
             result = {"stored":args.name,"visibility":"private"}
         elif args.command == "execute":
             path = Path(args.input_file)
-            if path.stat().st_size > 8_000_000:
+            with path.open("rb") as stream:
+                data = stream.read(8_000_001)
+            if len(data) > 8_000_000:
                 raise ToolError("invalid_input", "Request file exceeds 8 MB.")
-            inputs = json.loads(path.read_text())
+            inputs = json.loads(data)
             result = gateway.execute(args.tool,inputs,run_id=args.run_id,action_id=args.action_id,job_id=args.job_id)
         elif args.command == "reconcile":
             result = gateway.reconcile(args.action_id)

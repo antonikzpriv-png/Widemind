@@ -41,7 +41,7 @@ def test_concurrent_reservations_and_atomic_settlement(store):
 def test_uncertain_usage_charged_once_and_unused_reservation_retained(store):
     prepare(store)
     claim = store.claim("one",1)
-    JournalState(store,claim).dispatched("one",{"provider":"synthetic"})
+    JournalState(store,claim,"one").dispatched("one",{"provider":"synthetic"})
     receipt = store.finish("one",claim,"uncertain",usage=Usage(20,{"tokens":2},provisional=True))
     assert (receipt["charged_microusd"],receipt["reserved_microusd"]) == (20,40)
     assert receipt["result"]["usage"]["units"] == {"tokens":2}
@@ -63,7 +63,7 @@ def test_uncertain_usage_charged_once_and_unused_reservation_retained(store):
 def test_unknown_bill_never_becomes_free_and_free_tools_remain_usable(store):
     prepare(store)
     claim = store.claim("one",1)
-    JournalState(store,claim).dispatched("one",{})
+    JournalState(store,claim,"one").dispatched("one",{})
     receipt = store.finish("one",claim,"failed")
     assert receipt["status"] == "uncertain"
     assert receipt["reserved_microusd"] == 60
@@ -75,7 +75,7 @@ def test_unknown_bill_never_becomes_free_and_free_tools_remain_usable(store):
 def test_over_quote_liability_is_posted_not_hidden(store):
     prepare(store)
     claim = store.claim("one",1)
-    JournalState(store,claim).dispatched("one",{})
+    JournalState(store,claim,"one").dispatched("one",{})
     store.finish("one",claim,"succeeded",usage=Usage(120))
     assert store.balance("test")["spendable_microusd"] == -20
     with pytest.raises(ToolError,match="Insufficient"):
@@ -112,7 +112,7 @@ def test_action_replay_conflict_lease_and_expired_recovery(store):
 def test_state_merges_are_durable_intents_precede_dispatch_and_private(store):
     prepare(store)
     token = store.claim("one",1)
-    state = JournalState(store,token)
+    state = JournalState(store,token,"one")
     state.update("one",{"provider_id":"private-correlation"})
     state.update("one",{"another":1})
     state.dispatched("one",{"content_hash":"abc"})
@@ -120,7 +120,7 @@ def test_state_merges_are_durable_intents_precede_dispatch_and_private(store):
     assert json.loads(store.get("one")["intents"]) == [{"content_hash":"abc"}]
     assert "private-correlation" not in json.dumps(store.receipt("one"))
     with pytest.raises(ToolError,match="current lease"):
-        JournalState(store,"wrong").update("one",{"override":True})
+        JournalState(store,"wrong","one").update("one",{"override":True})
 
 
 @pytest.mark.parametrize("amount",[True,False,0.5,-1,10**30])
@@ -138,3 +138,11 @@ def test_pause_cancel_revoke_execution_but_keep_reconciliation(store):
     store.authorize("one",token,reconciliation=True)
     store.cancel("one")
     assert store.get("one")["cancelled"]
+
+
+def test_cancel_before_claim_releases_reservation(store):
+    prepare(store)
+    store.cancel("one")
+    assert store.claim("one",1) is None
+    assert store.receipt("one")["status"] == "cancelled"
+    assert store.balance("test")["spendable_microusd"] == 100
