@@ -236,3 +236,30 @@ test(
     }
   },
 );
+
+test("economy bridge rejects unsafe numeric JSON instead of rounding", async () => {
+  const { createServer } = await import("node:http");
+  const server = createServer((_request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    response.end('{"postedMicros":9007199254740993}');
+  });
+  try {
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const client = createEconomyClient({
+      WIDEMIND_ECONOMY_URL: `http://127.0.0.1:${address.port}`,
+      WIDEMIND_ECONOMY_OPERATOR_TOKEN: "operator-fixture-" + "o".repeat(32),
+      WIDEMIND_ECONOMY_GATEWAY_TOKEN: "gateway-fixture-" + "g".repeat(32),
+      WIDEMIND_ECONOMY_AGENT_TOKEN: "agent-fixture-" + "a".repeat(32),
+    })!;
+    await assert.rejects(
+      () => client.request("operator", "/v1/unsafe"),
+      /Unsafe numeric/,
+    );
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

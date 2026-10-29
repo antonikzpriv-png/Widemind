@@ -471,9 +471,11 @@ class EconomyService:
             values = list(db.execute('SELECT kind,amount_micro_usd,fee_micro_usd,net_micro_usd FROM payment_transactions WHERE provider=? AND account=? AND mode=? AND payment_id=?', (provider, account, mode, payment_id)))
             # Only posted monetary components count as settled receipts. Pending
             # provider objects cannot establish spendable settlement.
-            components = list(db.execute('SELECT t.kind,c.component,c.amount_micro_usd FROM payment_components c JOIN payment_transactions t USING(provider,account,mode,transaction_id) WHERE t.provider=? AND t.account=? AND t.mode=? AND t.payment_id=?', (provider,account,mode,payment_id)))
+            components = list(db.execute('SELECT t.kind,t.native,c.component,c.amount_micro_usd FROM payment_components c JOIN payment_transactions t USING(provider,account,mode,transaction_id) WHERE t.provider=? AND t.account=? AND t.mode=? AND t.payment_id=?', (provider,account,mode,payment_id)))
             receipts = sum(row['amount_micro_usd'] for row in components if row['kind']=='receipt' and row['component']=='gross')
             refunds = -sum(min(0,row['amount_micro_usd']) for row in components if row['kind'] in ('refund','chargeback') and row['component']=='gross')
+            refunds -= sum(max(0,row['amount_micro_usd']) for row in components if row['component']=='gross' and (row['kind']=='chargeback_reversal' or (row['kind']=='adjustment' and json.loads(row['native']).get('reverses_refund'))))
+            refunds=max(0,refunds)
             fees = -sum(row['amount_micro_usd'] for row in components if row['component']=='fee')
             earned = 0
             for entry in db.execute("SELECT metadata FROM ledger WHERE run_id=? AND category='earned_revenue'", (payment['run_id'],)):

@@ -44,6 +44,7 @@ class PayPalPayments:
         self.client=client or httpx.Client();self._owns_client=client is None
         self.clock,self._monotonic=clock,monotonic
         self.base='https://api-m.paypal.com' if mode=='live' else 'https://api-m.sandbox.paypal.com'
+        self.provider_host=urlsplit(self.base).hostname
         if test_api_base:
             url=urlsplit(test_api_base)
             if mode!='test' or not allow_test_endpoint or url.scheme not in ('http','https') or url.hostname not in ('localhost','127.0.0.1','::1') or url.username or url.password or url.path not in ('','/') or url.query or url.fragment:raise EconomyError('invalid_config','Custom PayPal endpoint requires explicit loopback test mode',422)
@@ -118,7 +119,7 @@ class PayPalPayments:
             self._request('POST',f'/v2/checkout/orders/{_id(payment_id)}/capture',body={},key=self._key('capture',payment_id,ident(request_id)))
         return self.reconcile(payment_id)
     @_bounded_operation
-    def reconcile(self,payment_id):
+    def reconcile(self,payment_id,extra_refund_id=None):
         order,unit=self._order(payment_id)
         payment=self.service.payment('paypal',self.account,self.mode,payment_id)
         transactions=[];pending=0;refunded=0;gross_total=0
@@ -136,14 +137,45 @@ class PayPalPayments:
             if gross-fee!=net:raise EconomyError('invalid_provider_record','PayPal charge does not reconcile',502)
             settled=capture.get('status') in ('COMPLETED','PARTIALLY_REFUNDED','REFUNDED');gross_total+=gross if settled else 0
             transactions.append({'transaction_id':capture_id,'kind':'receipt','amount_micro_usd':gross,'fee_micro_usd':fee,'net_micro_usd':net,'currency':'USD','settled':settled,'native':{'provider':'paypal','status':capture.get('status'),'order_id':payment_id,'captured_at':capture.get('create_time')}})
-        refunds=unit.get('payments',{}).get('refunds',[])
+        refunds=list(unit.get('payments',{}).get('refunds',[]))
+        # Keep known requested refunds visible even when Orders omits pending
+        # objects. Verified webhook references are inspected with fresh GETs.
+        with self.service._read() as db:
+            for row in db.execute("SELECT result FROM operations WHERE run_id=? AND scope='paypal.refund.result'",(payment['run_id'],)):
+                result=json.loads(row['result'])
+                if result.get('payment_id')==payment_id:refunds.append({'id':result['refund_id']})
+        with self.service._read() as db:
+            refunds.extend({'id':row['transaction_id']} for row in db.execute("SELECT transaction_id FROM payment_transactions WHERE provider=? AND account=? AND mode=? AND payment_id=? AND kind='refund'",('paypal',self.account,self.mode,payment_id)))
+        if extra_refund_id:refunds.append({'id':_id(extra_refund_id)})
+        fee_rebates=0
+        seen=set();capture_ids={_id(item.get('id')) for item in captures}
         for record in refunds:
-            refund_id=_id(record.get('id'));refund=self._request('GET',f'/v2/payments/refunds/{refund_id}')
-            if refund.get('id')!=refund_id:raise EconomyError('invalid_provider_record','PayPal refund identity mismatch',502)
+            refund_id=_id(record.get('id'))
+            if refund_id in seen:continue
+            seen.add(refund_id);refund=self._request('GET',f'/v2/payments/refunds/{refund_id}')
+            parents=[urlsplit(link.get('href','')) for link in refund.get('links',[]) if link.get('rel')=='up']
+            if refund.get('id')!=refund_id or not any(link.hostname in {self.provider_host,urlsplit(self.base).hostname} and link.path in {f'/v2/payments/captures/{capture}' for capture in capture_ids} for link in parents):raise EconomyError('invalid_provider_record','PayPal refund identity or capture mismatch',502)
             value=_amount(refund.get('amount'));status=refund.get('status')
+            if status not in ('COMPLETED','PENDING','CANCELLED','FAILED'):raise EconomyError('invalid_provider_record','Unknown PayPal refund status',502)
+            with self.service._read() as db:
+                prior=db.execute('SELECT native FROM payment_transactions WHERE provider=? AND account=? AND mode=? AND transaction_id=?',('paypal',self.account,self.mode,refund_id)).fetchone()
+            if status in ('CANCELLED','FAILED'):
+                if prior:
+                    with self.service._read() as db:
+                        previously_final=db.execute("SELECT 1 FROM reconciliations r,json_each(r.summary,'$.observations') o WHERE r.run_id=? AND r.payment_id=? AND json_extract(o.value,'$.transaction_id')=? AND json_extract(o.value,'$.settled')=1 LIMIT 1",(payment['run_id'],payment_id,refund_id)).fetchone()
+                    if previously_final:raise EconomyError('provider_reconciliation_required','Completed refund reversal requires distinct provider transaction evidence',409)
+                    transactions.append({'transaction_id':refund_id,'kind':'refund','amount_micro_usd':-value,'fee_micro_usd':0,'net_micro_usd':-value,'currency':'USD','settled':False,'native':{'provider':'paypal','status':status,'order_id':payment_id}})
+                    transactions.append({'transaction_id':refund_id+':failed-reversal','kind':'adjustment','amount_micro_usd':value,'fee_micro_usd':0,'net_micro_usd':value,'currency':'USD','settled':True,'native':{'provider':'paypal','status':status,'order_id':payment_id,'reverses_refund':refund_id}})
+                continue
             if status=='COMPLETED':refunded+=value
-            if status not in ('CANCELLED','FAILED'):
-                transactions.append({'transaction_id':refund_id,'kind':'refund','amount_micro_usd':-value,'fee_micro_usd':0,'net_micro_usd':-value,'currency':'USD','settled':status=='COMPLETED','native':{'provider':'paypal','status':status,'order_id':payment_id}})
+            transactions.append({'transaction_id':refund_id,'kind':'refund','amount_micro_usd':-value,'fee_micro_usd':0,'net_micro_usd':-value,'currency':'USD','settled':status=='COMPLETED','native':{'provider':'paypal','status':status,'order_id':payment_id}})
+            rebate=refund.get('seller_payable_breakdown',{}).get('paypal_fee')
+            if status=='COMPLETED' and rebate is not None:
+                fee_rebate=_amount(rebate)
+                fee_rebates+=fee_rebate
+                capture_fees=sum(item['fee_micro_usd'] for item in transactions if item['kind']=='receipt')
+                if fee_rebates>capture_fees:raise EconomyError('invalid_provider_record','PayPal refund fee rebate exceeds verified capture fees',502)
+                transactions.append({'transaction_id':refund_id+':fee-rebate','kind':'adjustment','amount_micro_usd':0,'fee_micro_usd':-fee_rebate,'net_micro_usd':fee_rebate,'currency':'USD','settled':True,'native':{'provider':'paypal','status':status,'order_id':payment_id,'rebates_fee_for':refund_id}})
         snapshot={'provider':'paypal','account':self.account,'mode':self.mode,'payment_id':payment_id,'run_id':payment['run_id'],'job_id':payment['job_id'],'status':'refunded' if gross_total and refunded>=gross_total else 'partially_refunded' if refunded else 'settled' if gross_total and order.get('status')=='COMPLETED' else 'pending','expected_revision':payment['revision'],'transactions':transactions,'pending_liability_micro_usd':pending}
         return self.service.apply_payment_snapshot(snapshot)
     @_bounded_operation
@@ -162,9 +194,15 @@ class PayPalPayments:
         resource=event.get('data',{}).get('object',{});kind=event['type']
         order_id=resource.get('supplementary_data',{}).get('related_ids',{}).get('order_id')
         if kind.startswith('CHECKOUT.ORDER.'):order_id=resource.get('id')
+        extra_refund=None
+        if not order_id and ('REFUND' in kind or 'REFUNDED' in kind):
+            parents=[urlsplit(link.get('href','')) for link in resource.get('links',[]) if link.get('rel')=='up']
+            paths=[link.path for link in parents if link.hostname in {self.provider_host,urlsplit(self.base).hostname} and re.fullmatch(r'/v2/payments/captures/[A-Za-z0-9_-]+',link.path)]
+            if len(paths)==1:
+                capture=self._request('GET',paths[0]);order_id=capture.get('supplementary_data',{}).get('related_ids',{}).get('order_id');extra_refund=_id(resource.get('id'))
         if not order_id:raise EconomyError('payment_mapping_unknown','PayPal event requires an order binding',409)
         if kind=='CHECKOUT.ORDER.APPROVED':self.capture(order_id,'event-'+event['id'])
-        else:self.reconcile(order_id)
+        else:self.reconcile(order_id,extra_refund)
         return {'payment_id':order_id}
     @_bounded_operation
     def create_refund(self,payment_id,request_id,amount_micro_usd):
@@ -188,11 +226,11 @@ class PayPalPayments:
         known=self._request('GET',f'/v2/payments/refunds/{refund_id}')
         expected_path=f'/v2/payments/captures/{capture_id}'
         parent_links=[urlsplit(link.get('href','')) for link in known.get('links',[]) if link.get('rel')=='up']
-        if known.get('id')!=refund_id or _amount(known.get('amount'))!=amount_micro_usd or not any(link.path==expected_path and link.hostname==urlsplit(self.base).hostname for link in parent_links):raise EconomyError('invalid_provider_record','PayPal refund identity, capture or amount mismatch',502)
+        if known.get('id')!=refund_id or _amount(known.get('amount'))!=amount_micro_usd or not any(link.path==expected_path and link.hostname in {self.provider_host,urlsplit(self.base).hostname} for link in parent_links):raise EconomyError('invalid_provider_record','PayPal refund identity, capture or amount mismatch',502)
         with self.service._tx() as db:
             def confirm_result():
                 self.service._event(db,payment['run_id'],'economy.refund_confirmed',{'payment_id':payment_id,'refund_id':refund_id,'request_id':request_id})
-                return {'refund_id':refund_id}
+                return {'refund_id':refund_id,'payment_id':payment_id}
             self.service._operation(db,payment['run_id'],'paypal.refund.result',request_id,[payment_id,amount_micro_usd,refund_id],confirm_result)
         self.reconcile(payment_id)
         if known.get('status') in ('COMPLETED','CANCELLED','FAILED'):

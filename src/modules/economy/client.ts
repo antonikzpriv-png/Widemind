@@ -132,7 +132,17 @@ export function createEconomyClient(
       }
     }
     const text = Buffer.concat(chunks).toString("utf8");
-    const parsed = JSON.parse(text);
+    const parsed = JSON.parse(text, (_key, value: unknown) => {
+      if (
+        typeof value === "number" &&
+        (!Number.isFinite(value) ||
+          (Number.isInteger(value) && !Number.isSafeInteger(value)))
+      )
+        throw new Error(
+          "Unsafe numeric economy projection; no rounding is permitted",
+        );
+      return value;
+    });
     if (!response.ok)
       throw new EconomyApiError(
         response.status,

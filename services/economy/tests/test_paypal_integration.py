@@ -11,7 +11,7 @@ from widemind.economy.config import Settings
 from widemind.economy.reconciliation import ReconciliationWorker
 
 class PayPalFixture:
-    def __init__(self):self.captured=False;self.refunded=False;self.keys=[];self.calls=[];self.bad_merchant=False;self.bad_signature=False;self.unit=None
+    def __init__(self):self.captured=False;self.refunded=False;self.keys=[];self.calls=[];self.bad_merchant=False;self.bad_signature=False;self.unit=None;self.refund_status='COMPLETED';self.refund_fee=None
     def __call__(self,request):
         path=request.url.path;self.calls.append((request.method,path));amount=lambda value:{'currency_code':'USD','value':value}
         if path=='/v1/oauth2/token':return httpx.Response(200,json={'access_token':'fixture-oauth','expires_in':3600})
@@ -24,7 +24,7 @@ class PayPalFixture:
         elif path=='/v2/checkout/orders/ORDER_1':value={'id':'ORDER_1','intent':'CAPTURE','status':'COMPLETED' if self.captured else 'APPROVED','purchase_units':[{**(self.unit or {}),'payee':{'merchant_id':'WRONG' if self.bad_merchant else 'MERCHANT'},'payments':{'captures':[{'id':'CAPTURE_1'}] if self.captured else [],'refunds':[{'id':'REFUND_1'}] if self.refunded else []}}]}
         elif path=='/v2/payments/captures/CAPTURE_1':value={'id':'CAPTURE_1','status':'COMPLETED','supplementary_data':{'related_ids':{'order_id':'ORDER_1'}},'amount':amount('10.00'),'seller_receivable_breakdown':{'gross_amount':amount('10.00'),'paypal_fee':amount('0.50'),'net_amount':amount('9.50')}}
         elif path=='/v2/payments/captures/CAPTURE_1/refund':self.refunded=True;self.keys.append(request.headers['paypal-request-id']);value={'id':'REFUND_1','status':'COMPLETED'}
-        elif path=='/v2/payments/refunds/REFUND_1':value={'id':'REFUND_1','status':'COMPLETED','amount':amount('2.00'),'links':[{'rel':'up','href':'https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE_1'}]}
+        elif path=='/v2/payments/refunds/REFUND_1':value={'id':'REFUND_1','status':self.refund_status,'amount':amount('2.00'),**({'seller_payable_breakdown':{'paypal_fee':amount(self.refund_fee)}} if self.refund_fee else {}),'links':[{'rel':'up','href':'https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE_1'}]}
         else:raise AssertionError((request.method,path))
         return httpx.Response(200,json=value)
 
@@ -97,3 +97,23 @@ def test_unregistered_order_cannot_be_captured(tmp_path):
     service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');fixture=PayPalFixture();provider=adapter(service,fixture)
     with pytest.raises(EconomyError,match='not registered'):provider.capture('ORDER_1','capture')
     assert fixture.calls==[]
+
+def test_pending_failed_refund_reverses_only_verified_liability_once(tmp_path):
+    service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');fixture=PayPalFixture();provider=adapter(service,fixture);provider.create_checkout('run','checkout','job',10_000_000);provider.capture('ORDER_1','capture');fixture.refund_status='PENDING';provider.create_refund('ORDER_1','refund',2_000_000)
+    assert service.balance('run')['posted_micro_usd']==12_500_000
+    fixture.refund_status='FAILED';provider.create_refund('ORDER_1','refund',2_000_000);provider.reconcile('ORDER_1')
+    assert service.balance('run')['posted_micro_usd']==14_500_000
+    assert len(fixture.keys)==2
+    assert service.payment_snapshot('paypal','MERCHANT','test','ORDER_1')['refunds_micro_usd']==0
+
+
+def test_verified_refund_fee_rebate_is_separate_and_never_double_counted(tmp_path):
+    service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');fixture=PayPalFixture();provider=adapter(service,fixture);provider.create_checkout('run','checkout','job',10_000_000);provider.capture('ORDER_1','capture');fixture.refund_fee='0.10';provider.create_refund('ORDER_1','refund',2_000_000);provider.reconcile('ORDER_1')
+    assert service.balance('run')['posted_micro_usd']==12_600_000
+    snapshot=service.payment_snapshot('paypal','MERCHANT','test','ORDER_1');assert snapshot['fees_micro_usd']==400_000
+
+
+def test_refund_webhook_maps_through_authenticated_capture_parent(tmp_path):
+    service=EconomyService(tmp_path/'ledger.sqlite');service.create_run('run');fixture=PayPalFixture();provider=adapter(service,fixture);provider.create_checkout('run','checkout','job',10_000_000);provider.capture('ORDER_1','capture');fixture.refunded=True
+    event={'id':'EVENT_REFUND','type':'PAYMENT.CAPTURE.REFUNDED','data':{'object':{'id':'REFUND_1','links':[{'rel':'up','href':'https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE_1'}]}}}
+    provider.process_verified_event(event,'a'*64);assert service.balance('run')['posted_micro_usd']==12_500_000
