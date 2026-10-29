@@ -26,6 +26,10 @@ npm run status       # private worker/queue status; exit 2 if no worker is fresh
 
 Configure the operator password hash before creating or controlling runs. See [setup and deployment](docs/FOUNDATION.md) for exact authentication, demo, production, and environment instructions, and [integration contracts](docs/INTERFACES.md) for module registration and migrations. Start with [AGENTS.md](AGENTS.md) for contributor instructions.
 
+## Standalone tools compatibility
+
+The other agent's Python tools gateway remains intact under `src/widemind`, with its root Python package, tests and [tools setup](docs/TOOLS-SETUP.md), [capability table](docs/CAPABILITIES.md) and provider documentation. Install/run it in a separate environment. The integrated application uses the isolated `services/tools` package and authoritative `services/economy` ledger, not the standalone demonstration wallet. Browser/Docker sandbox requirements from the tools work remain in force. Neither installation verifies live credentials by itself.
+
 ## What WideMind should be able to do
 
 - Browse the internet and research opportunities.

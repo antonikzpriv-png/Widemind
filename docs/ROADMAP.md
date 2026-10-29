@@ -4,7 +4,7 @@
 
 The runnable foundation and integrated economy, tools, business, public commerce and operator modules are implemented. Local acceptance uses the real persistent worker and all three services with an explicitly local PayPal protocol fixture. No live payment, dedicated mailbox verification, deployed website or real survival run is claimed.
 
-Milestone 1 is implemented. Milestones 2–6 have working local implementations and deterministic integration coverage; live/provider acceptance remains conditional on credentials, accounts, isolation, network configuration and funding. The checkboxes below track code availability, not completed live acceptance. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and the service integration guides. Milestone 7 remains unstarted.
+The other agent's standalone tools implementation and verification records are preserved; its live-account and sandbox prerequisites still apply. Milestone 1 is implemented. Milestones 2–6 have working local implementations and deterministic integration coverage; live/provider acceptance remains conditional on credentials, accounts, isolation, network configuration and funding. The checkboxes below track code availability, not completed live acceptance. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and the service integration guides. Milestone 7 remains unstarted.
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 

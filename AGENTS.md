@@ -14,7 +14,7 @@ Read [README.md](README.md), then the documents relevant to the assigned task:
 - [docs/ECONOMY.md](docs/ECONOMY.md): financial invariants.
 - [docs/ROADMAP.md](docs/ROADMAP.md): milestones and acceptance criteria.
 
-The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. Authenticated economy, business/customer-portal and tool adapters are integrated under services/ and src/modules/. Read docs/INTEGRATED_SETUP.md. Live credentials/accounts remain unconfigured; do not invent balances, provider verification, deployment URLs or completed live milestones.
+The runnable foundation now includes Node.js 24/TypeScript web and worker processes, SQLite storage, auth and module contracts. Read docs/FOUNDATION.md and docs/INTERFACES.md before integration. Authenticated economy, business/customer-portal and tool adapters are integrated under services/ and src/modules/. Read docs/INTEGRATED_SETUP.md. The separately maintained standalone Python tools package at src/widemind and its tests/docs are also retained; see docs/TOOLS-SETUP.md and docs/CAPABILITIES.md. Live credentials/accounts remain unconfigured; do not invent balances, provider verification, deployment URLs or completed live milestones.
 
 ## Working approach
 
@@ -57,7 +57,7 @@ Never commit credentials, OAuth tokens, cookies, browser profiles, raw customer 
 
 ## Verification
 
-Use npm ci, npm run migrate, npm run check, npm run dev and npm run worker:dev. Node 24.x is required. Production commands are npm run build, npm start and npm run worker. See docs/FOUNDATION.md.
+Use npm ci, npm run migrate, npm run check, npm run dev and npm run worker:dev. Node 24.x is required. Production commands are npm run build, npm start and npm run worker. See docs/FOUNDATION.md. For standalone tools changes, install the root Python project in a separate venv with `python -m pip install -e '.[test,graphics,browser]'` and run `python -m pytest -q`; do not mix its package namespace with integrated service venvs. Never enable live mail or production publishing merely to run tests.
 
 Prioritize meaningful checks for:
 - Concurrent reservations and exhaustion.

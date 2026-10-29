@@ -6,6 +6,8 @@ Node.js 24/TypeScript serves the website and runs an independent persistent work
 
 PayPal Business, OpenAI and dedicated Gmail are the selected provider targets. Local files, SVG graphics, static software and private portal delivery operate without those credentials. Provider adapters are implemented and fixture-tested; live accounts, funding, permitted outbound network access, hosting and a domain remain external prerequisites. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md), [FOUNDATION.md](FOUNDATION.md) and [INTERFACES.md](INTERFACES.md).
 
+The standalone tools package from the latest `main` is preserved at `src/widemind` with its original tests and documentation. The integrated service is a separate package because it uses the shared economy authority instead of the standalone development control store. Keep their virtual environments separate. See [TOOLS-SETUP.md](TOOLS-SETUP.md) and [TOOLS_INTEGRATION.md](TOOLS_INTEGRATION.md).
+
 ## Product requirements
 
 WideMind is an autonomous online business agent starting with $5 of operating credit. It chooses opportunities and ways to earn rather than being restricted to one predefined service.
