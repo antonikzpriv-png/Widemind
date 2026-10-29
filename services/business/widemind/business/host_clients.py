@@ -244,7 +244,12 @@ class EconomyClient:
             return Outcome('unknown',reason='work authorization outcome unavailable; reconcile original action')
 
     def work_cost(self,*,run_id,reservation_id):
-        """Read actual/provisional cost from economy, never from a tool assertion."""
+        """Read native work/family cost from economy, never a tool assertion.
+
+        A zero-cost research parent is only orchestration. Its authenticated
+        children listing supplies membership; every member must be closed before
+        discovery can cache a final cost for that experiment.
+        """
         self._work_identifier(run_id)
         self._work_identifier(reservation_id)
         self.check_mode(run_id)
@@ -264,20 +269,67 @@ class EconomyClient:
             maximum_micro_usd=request['maximum_micro_usd'])
         if row['reservation_id']!=reservation_id:
             raise Unavailable('work reservation identity mismatch')
-        provisional=self._work_amount(row.get('provisional_micro_usd'))
-        actual=None
-        final=False
-        if row['state']=='settled':
-            actual=self._work_amount(row.get('actual_micro_usd'))
-            final=True
-        elif row['state']=='cancelled':
-            # The economy permits cancellation only before dispatch. Require its
-            # corresponding zero-liability record rather than assuming it.
-            if row.get('actual_micro_usd') is not None or provisional!=0:
-                raise Unavailable('cancelled reservation has conflicting usage')
-            actual=0
-            final=True
-        return {'actual_micro_usd':actual,'costs_final':final,'state':row['state'],
+
+        def usage(member):
+            provisional=self._work_amount(member.get('provisional_micro_usd'))
+            if member['state']=='settled':
+                return self._work_amount(member.get('actual_micro_usd')),True,provisional
+            if member['state']=='cancelled':
+                # Cancellation is permitted only before dispatch, with no bill.
+                if member.get('actual_micro_usd') is not None or provisional!=0:
+                    raise Unavailable('cancelled reservation has conflicting usage')
+                return 0,True,0
+            if member.get('actual_micro_usd') is not None:
+                raise Unavailable('open reservation has conflicting final usage')
+            return None,False,provisional
+
+        actual,final,provisional=usage(row)
+        state=row['state']
+        if request['tool']=='research.collect':
+            if provisional!=0 or actual not in (None,0):
+                raise Unavailable('research orchestration has unexpected direct usage')
+            children=self.http.request(f'/v1/reservations/{quote(reservation_id,safe="")}/children')
+            if not isinstance(children,list) or len(children)>64:
+                raise Unavailable('research child membership unavailable or exceeds bound')
+            child_ids=set()
+            action_ids={row['action_id']}
+            allocation=0
+            known=actual or provisional
+            allowed={'ai.generate','research.fetch','browser.read','research.search','files'}
+            limit_names={'max_tokens','max_output_tokens','max_duration_ms','max_storage_bytes','max_units'}
+            for child in children:
+                if (not isinstance(child,dict) or child.get('run_id')!=run_id or
+                    child.get('account')!=self.account or child.get('provider') not in allowed or
+                    child.get('state') not in {'reserved','running','unknown','settled','cancelled'}):
+                    raise Unavailable('research child binding mismatch')
+                child_id=self._work_identifier(child.get('reservation_id'))
+                action_id=self._work_identifier(child.get('action_id'))
+                if child_id==reservation_id or child_id in child_ids or action_id in action_ids:
+                    raise Unavailable('research child identity is duplicated')
+                child_ids.add(child_id)
+                action_ids.add(action_id)
+                allocation+=self._work_amount(child.get('amount_micro_usd'))
+                if allocation>row['amount_micro_usd']:
+                    raise Unavailable('research child allocations exceed original job cap')
+                limits=child.get('limits')
+                if not isinstance(limits,dict) or not limits or set(limits)-limit_names:
+                    raise Unavailable('research child limits unavailable')
+                for key,value in limits.items():
+                    if self._work_amount(value)==0 or key in row['limits'] and value>row['limits'][key]:
+                        raise Unavailable('research child limits exceed parent authorization')
+                child_actual,child_final,child_provisional=usage(child)
+                known+=child_actual if child_final else child_provisional
+                final=final and child_final
+            if children and row['state']=='cancelled':
+                raise Unavailable('cancelled research parent has allocated children')
+            known=self._work_amount(known)
+            actual=known if final else None
+            # Include already-settled children in the known family subtotal when
+            # another child's final bill remains unresolved.
+            provisional=0 if final else known
+            if not final and state in {'settled','cancelled'}:
+                state='unknown'
+        return {'actual_micro_usd':actual,'costs_final':final,'state':state,
                 'provisional_micro_usd':provisional,'reservation_id':reservation_id}
     def payment_link(self,*,run_id,job_id,action_id,amount_micro_usd,currency):
         if currency!='USD':return Outcome('failed',reason='unsupported currency')

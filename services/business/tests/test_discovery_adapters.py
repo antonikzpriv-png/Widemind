@@ -12,6 +12,7 @@ import tempfile
 import threading
 import types
 import unittest
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from widemind.business.host_clients import EconomyClient, ToolsClient, Unavailable
@@ -43,6 +44,8 @@ class FixtureEconomy:
         self.requests = []
         self.mode = "test"
         self.mutate = lambda row: row
+        self.mutate_children = lambda rows: rows
+        self.children_refusal = None
         self.refusal = None
         fixture = self
 
@@ -71,6 +74,12 @@ class FixtureEconomy:
                             self.reply(fixture.refusal, {"error": {"code": "fixture_denial"}})
                             return
                         result = fixture.mutate(fixture.service.reserve("fixture-run", **body))
+                    elif self.path.startswith("/v1/reservations/") and self.path.endswith("/children"):
+                        if fixture.children_refusal:
+                            self.reply(fixture.children_refusal, {"error": {"code": "fixture_denial"}})
+                            return
+                        parent = self.path.split("/")[-2]
+                        result = fixture.mutate_children(fixture.service.reservation_children(parent))
                     elif self.path.startswith("/v1/reservations/"):
                         result = fixture.mutate(fixture.service.reservation(self.path.rsplit("/", 1)[1]))
                     else:
@@ -274,6 +283,120 @@ class DiscoveryAdapterTests(unittest.TestCase):
                 self.fixture.mutate = lambda row, value=amount: {**row, "actual_micro_usd": value}
                 with self.assertRaises(ValueError):
                     self.cost(reservation)
+
+    def research_parent(self):
+        self.request.update(tool="research.collect", tool_action_id="fixture-research")
+        parent = self.reserve().data["reservation_id"]
+        self.bind(parent)
+        self.fixture.service.start_reservation(parent)
+        return parent
+
+    def research_child(self, parent, identity, amount, provider="ai.generate"):
+        return self.fixture.service.reserve_child(parent, action_id=identity,
+            amount_micro_usd=amount, idempotency_key=identity, provider=provider,
+            account="fixture-tools-account", limits=dict(EconomyClient.WORK_LIMITS))["reservation_id"]
+
+    def test_research_parent_closure_retains_partial_and_settled_child_costs(self):
+        parent = self.research_parent()
+        settled = self.research_child(parent, "fixture-completed-generation", 40_000)
+        unknown = self.research_child(parent, "fixture-uncertain-generation", 50_000)
+        unstarted = self.research_child(parent, "fixture-not-started-generation", 10_000)
+        self.fixture.service.start_reservation(settled)
+        self.fixture.service.settle(settled, 20_000, "ai.generate", "fixture-tools-account", "fixture-final-charge")
+        self.fixture.service.start_reservation(unknown)
+        self.fixture.service.settle(unknown, 7_000, "ai.generate", "fixture-tools-account", "fixture-subtotal", outcome="unknown")
+        self.fixture.service.settle(parent, 0, "research.collect", "fixture-tools-account", "fixture-parent-charge")
+
+        cost = self.cost(parent)
+        self.assertIsNone(cost["actual_micro_usd"])
+        self.assertFalse(cost["costs_final"])
+        self.assertEqual(cost["provisional_micro_usd"], 27_000)
+        self.assertEqual(cost["state"], "unknown")
+        self.assertEqual(self.fixture.service.reservation(unknown)["state"], "unknown")
+        self.assertEqual(self.fixture.requests[-1][:2], ("GET", f"/v1/reservations/{parent}/children"))
+        self.fixture.service.settle(unknown, 9_000, "ai.generate", "fixture-tools-account", "fixture-subtotal")
+        self.fixture.service.cancel_reservation(unstarted)
+        final = self.cost(parent)
+        self.assertEqual(final["actual_micro_usd"], 29_000)
+        self.assertTrue(final["costs_final"])
+
+    def test_research_actual_cost_is_final_only_after_every_member_closes(self):
+        parent = self.research_parent()
+        paid = self.research_child(parent, "fixture-paid-generation", 20_000)
+        cancelled = self.research_child(parent, "fixture-cancelled-generation", 30_000)
+        self.fixture.service.start_reservation(paid)
+        # Actual provider overage remains a liability rather than being hidden at
+        # the allocation ceiling. The native ledger records this test bill.
+        self.fixture.service.settle(paid, 25_000, "ai.generate", "fixture-tools-account", "fixture-overage")
+        self.fixture.service.cancel_reservation(cancelled)
+        pending = self.cost(parent)
+        self.assertIsNone(pending["actual_micro_usd"])
+        self.assertFalse(pending["costs_final"])
+        self.assertEqual(pending["provisional_micro_usd"], 25_000)
+        self.assertEqual(pending["state"], "running")
+
+        self.fixture.service.settle(parent, 0, "research.collect", "fixture-tools-account", "fixture-parent-charge")
+        final = self.cost(parent)
+        self.assertEqual(final["actual_micro_usd"], 25_000)
+        self.assertTrue(final["costs_final"])
+        self.assertEqual(final["provisional_micro_usd"], 0)
+        self.assertEqual(final["state"], "settled")
+        self.assertEqual(self.cost(parent), final)
+
+    def test_childless_closed_research_has_verified_zero_cost(self):
+        parent = self.research_parent()
+        self.fixture.service.settle(parent, 0, "research.collect", "fixture-tools-account", "fixture-parent-charge")
+        self.assertEqual(self.cost(parent)["actual_micro_usd"], 0)
+        self.assertTrue(self.cost(parent)["costs_final"])
+
+    def test_research_child_binding_limits_membership_and_usage_fail_closed(self):
+        parent = self.research_parent()
+        child = self.research_child(parent, "fixture-child-generation", 20_000)
+        self.fixture.service.settle(parent, 0, "research.collect", "fixture-tools-account", "fixture-parent-charge")
+        changes = [
+            ("run_id", "other-run"), ("account", "other-account"),
+            ("provider", "gmail.send"), ("state", "invalid"),
+            ("reservation_id", parent), ("action_id", "fixture-research"),
+            ("reservation_id", "invalid\nidentity"), ("amount_micro_usd", True),
+            ("amount_micro_usd", -1), ("amount_micro_usd", "20000"),
+            ("amount_micro_usd", 250_001), ("limits", {}),
+            ("limits", {"max_storage_bytes": 1_000_001}),
+            ("limits", {"max_duration_ms": 120_001}),
+            ("limits", {"max_tokens": True}), ("limits", {"max_tokens": 0}),
+            ("limits", {"unknown_limit": 1}), ("provisional_micro_usd", True),
+            ("actual_micro_usd", 10),
+        ]
+        for key, value in changes:
+            with self.subTest(key=key, value=value):
+                self.fixture.mutate_children = lambda rows, k=key, v=value: [{**rows[0], k: v}]
+                with self.assertRaises((Unavailable, ValueError)):
+                    self.cost(parent)
+        self.fixture.mutate_children = lambda rows: rows + rows
+        with self.assertRaises(Unavailable):
+            self.cost(parent)
+        self.fixture.mutate_children = lambda rows: [rows[0], {**rows[0], "reservation_id": "different-child"}]
+        with self.assertRaises(Unavailable):
+            self.cost(parent)
+        self.fixture.mutate_children = lambda rows: [{**rows[0], "state": "settled", "actual_micro_usd": True}]
+        with self.assertRaises(ValueError):
+            self.cost(parent)
+        self.fixture.mutate_children = lambda rows: [{**rows[0], "state": "cancelled", "provisional_micro_usd": 1}]
+        with self.assertRaises(Unavailable):
+            self.cost(parent)
+        self.assertEqual(self.fixture.service.reservation(child)["state"], "reserved")
+
+    def test_research_child_endpoint_failure_never_becomes_final_free_work(self):
+        parent = self.research_parent()
+        self.fixture.service.settle(parent, 0, "research.collect", "fixture-tools-account", "fixture-parent-charge")
+        self.fixture.children_refusal = 503
+        with self.assertRaises(urllib.error.HTTPError):
+            self.cost(parent)
+        self.fixture.children_refusal = None
+        for value in ({"children": []}, None, [None], [{}] * 65):
+            with self.subTest(value=value):
+                self.fixture.mutate_children = lambda _rows, v=value: v
+                with self.assertRaises(Unavailable):
+                    self.cost(parent)
 
 
 class SourceReferenceTests(unittest.TestCase):
