@@ -21,6 +21,7 @@ const signedOptionalFields = new Set<string>([
   "paymentAdjustmentsMicros",
   "correctionsMicros",
   "otherCashMicros",
+  "adjustmentsMicros",
 ]);
 function canonicalSummaryMicros(
   value: unknown,
@@ -97,7 +98,11 @@ function financialProjection(
     mode,
     asOf,
   };
-  for (const key of [...optionalCashFields, "otherCashMicros"] as const) {
+  for (const key of [
+    ...optionalCashFields,
+    "otherCashMicros",
+    "adjustmentsMicros",
+  ] as const) {
     const value = summary[key];
     if (value === undefined) continue;
     if (!canonicalSummaryMicros(value, signedOptionalFields.has(key)))
@@ -182,9 +187,12 @@ export async function publicProjection(
   store: Store,
   services: Services,
   dependencyMs = 5000,
+  publicRunId?: string,
 ): Promise<PublicWebsiteData> {
   const runs = store.runs();
-  const latest = runs[0];
+  const latest = publicRunId
+    ? runs.find((run) => run.id === publicRunId)
+    : runs[0];
   const suppliedContent: unknown = await callDependency(
     "website.publicContent",
     () => services.website.publicContent(),
@@ -205,6 +213,7 @@ export async function publicProjection(
       : {};
   return {
     version: 1,
+    financialRunId: latest?.id ?? null,
     runs: runs.map(publicRun),
     financial: financialProjection(
       latest

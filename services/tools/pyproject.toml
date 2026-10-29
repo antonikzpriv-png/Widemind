@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "widemind-tools"
+version = "0.1.0"
+description = "Budget-authorized, durable tools for WideMind's dedicated workspace and accounts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["cryptography>=50,<51"]
+
+[project.optional-dependencies]
+browser = ["playwright>=1.50,<2"]
+graphics = ["Pillow>=13,<14"]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+widemind-tools-service = "widemind.integrated_service:main"
+
+[project.urls]
+Repository = "https://github.com/antonikzpriv-png/widemind"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

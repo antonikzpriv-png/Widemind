@@ -8,9 +8,13 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 ## Current status
 
+The [combined-main qualification](docs/MERGE_VALIDATION_20261029.md) records the merge inputs, compatibility decisions and validation of both accounting setups.
+
 The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
-The Python economy control plane implements the ledger, reservations, Stripe Checkout/webhooks, durable reconciliation, uncertain-checkout recovery and redacted financial reporting. Its registered TypeScript module connects the runtime to that single accounting authority; see [runtime economy setup](docs/RUNTIME_ECONOMY.md). Real Stripe accounts and sandbox verification remain configuration requirements. The owner-operated tools SDK and its Gmail/model/research/files/graphics/code/publishing adapters are preserved from newer main; see [tools setup](docs/TOOLS-SETUP.md) and [capabilities](docs/CAPABILITIES.md). They are not automatically registered as Node runtime providers. Their standalone development budget is separate from the central operating ledger; paid standalone execution is blocked when central runtime configuration is present. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent customer revenue.
+Economy, business, customer commerce and dedicated-account tool adapters are implemented as authenticated services. **PayPal Business** is the selected new checkout provider. Existing Stripe support is retained explicitly; it is not selected silently. Live accounts, credentials, funding, HTTPS and a real customer pilot are still required before claiming autonomous earnings.
+
+Start with [integrated setup](docs/INTEGRATED_SETUP.md) for all services, the private customer portal and payment workflow. The explicit zero-cost `demo` profile remains available for foundation-only checks.
 
 ```sh
 npm ci
@@ -23,6 +27,14 @@ npm run status       # private worker/queue status; exit 2 if no worker is fresh
 ```
 
 Configure the operator password hash before creating or controlling runs. See [setup and deployment](docs/FOUNDATION.md) for exact authentication, demo, production, and environment instructions, and [integration contracts](docs/INTERFACES.md) for module registration and migrations. Start with [AGENTS.md](AGENTS.md) for contributor instructions.
+
+## Preserved central runtime bridge
+
+The latest main's root Python economy/runtime bridge, Stripe adapter, schema, tests and [merged-main audit](docs/MAIN_AUDIT_20261029.md) remain intact. Follow [RUNTIME_ECONOMY.md](docs/RUNTIME_ECONOMY.md) for that deployment. The integrated PayPal commerce services use their own matching adapter and separate databases; the module rejects mixed credential families rather than switching protocols silently. Both use the updated runtime and public-data safeguards.
+
+## Standalone tools compatibility
+
+The other agent's Python tools gateway remains intact under `src/widemind`, with its root Python package, tests and [tools setup](docs/TOOLS-SETUP.md), [capability table](docs/CAPABILITIES.md) and provider documentation. The root Python package also includes the central economy; install/run it in a separate environment with `python -m pip install -r requirements.lock -e .`. The integrated application uses the isolated `services/tools` package and authoritative `services/economy` ledger, not the standalone demonstration wallet. Browser/Docker sandbox requirements from the tools work remain in force. Neither installation verifies live credentials by itself.
 
 ## What WideMind should be able to do
 
@@ -67,13 +79,11 @@ Public activity uses a deliberately selected projection of events. Customer conv
 | [Economy](docs/ECONOMY.md) | Budget, reservations, payments, costs, and exhaustion |
 | [Roadmap](docs/ROADMAP.md) | Build sequence, acceptance criteria, and five-agent work allocation |
 
-See the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
-
-The [merged-main economy/runtime audit](docs/MAIN_AUDIT_20261029.md) records the latest integration fixes, complete qualification and remaining external setup.
+See the [full implementation audit](docs/IMPLEMENTATION_AUDIT.md) for current fixes/checks. See [integrated implementation verification](docs/INTEGRATION_VERIFICATION.md) for current results and prerequisites, and the [runtime audit and extension report](docs/RUNTIME_AUDIT.md) for reproduced defects, repairs, and current verification.
 
 ## Start building
 
-The foundation uses Node.js 24, TypeScript and SQLite, with independent web and worker processes; see [FOUNDATION.md](docs/FOUNDATION.md). The economy uses Python 3.12+, FastAPI, HTTPX and a separate protected SQLite database. Install with `python -m pip install -r requirements.lock -e .`, validate with `python -m pytest -q`, and follow [economy setup](docs/ECONOMY_SETUP.md) and [operations](docs/ECONOMY_OPERATIONS.md) for its HTTP and reconciliation-worker processes.
+The initial stack is Node.js 24, TypeScript, and SQLite, with separate web and worker commands in this repository. Install, migration, development, build, test, and worker commands are implemented and documented in [FOUNDATION.md](docs/FOUNDATION.md).
 
 The first integrated demonstration should exercise a persistent worker, externally enforced budget, one tool action, a deliverable, payment reconciliation, and a visible balance update. Mark every simulated dependency explicitly.
 
@@ -81,4 +91,4 @@ The initial technical demonstration may use one service. The product remains an 
 
 ## Decisions still open
 
-Application stacks and local storage are selected; Stripe is the implemented payment adapter. Hosting, domain, real payment account credentials, model provider, Gmail and graphics/publishing providers remain unconfigured. Record these choices during implementation without inventing working credentials or integrations.
+The application stack and local storage are selected. Hosting/domain and live accounts are not provisioned. The selected integration targets are PayPal Business, OpenAI and dedicated Gmail; graphics/publishing need their documented account configuration. Record these choices during implementation without inventing working credentials or integrations.

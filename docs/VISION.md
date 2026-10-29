@@ -19,7 +19,7 @@ The owner wants broad real-world capabilities:
 - Offers, negotiation, orders, delivery, and payment reconciliation.
 - Learning from previous work and changing business strategy.
 
-These are intended product capabilities. They are not claims that integrations already exist.
+These describe the product direction. The runnable implementation and provider prerequisites are documented in [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md); local fixture verification does not establish live account operation or autonomous profit.
 
 Do not hard-code a single occupation, a single revenue source, or an order queue as the only way WideMind finds work. An initial demonstration can use one bounded offering.
 

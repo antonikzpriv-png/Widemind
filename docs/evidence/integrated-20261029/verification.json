@@ -1,0 +1,93 @@
+{
+  "verifiedAtUtc": "2026-10-29T15:45:56.027578+00:00",
+  "applicationSourceSha": "6d34f617d9c0d60ef1302fd491ee08671be295d4",
+  "includesMainSha": "1ac5f080ec6c42325d20b642ecf5e3a48ef9a91f",
+  "environment": {
+    "node": "24.19.0",
+    "python": "3.12.14"
+  },
+  "checks": {
+    "npm run check": {
+      "passed": true,
+      "tests": 62,
+      "failed": 0
+    },
+    "npm run services:test": {
+      "passed": true,
+      "economyPassed": 380,
+      "toolsPassed": 359,
+      "toolsSkipped": 11,
+      "toolsSubtestsPassed": 75,
+      "businessPassed": 66
+    },
+    "standalone python pytest": {
+      "passed": true,
+      "testsPassed": 348,
+      "skipped": 9,
+      "subtestsPassed": 75
+    },
+    "npm run smoke": {
+      "passed": true,
+      "mode": "zero-cost local demo"
+    },
+    "npm run browser:smoke": {
+      "passed": true,
+      "profile": "demo",
+      "desktopAndPhone": true,
+      "realFormLoginCreateResumePause": true,
+      "operatorEventForm": true,
+      "workerHealth": true,
+      "pageErrors": []
+    },
+    "npm run integration:browser": {
+      "passed": true,
+      "externalPayment": "explicit local PayPal protocol fixture; no actual payment",
+      "actualServices": [
+        "economy",
+        "tools",
+        "business"
+      ],
+      "persistentWorker": true,
+      "browserCustomerAndOperator": true,
+      "customerIsolation": true,
+      "privateDelivery": true,
+      "artifact": "svg-graphic.svg",
+      "providerEffects": {
+        "orders": 1,
+        "captured": 1,
+        "refunds": 0
+      },
+      "financial": {
+        "currency": "USD",
+        "openingCreditMicros": "5000000",
+        "postedMicros": "6900000",
+        "reservedMicros": "0",
+        "holdsMicros": "0",
+        "spendableMicros": "6900000",
+        "customerReceiptsMicros": "2000000",
+        "earnedRevenueMicros": "2000000",
+        "operatingChargesMicros": "0",
+        "processorFeesMicros": "100000",
+        "refundsMicros": "0",
+        "adjustmentsMicros": "0",
+        "ownerFundingMicros": "0",
+        "subsidiesMicros": "0",
+        "mode": "sandbox",
+        "asOf": "2026-10-29T15:44:14.011180+00:00"
+      }
+    }
+  },
+  "evidenceSha256": {
+    "customer-delivery-phone.png": "a517d125ac4ec744816bfc05ab23a740641b491ef17738eaaa9142f1ff35f44c",
+    "integrations-phone.png": "eb75d50741528d4e97a5e21c951db800a7a1b2f5173a2adc9c2638fa885001dd"
+  },
+  "liveCredentialsConfigured": false,
+  "livePaymentVerified": false,
+  "survivalPilotCompleted": false,
+  "pullRequestCreation": {
+    "created": false,
+    "failure": "GitHub GraphQL API returned Forbidden",
+    "branchPushed": true
+  },
+  "skips": "Optional image/browser dependencies and pinned Docker sandbox prerequisites are unavailable; no unsafe sandbox fallback."
+}

@@ -72,8 +72,8 @@ export class Store {
       receipt: row.receipt_json ? JSON.parse(row.receipt_json) : null,
     }));
   }
-  create(profile: "foundation" | "demo", now = Date.now()) {
-    const id = randomUUID();
+  create(profile: "foundation" | "demo", now = Date.now(), id = randomUUID()) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("Invalid run ID");
     transaction(this.db, () => {
       this.db
         .prepare(
