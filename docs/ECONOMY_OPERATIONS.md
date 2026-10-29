@@ -1,8 +1,8 @@
 # Durable economy operations
 
-Economy package version 0.2.0 changes signed webhook responses to durable HTTP 202 admission and upgrades the SQLite schema to version 4; back up and upgrade both trusted processes together. The HTTP contract remains version 1, and explicit operator reconciliation retains HTTP 200.
+Economy package version 0.3.0 includes durable HTTP 202 webhook admission and the integrated runtime bridge, using SQLite schema version 5; back up and upgrade both trusted processes together. The HTTP contract remains version 1, and explicit operator reconciliation retains HTTP 200.
 
-This extends the [economy setup](ECONOMY_SETUP.md) and [integration contract](ECONOMY_CONTRACT.md). It adds a payment-reconciliation worker, not the autonomous agent runtime or website. The Python economy entry points are implemented here; an unmerged future TypeScript foundation requires a coordinator-owned bridge to these versioned HTTP contracts before claiming integration with its module loader. All local provider-fixture checks remain synthetic. No sandbox/live Stripe transaction is claimed without separately recorded provider verification.
+This extends the [economy setup](ECONOMY_SETUP.md) and [integration contract](ECONOMY_CONTRACT.md). It adds a payment-reconciliation worker, not the autonomous agent runtime or website. The Python economy entry points are implemented here; the registered [TypeScript economy module](RUNTIME_ECONOMY.md) now connects the foundation to the single Python accounting authority. The autonomous worker and payment worker remain distinct processes. All local provider-fixture checks remain synthetic. No sandbox/live Stripe transaction is claimed without separately recorded provider verification.
 
 ## Run the HTTP service and reconciliation independently
 

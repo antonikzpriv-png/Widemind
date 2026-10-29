@@ -100,3 +100,9 @@ Operator can use a run's **Deliver an operator event** form, or authenticated `P
 Eligible running work wakes independently of an open webpage. Paused/stopped/failed runs retain incoming events until explicitly resumed. Business modules inspect the oldest 100 pending events in a snapshot and explicitly acknowledge IDs; consumption commits with the work plan or waiting decision. Unseen backlog batches continue without busy polling. The demo acknowledges events locally without additional tool execution or paid planning.
 
 Upgrade note: schema migration 2 adds the inbox, worker presence and unique lease tokens while preserving version-1 runs/actions/receipts. Stop the web and worker services before upgrading, back up the database correctly, run `npm run migrate`, then start both at the same revision. Do not run mixed runtime revisions against the same database. Applied migration 1 is unchanged.
+
+## Economy integration
+
+The discoverable economy module now connects this foundation to the protected Python ledger through the [runtime economy bridge](RUNTIME_ECONOMY.md). Run the Node website and autonomous worker, Python economy HTTP service, and Python payment-reconciliation worker as independent supervised processes. A runtime run starts unfunded; its authenticated operator explicitly opens it in sandbox/live accounting mode. The economy supplies exactly $5 once and enforces later reservations/usage independently of model instructions.
+
+Run `python -m pip install -r requirements.lock -e .` before `npm run check`, because the maintained Node suite now starts the real Python HTTP application for cross-language integration tests. Set `WIDEMIND_TEST_PYTHON` to the interpreter path when using a separate virtual environment. These checks use synthetic tool/provider usage, not live payments. Existing `demo` remains an explicit zero-cost foundation fixture; disable the real bridge URL when selecting that profile.

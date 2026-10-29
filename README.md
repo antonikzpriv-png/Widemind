@@ -10,7 +10,7 @@ It is an applied AI product and research experiment. Building a new foundation m
 
 The runnable foundation is implemented: a Node.js 24/TypeScript web app, an independent persistent worker, SQLite migrations/storage, operator authentication, durable actions/outbox/recovery, typed module contracts, worker-health diagnostics, and a durable event inbox.
 
-The Python economy control plane implements the ledger, reservations, Stripe Checkout/webhooks, durable reconciliation, uncertain-checkout recovery and redacted financial reporting. Real Stripe accounts and sandbox verification remain configuration requirements. Business strategy, Gmail, model and publishing providers from separate branches are not enabled here. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent customer revenue.
+The Python economy control plane implements the ledger, reservations, Stripe Checkout/webhooks, durable reconciliation, uncertain-checkout recovery and redacted financial reporting. Its registered TypeScript module connects the runtime to that single accounting authority; see [runtime economy setup](docs/RUNTIME_ECONOMY.md). Real Stripe accounts and sandbox verification remain configuration requirements. Business strategy, Gmail, model and publishing providers from separate branches are not enabled here. Missing providers report unavailable. The explicit `demo` profile performs one real zero-cost local action; it does not invent customer revenue.
 
 ```sh
 npm ci
