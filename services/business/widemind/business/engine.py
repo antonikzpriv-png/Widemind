@@ -47,7 +47,7 @@ class Business:
         return self.runtime.state(self.run_id) in {"active", "waiting"}
 
     def notify(self, *, source, external_id, kind, payload, due_at=None):
-        if kind not in {"select", "offer", "advance", "payment.changed", "gmail.sync", "deadline", "reconcile"}:
+        if kind not in {"select", "offer", "advance", "payment.changed", "gmail.sync", "deadline", "reconcile", "conversation", "conversation.followup"}:
             raise ValueError("unsupported event")
         due = self.clock() if due_at is None else due_at
         if type(due) not in {int, float} or not math.isfinite(due) or due < 0:
@@ -104,33 +104,40 @@ class Business:
 
     def accept(self, quote_id, *, customer_email, evidence_reference):
         text(evidence_reference, "acceptance evidence", 1000)
+        if self.store.one('SELECT 1 FROM conversation_proposals WHERE quote_id=?', (quote_id,)):
+            raise ValueError('exact authenticated conversation quote acceptance required')
         with self.store.transaction():
-            quote = self.store.one("""SELECT q.*,o.customer_id,o.service,o.run_id,c.email
-              FROM quotes q JOIN opportunities o ON o.id=q.opportunity_id
-              JOIN customers c ON c.id=o.customer_id WHERE q.id=? AND o.run_id=?""", (quote_id, self.run_id))
-            if not quote or quote["email"] != customer_email.lower():
-                raise ValueError("quote/customer mismatch")
-            order = self.store.one("SELECT * FROM orders WHERE quote_id=?", (quote_id,))
-            if order:
-                return order["id"]
-            if not self._active() or quote["status"] != "offered" or quote["expires_at"] <= self.clock():
-                raise ValueError("quote is not available for acceptance")
-            if self._opted_out(quote["customer_id"]):
-                raise ValueError("customer opted out")
-            open_count = self.store.one("SELECT COUNT(*) AS n FROM orders WHERE run_id=? AND status NOT IN ('completed','cancelled','failed')", (self.run_id,))["n"]
-            if open_count >= self.policy.max_open_orders:
-                raise ValueError("commitment capacity reached")
-            # Acceptance is conditional until settlement and spending authorization.
-            order_id = identity(self.run_id, "order", quote_id)
-            self.store.db.execute("""INSERT INTO orders
-              (id,run_id,quote_id,customer_id,service,scope,status,price_micro_usd,cost_micro_usd,created_at,plan)
-              VALUES (?,?,?,?,?,?,'accepted',?,?,?,?)""",
-              (order_id, self.run_id, quote_id, quote["customer_id"], quote["service"], quote["scope"],
-               quote["price_micro_usd"], quote["cost_micro_usd"], self.clock(), quote["plan"]))
-            self.store.db.execute("UPDATE quotes SET status='accepted' WHERE id=?", (quote_id,))
-            self.store.db.execute("UPDATE opportunities SET status='ordered' WHERE id=?", (quote["opportunity_id"],))
-            self.store.memory(self.run_id, order_id, "acceptance", {"evidence": evidence_reference}, self.clock(), quote["customer_id"])
-            self._enqueue("advance", order_id, "accepted")
+            return self._accept_locked(quote_id, customer_email=customer_email, evidence_reference=evidence_reference)
+
+    def _accept_locked(self, quote_id, *, customer_email, evidence_reference):
+        if not self.store.db.in_transaction:
+            raise RuntimeError("Acceptance requires the business write transaction")
+        quote = self.store.one("""SELECT q.*,o.customer_id,o.service,o.run_id,c.email
+          FROM quotes q JOIN opportunities o ON o.id=q.opportunity_id
+          JOIN customers c ON c.id=o.customer_id WHERE q.id=? AND o.run_id=?""", (quote_id, self.run_id))
+        if not quote or quote["email"] != customer_email.lower():
+            raise ValueError("quote/customer mismatch")
+        order = self.store.one("SELECT * FROM orders WHERE quote_id=?", (quote_id,))
+        if order:
+            return order["id"]
+        if not self._active() or quote["status"] != "offered" or quote["expires_at"] <= self.clock():
+            raise ValueError("quote is not available for acceptance")
+        if self._opted_out(quote["customer_id"]):
+            raise ValueError("customer opted out")
+        open_count = self.store.one("SELECT COUNT(*) AS n FROM orders WHERE run_id=? AND status NOT IN ('completed','cancelled','failed')", (self.run_id,))["n"]
+        if open_count >= self.policy.max_open_orders:
+            raise ValueError("commitment capacity reached")
+        # Acceptance is conditional until settlement and spending authorization.
+        order_id = identity(self.run_id, "order", quote_id)
+        self.store.db.execute("""INSERT INTO orders
+          (id,run_id,quote_id,customer_id,service,scope,status,price_micro_usd,cost_micro_usd,created_at,plan)
+          VALUES (?,?,?,?,?,?,'accepted',?,?,?,?)""",
+          (order_id, self.run_id, quote_id, quote["customer_id"], quote["service"], quote["scope"],
+           quote["price_micro_usd"], quote["cost_micro_usd"], self.clock(), quote["plan"]))
+        self.store.db.execute("UPDATE quotes SET status='accepted' WHERE id=?", (quote_id,))
+        self.store.db.execute("UPDATE opportunities SET status='ordered' WHERE id=?", (quote["opportunity_id"],))
+        self.store.memory(self.run_id, order_id, "acceptance", {"evidence": evidence_reference}, self.clock(), quote["customer_id"])
+        self._enqueue("advance", order_id, "accepted")
         return order_id
 
     def reconsider(self, opportunity_id, *, evidence_reference, scope=None, customer_email=None):
@@ -187,6 +194,7 @@ class Business:
         with self.store.transaction():
             customer_id = self._customer(email)
             self.store.db.execute("UPDATE customers SET opted_out=1 WHERE id=?", (customer_id,))
+            self.store.db.execute("UPDATE customer_threads SET status='opted_out',intervention=NULL WHERE run_id=? AND customer_id=?", (self.run_id, customer_id))
             self.store.memory(self.run_id, customer_id, "opt_out", {"reference": text(reference, "opt-out reference")}, self.clock(), customer_id)
 
     def _opted_out(self, customer_id):
@@ -264,11 +272,31 @@ class Business:
             raise Deferred("runtime paused/stopped")
         if not self.tools.available(action):
             raise Deferred(f"tool unavailable: {action}")
+        if reservation is None and action in {'gmail.read','gmail.send','gmail.list','gmail.thread'} and hasattr(self.economy, 'reserve_conversation'):
+            actual = identity(self.run_id, entity, step)
+            reserve_args = {'actual_action_id': actual, 'maximum_micro_usd': 0, 'tool': action, 'max_tokens': 2000}
+            authorized = self._effect(entity, 'mail-reserve:'+step, 'economy', 'reserve_conversation', reserve_args,
+                lambda _aid: self.economy.reserve_conversation(run_id=self.run_id, conversation_id=entity,
+                    action_id=actual, maximum_micro_usd=0, tool=action))
+            reservation = authorized['reservation_id']
         return self._effect(entity, step, "tools", action,
                             {"arguments": arguments, "reservation": reservation, "maximum": maximum},
-                            lambda aid: self.tools.execute(run_id=self.run_id, job_id=entity, action_id=aid,
+                            lambda aid: self._invoke_tool(run_id=self.run_id, job_id=entity, action_id=aid,
                                 action=action, arguments=arguments, reservation_id=reservation,
                                 maximum_micro_usd=maximum))
+
+    def _invoke_tool(self, **request):
+        # Recheck after capability/reservation I/O and journal admission, directly
+        # before provider dispatch. Already accepted external mail cannot be recalled.
+        if request['action'] == 'gmail.send':
+            address = request['arguments'].get('to')
+            customer = self.store.one('SELECT opted_out FROM customers WHERE run_id=? AND email=?',
+                                      (self.run_id, address.lower() if isinstance(address, str) else ''))
+            if customer and customer['opted_out']:
+                return Outcome('failed', reason='Customer opted out before dispatch')
+        if not self._active():
+            return Outcome('failed', reason='Runtime paused/stopped before dispatch')
+        return self.tools.execute(**request)
 
     def _email(self, entity, step, customer_id, subject, body, *, artifact=None):
         if self._opted_out(customer_id):
@@ -592,6 +620,12 @@ class Business:
         command = message.get("command", {})
         if not isinstance(command, dict):
             raise ValueError("invalid mail command")
+        if command.get('type') not in {'request','accept','opt_out'} and isinstance(message.get('body'), str) and message['body'].strip():
+            self.conversation_receive(source='gmail', external_id=message_id, thread_id=thread,
+                customer_email=sender, body=message['body'], authenticated=True,
+                reply_reference=message.get('rfc_message_id'), reply_metadata=message.get('reply'),
+                content_complete=not message.get('body_truncated', False))
+            return
         if command.get("type") == "request":
             reference = self.receive(source="gmail", external_id=message_id, service=command.get("service"),
                 scope=command.get("scope"), customer_email=sender, source_reference=message_id)
@@ -643,13 +677,17 @@ class Business:
                 self._advance(entity)
             elif kind == "gmail.sync":
                 self._gmail(event)
+            elif kind == 'conversation':
+                self._conversation_manager().process(entity)
+            elif kind == 'conversation.followup':
+                self._conversation_manager().followup(entity)
             elif kind == "deadline":
                 self._deadline(entity, now)
             elif kind == "reconcile":
                 self._reconcile(entity)
             self.store.db.execute("UPDATE events SET state='done',lease_until=NULL,error=NULL WHERE id=?", (event["id"],))
         except (Deferred, ValueError, KeyError, TypeError) as exc:
-            if isinstance(exc, Deferred) and event['kind'] in {'select', 'offer', 'advance'} and not self._active():
+            if isinstance(exc, Deferred) and event['kind'] in {'select', 'offer', 'advance', 'conversation', 'conversation.followup'} and not self._active():
                 # Preserve interrupted work for an explicit operator resume.
                 # Existing effect IDs/receipts still prevent duplicate paid work.
                 self.store.db.execute("UPDATE events SET state='queued',lease_until=NULL,error=NULL WHERE id=?", (event['id'],))
@@ -706,9 +744,11 @@ class Business:
         if effect["state"] == "succeeded":
             previous = json.loads(effect["result"] or "{}")
             if effect["action"] != "gmail.send":
+                self._conversation_manager().recovered(effect)
                 return
             verified = self._validated_outcome(Outcome("succeeded", previous), "gmail.send")
             if verified.state == "succeeded" and previous.get("delivery_state") == "confirmed":
+                self._conversation_manager().recovered(effect)
                 return
         client = self.economy if effect["provider"] == "economy" else self.tools
         result = self._validated_outcome(client.reconcile(action_id=action_id), effect["action"])
@@ -718,6 +758,8 @@ class Business:
             (result.state, encode(result.data), result.reason[:1000], action_id))
         if result.state != "unknown":
             self.store.memory(self.run_id, action_id, "reconciliation", {"state": result.state}, self.clock())
+            if result.state == 'succeeded':
+                self._conversation_manager().recovered(effect)
 
     def order(self, order_id):
         order = self.store.one("SELECT * FROM orders WHERE id=? AND run_id=?", (order_id, self.run_id))
@@ -741,3 +783,25 @@ class Business:
                 "orders": [{key: order[key] for key in ("id", "status", "delivery_due_at", "payment", "delivery_obligation_open", "unrefunded_receipts_micro_usd")}
                     for order in (self.order(row["id"]) for row in self.store.all("SELECT id FROM orders WHERE run_id=?", (self.run_id,)))],
                 "opportunities": self.store.all("SELECT id,service,status,assessment FROM opportunities WHERE run_id=?", (self.run_id,))}
+
+    def _conversation_manager(self):
+        from .conversation import Conversations
+        return Conversations(self)
+
+    def conversation_receive(self, **message):
+        return self._conversation_manager().receive(**message)
+
+    def conversation_view(self, conversation_id):
+        return self._conversation_manager().view(conversation_id)
+
+    def conversation_list(self):
+        return self._conversation_manager().listing()
+
+    def conversation_for_opportunity(self, opportunity_id):
+        return self._conversation_manager().for_opportunity(opportunity_id)
+
+    def conversation_accept(self, **acceptance):
+        return self._conversation_manager().accept(**acceptance)
+
+    def conversation_resolve(self, **resolution):
+        return self._conversation_manager().resolve(**resolution)

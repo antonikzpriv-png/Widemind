@@ -16,6 +16,7 @@ from .policy import Policy
 from .services import ResearchBrief
 from .host_services import LOCAL_SERVICES
 from .host_clients import EconomyClient, ToolsClient, RuntimeState
+from .conversation_poll import schedule_inbox
 
 class PortalBusiness(Business):
     """Actual private portal publication, never falsely described as Gmail delivery."""
@@ -113,7 +114,7 @@ class Host:
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
         try:
-            if path=='/v1/work-state':self.observe_payments(business);return self.work(business)
+            if path=='/v1/work-state':schedule_inbox(business,self.env);self.observe_payments(business);return self.work(business)
             if path=='/v1/offerings':return {'available':True,'offerings':self.offerings(business)}
             if path=='/v1/public':
                 return {'availability':{'available':True},'offerings':[{key:item[key] for key in ('id','title','description')} for item in self.offerings(business) if item['available']],
