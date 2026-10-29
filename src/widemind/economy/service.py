@@ -87,7 +87,7 @@ class EconomyService:
         with self._initial_connection() as connection:
             connection.execute('PRAGMA busy_timeout=1000')
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, 3):
                 raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
             connection.execute('PRAGMA journal_mode=WAL')
             connection.execute('BEGIN IMMEDIATE')
@@ -95,9 +95,9 @@ class EconomyService:
                 # Recheck after acquiring the migration lock: another process may
                 # already have upgraded while this connection waited.
                 version = connection.execute('PRAGMA user_version').fetchone()[0]
-                if version not in (0, 1, 2):
+                if version not in (0, 1, 2, 3):
                     raise EconomyError('future_schema', 'Unsupported accounting schema; do not downgrade')
-                migrations = ('001_economy.sql', '002_reconciliation_queue.sql')
+                migrations = ('001_economy.sql', '002_reconciliation_queue.sql', '003_reconciliation_schedule_index.sql')
                 for target in range(version + 1, len(migrations) + 1):
                     script = (Path(__file__).parent / 'migrations' / migrations[target-1]).read_text()
                     statement = ''

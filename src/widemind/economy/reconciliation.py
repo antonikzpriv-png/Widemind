@@ -226,9 +226,13 @@ class ReconciliationWorker:
             if run['mode'] != adapter.mode:
                 raise EconomyError('mode_mismatch', 'Worker cannot poll another run mode')
             # Least-recently-polled first, so a small batch cannot starve later payments.
-            rows = db.execute("SELECT p.*, (SELECT MAX(j.next_attempt_at) FROM reconciliation_jobs j WHERE j.provider=p.provider AND j.account=p.account AND j.mode=p.mode AND j.kind='payment' AND json_extract(j.payload,'$.payment_id')=p.payment_id) last_poll "
-                              'FROM payments p WHERE p.run_id=? AND p.provider=? AND p.account=? AND p.mode=? ORDER BY COALESCE(last_poll,0),p.rowid LIMIT ?',
-                              (run_id, 'stripe', adapter.account, adapter.mode, limit)).fetchall()
+            rows = db.execute(
+                "WITH candidates AS (SELECT p.*, p.rowid payment_rowid, "
+                "(SELECT MAX(j.next_attempt_at) FROM reconciliation_jobs j WHERE j.provider=p.provider AND j.account=p.account AND j.mode=p.mode AND j.kind='payment' AND json_extract(j.payload,'$.payment_id')=p.payment_id) last_poll "
+                "FROM payments p WHERE p.run_id=? AND p.provider=? AND p.account=? AND p.mode=? AND NOT EXISTS "
+                "(SELECT 1 FROM reconciliation_jobs j WHERE j.provider=p.provider AND j.account=p.account AND j.mode=p.mode AND j.kind='payment' AND json_extract(j.payload,'$.payment_id')=p.payment_id AND j.state IN ('pending','running','dead_letter'))) "
+                "SELECT * FROM candidates WHERE last_poll IS NULL OR last_poll<=? ORDER BY COALESCE(last_poll,0),payment_rowid LIMIT ?",
+                (run_id, 'stripe', adapter.account, adapter.mode, clock-interval_seconds, limit)).fetchall()
             for payment in rows:
                 if payment['last_poll'] is not None and clock-payment['last_poll'] < interval_seconds:
                     continue

@@ -181,7 +181,7 @@ def test_v1_database_upgrade_preserves_financial_history(tmp_path):
     assert service.balance('legacy')['posted_micro_usd'] == 5_000_000
     assert len(service.ledger('legacy')) == 1
     with sqlite3.connect(path) as db:
-        assert db.execute('PRAGMA user_version').fetchone()[0] == 2
+        assert db.execute('PRAGMA user_version').fetchone()[0] == 3
     queue = ReconciliationQueue(service)
     assert enqueue(queue)['state'] == 'pending'
     assert EconomyService(path).balance('legacy')['posted_micro_usd'] == 5_000_000
@@ -208,3 +208,20 @@ def test_dead_letter_poll_requires_operator_recovery_before_new_auto_polls(conte
     assert worker.run_once()['completed'] == 1
     clock[0] += 300
     assert worker.schedule_due_payments('run')['scheduled'] == 1
+
+
+def test_dead_letter_payment_cannot_starve_healthy_payment_rechecks(context):
+    service, _, clock = context
+    queue = ReconciliationQueue(service, clock=lambda: clock[0], max_attempts=1)
+    service.register_payment('run','stripe',ACCOUNT,'cs_good','job','register-good')
+    adapter = FixtureAdapter(EconomyError('provider_unavailable','bad payment'))
+    worker = ReconciliationWorker(queue,adapter)
+    assert worker.schedule_due_payments('run',interval_seconds=60,limit=1)['scheduled'] == 1
+    assert worker.run_once(limit=1)['dead_letter'] == 1
+    adapter.error = None
+    for _ in range(4):
+        clock[0] += 60
+        assert worker.schedule_due_payments('run',interval_seconds=60,limit=1)['scheduled'] == 1
+        assert worker.run_once(limit=1)['completed'] == 1
+    assert adapter.calls == ['cs_fixture'] + ['cs_good']*4
+    assert queue.list_tasks('stripe',ACCOUNT,'test',state='dead_letter')[0]['payment_id'] == 'cs_fixture'
