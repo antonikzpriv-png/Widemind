@@ -79,7 +79,17 @@ function command(name) {
   }[name];
   return {
     binary: python(name),
-    args: ["-m", module, "--host", url.hostname, "--port", url.port || "80"],
+    // Services deliberately share the widemind namespace. Also ignore cwd so a
+    // legacy checkout or agent workspace cannot shadow an installed service.
+    args: [
+      "-I",
+      "-m",
+      module,
+      "--host",
+      url.hostname,
+      "--port",
+      url.port || "80",
+    ],
     env: environment(name),
     url: url.origin,
     headers: {
@@ -289,6 +299,7 @@ async function start(selected, includeRuntime = false) {
           const child = spawn(
             spec.binary,
             [
+              "-I",
               "-m",
               "widemind.economy.cli",
               "worker",
@@ -337,6 +348,7 @@ try {
       const args =
         name === "business"
           ? [
+              "-I",
               "-m",
               "unittest",
               "discover",
@@ -344,7 +356,13 @@ try {
               resolve("services/business/tests"),
               "-q",
             ]
-          : ["-m", "pytest", resolve("services/" + name + "/tests"), "-q"];
+          : [
+              "-I",
+              "-m",
+              "pytest",
+              resolve("services/" + name + "/tests"),
+              "-q",
+            ];
       // Unit suites use explicit local fixtures; never inherit a configured
       // deployment's authority, account credentials or private database paths.
       const testEnv = Object.fromEntries(

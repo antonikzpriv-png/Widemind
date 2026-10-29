@@ -2,8 +2,11 @@
 import hashlib
 import json
 import os
+import re
 import sqlite3
+import urllib.error
 import urllib.request
+from datetime import datetime
 from urllib.parse import urlsplit, quote
 from pathlib import Path
 from .contracts import Outcome
@@ -77,14 +80,80 @@ class ToolsClient:
     def reconcile(self,*,action_id):
         try: return self.outcome(self.http.request('/reconcile',{'action_id':action_id}))
         except Exception: return Outcome('unknown',reason='tools reconciliation unavailable')
+
+    @staticmethod
+    def _source_references(receipt):
+        """Read bounded transport provenance from the gateway receipt envelope.
+
+        Tool result data is untrusted and cannot supply its own retrieval time or
+        body hash. Invalid/absent envelopes confer no provenance; cached receipts
+        retain their original observation times rather than being stamped now.
+        """
+        if not isinstance(receipt,dict) or not isinstance(receipt.get('result'),dict):
+            return None
+        references=receipt['result'].get('references')
+        if not isinstance(references,list) or not 1 <= len(references) <= 30:
+            return None
+        cleaned=[]
+        for reference in references:
+            if not isinstance(reference,dict):
+                return None
+            digest=reference.get('sha256')
+            url=reference.get('url')
+            retrieved=reference.get('retrieved_at')
+            kind=reference.get('kind')
+            if (not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest) or
+                reference.get('source_id')!='sha256:'+digest or
+                not isinstance(url,str) or not 1 <= len(url) <= 4096 or
+                any(c.isspace() or ord(c)<32 or ord(c)==127 or c=='\\' for c in url) or
+                not isinstance(retrieved,str) or not 1 <= len(retrieved) <= 64 or
+                not isinstance(kind,str) or not re.fullmatch('[a-z][a-z0-9._-]{0,39}',kind) or
+                reference.get('trust')!='untrusted'):
+                return None
+            try:
+                parsed=urlsplit(url)
+                _=parsed.port
+                stamp=datetime.fromisoformat(retrieved.replace('Z','+00:00'))
+                if (parsed.scheme not in {'http','https'} or not parsed.hostname or
+                    parsed.username is not None or parsed.password is not None or
+                    stamp.tzinfo is None or stamp.utcoffset() is None):
+                    return None
+            except (ValueError,TypeError):
+                return None
+            cleaned.append({key:reference[key] for key in
+                ('source_id','url','sha256','retrieved_at','kind','trust')})
+        return cleaned
+
+    @classmethod
+    def _with_source_references(cls,data,receipt):
+        if not isinstance(data,dict):
+            return data
+        data=dict(data)
+        # Always discard source metadata asserted in webpage/model result data.
+        data.pop('_source_references',None)
+        references=cls._source_references(receipt)
+        if references is not None:
+            data['_source_references']=references
+        return data
+
     @staticmethod
     def outcome(result):
-        if result.get('state') in {'succeeded','failed','unknown'}: return Outcome(result['state'],result.get('data',{}),result.get('reason',''))
+        if result.get('state') in {'succeeded','failed','unknown'}:
+            return Outcome(result['state'],ToolsClient._with_source_references(result.get('data',{}),result.get('receipt')),result.get('reason',''))
         if result.get('kind')=='receipt':
-            receipt=result['receipt'];return Outcome('succeeded' if receipt['status']=='succeeded' else 'failed',receipt.get('result',{}))
+            receipt=result['receipt']
+            data=receipt.get('result',{})
+            # Native gateway receipts wrap adapter output; old/non-research
+            # envelopes retain their existing shape when no source proof exists.
+            if ToolsClient._source_references(receipt) is not None and isinstance(data.get('data'),dict):
+                data=data['data']
+            return Outcome('succeeded' if receipt['status']=='succeeded' else 'failed',ToolsClient._with_source_references(data,receipt))
         return Outcome('unknown',reason='tools did not return a confirmed outcome')
 
 class EconomyClient:
+    WORK_LIMITS = {'max_duration_ms':120000,'max_storage_bytes':1000000}
+    MAX_WORK_MONEY = 9_000_000_000_000_000
+
     def __init__(self,env,store,mode):
         self.store,self.mode=store,mode
         self.http=HTTP(env.get('WIDEMIND_ECONOMY_URL','http://127.0.0.1:8080'),env.get('WIDEMIND_ECONOMY_OPERATOR_TOKEN',''))
@@ -101,6 +170,110 @@ class EconomyClient:
         actual_action=identity(run_id,job_id,'create')
         result=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations',{'action_id':actual_action,'amount_micro_usd':maximum_micro_usd,'idempotency_key':action_id,'provider':plan['action'],'account':self.account,'limits':{'max_duration_ms':120000,'max_storage_bytes':1000000}})
         return Outcome('succeeded',{'reservation_id':result['reservation_id']})
+
+    @staticmethod
+    def _work_identifier(value):
+        if not isinstance(value,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,199}',value):
+            raise ValueError('invalid work authorization identity')
+        return value
+
+    @classmethod
+    def _work_amount(cls,value):
+        if type(value) is not int or not 0 <= value <= cls.MAX_WORK_MONEY:
+            raise ValueError('work costs require exact bounded integer micro-USD')
+        return value
+
+    def _work_row(self,row,*,run_id,tool_action_id,tool,maximum_micro_usd):
+        """Bind a read or recovered reservation to the original work request."""
+        if (not isinstance(row,dict) or
+            (row.get('run_id'),row.get('action_id'),row.get('provider'),row.get('account')) !=
+            (run_id,tool_action_id,tool,self.account) or
+            type(row.get('amount_micro_usd')) is not int or
+            row['amount_micro_usd'] != maximum_micro_usd or row.get('limits') != self.WORK_LIMITS or
+            row.get('state') not in {'reserved','running','unknown','settled','cancelled'}):
+            raise Unavailable('work reservation identity or limits mismatch')
+        try:
+            self._work_identifier(row.get('reservation_id'))
+        except ValueError:
+            raise Unavailable('work reservation identity unavailable') from None
+        return row
+
+    def reserve_work(self,*,run_id,job_id,action_id,tool_action_id,tool,maximum_micro_usd):
+        """Reserve through the existing ledger without requiring a fictitious order.
+
+        This creates no dispatch or charge. The existing tool gateway alone starts
+        the reservation and posts usage. A lost response remains uncertain until
+        the original reservation can be observed by action identity.
+        """
+        try:
+            for value in (run_id,job_id,action_id,tool_action_id,tool):
+                self._work_identifier(value)
+            self._work_amount(maximum_micro_usd)
+        except ValueError:
+            return Outcome('failed',reason='invalid work authorization request')
+        try:
+            self.check_mode(run_id)
+            row=self.http.request(f'/v1/runs/{quote(run_id,safe="")}/reservations',{
+                'action_id':tool_action_id,'amount_micro_usd':maximum_micro_usd,
+                'idempotency_key':action_id,'provider':tool,'account':self.account,
+                'limits':dict(self.WORK_LIMITS)})
+            self._work_row(row,run_id=run_id,tool_action_id=tool_action_id,tool=tool,
+                           maximum_micro_usd=maximum_micro_usd)
+            return Outcome('succeeded',{'reservation_id':row['reservation_id']})
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {400,401,402,403,404,409,422}:
+                return Outcome('unknown',reason='economy authorization unavailable; reconcile original action')
+            # Never expose service bodies or submitted values in diagnostics.
+            # Preserve only a recognized financial denial classification.
+            denial='authorization_refused'
+            try:
+                body=json.loads(exc.read(65537))
+                if body.get('error',{}).get('code')=='insufficient_funds':
+                    denial='insufficient_funds'
+            except (ValueError,AttributeError,TypeError):
+                pass
+            return Outcome('failed',{'denial':denial},reason=(
+                'insufficient funds for work authorization' if denial=='insufficient_funds'
+                else 'economy refused work authorization'))
+        except Exception:
+            return Outcome('unknown',reason='work authorization outcome unavailable; reconcile original action')
+
+    def work_cost(self,*,run_id,reservation_id):
+        """Read actual/provisional cost from economy, never from a tool assertion."""
+        self._work_identifier(run_id)
+        self._work_identifier(reservation_id)
+        self.check_mode(run_id)
+        # Effects are the business-owned immutable request binding. No amount in
+        # this journal is treated as actual cost; only the ledger can supply it.
+        bindings=self.store.all("""SELECT request FROM effects WHERE run_id=? AND
+            provider='economy' AND action='reserve_work' AND
+            json_extract(result,'$.reservation_id')=? LIMIT 2""",(run_id,reservation_id))
+        if len(bindings)!=1:
+            raise Unavailable('original work authorization binding unavailable')
+        request=json.loads(bindings[0]['request'])
+        for key in ('tool_action_id','tool'):
+            self._work_identifier(request.get(key))
+        self._work_amount(request.get('maximum_micro_usd'))
+        row=self._work_row(self.http.request(f'/v1/reservations/{quote(reservation_id,safe="")}'),
+            run_id=run_id,tool_action_id=request['tool_action_id'],tool=request['tool'],
+            maximum_micro_usd=request['maximum_micro_usd'])
+        if row['reservation_id']!=reservation_id:
+            raise Unavailable('work reservation identity mismatch')
+        provisional=self._work_amount(row.get('provisional_micro_usd'))
+        actual=None
+        final=False
+        if row['state']=='settled':
+            actual=self._work_amount(row.get('actual_micro_usd'))
+            final=True
+        elif row['state']=='cancelled':
+            # The economy permits cancellation only before dispatch. Require its
+            # corresponding zero-liability record rather than assuming it.
+            if row.get('actual_micro_usd') is not None or provisional!=0:
+                raise Unavailable('cancelled reservation has conflicting usage')
+            actual=0
+            final=True
+        return {'actual_micro_usd':actual,'costs_final':final,'state':row['state'],
+                'provisional_micro_usd':provisional,'reservation_id':reservation_id}
     def payment_link(self,*,run_id,job_id,action_id,amount_micro_usd,currency):
         if currency!='USD':return Outcome('failed',reason='unsupported currency')
         self.check_mode(run_id)
@@ -154,6 +327,18 @@ class EconomyClient:
         if not effect:return Outcome('unknown',reason='unknown economy action')
         run,job,action=effect['run_id'],effect['job_id'],effect['action']
         try:
+            if action=='reserve_work':
+                self.check_mode(run)
+                request=json.loads(effect['request'])
+                for key in ('tool_action_id','tool'):
+                    self._work_identifier(request.get(key))
+                self._work_amount(request.get('maximum_micro_usd'))
+                found=[r for r in self.http.request(f'/v1/runs/{quote(run,safe="")}/reservations')
+                       if r.get('action_id')==request['tool_action_id']]
+                if len(found)==1:
+                    row=self._work_row(found[0],run_id=run,tool_action_id=request['tool_action_id'],
+                                       tool=request['tool'],maximum_micro_usd=request['maximum_micro_usd'])
+                    return Outcome('succeeded',{'reservation_id':row['reservation_id']})
             if action=='reserve':
                 found=[r for r in self.http.request(f'/v1/runs/{quote(run,safe="")}/reservations') if r['action_id']==identity(run,job,'create')]
                 if len(found)==1:return Outcome('succeeded',{'reservation_id':found[0]['reservation_id']})

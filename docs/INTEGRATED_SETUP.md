@@ -2,6 +2,8 @@
 
 This assembly keeps the persistent Node.js web/worker foundation and connects the separately implemented economy, tools and business modules. Each Python service gets its own virtual environment because their original packages use the same `widemind` namespace. They communicate over authenticated loopback HTTP, not by sharing/importing an agent-writable ledger.
 
+For scheduled market research, evidence-backed opportunities and private bounded product experiments, follow [discovery setup](DISCOVERY.md). This optional layer uses the same worker, tools and ledger and starts disabled. It does not expand outreach permissions or alter the central Stripe alternative.
+
 ## Local installation
 
 Requirements: Node.js 24, Python 3.12+, local persistent storage. Optional browser/code capabilities need their separately documented isolation/runtime dependencies.
