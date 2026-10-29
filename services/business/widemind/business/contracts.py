@@ -21,6 +21,20 @@ class Outcome:
 class Economy(Protocol):
     def reserve(self, *, run_id: str, job_id: str, action_id: str,
                 maximum_micro_usd: int) -> Outcome: ...
+    def reserve_work(self, *, run_id: str, job_id: str, action_id: str,
+                     tool_action_id: str, tool: str, maximum_micro_usd: int) -> Outcome:
+        """Authorize discovery/prototype work through the same economy ledger.
+
+        job_id identifies the durable attempt or experiment, not a fabricated
+        customer order. tool_action_id binds the actual future gateway call.
+        """
+        ...
+    def work_cost(self, *, run_id: str, reservation_id: str) -> JSON:
+        """Authoritative actual_micro_usd (None until final), costs_final and state.
+
+        Unknown/provisional work is never a zero-cost successful experiment.
+        """
+        ...
     def payment_link(self, *, run_id: str, job_id: str, action_id: str,
                      amount_micro_usd: int, currency: str) -> Outcome: ...
     def payment(self, *, run_id: str, job_id: str) -> JSON:

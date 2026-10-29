@@ -33,7 +33,8 @@
     "services:test": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs test",
     "business:sync-inbox": "node --env-file-if-exists=.env src/modules/brief-business/sync-main.ts",
     "business:demo": "node scripts/business-demo.mjs",
-    "business:browser": "node scripts/business-browser-smoke.mjs"
+    "business:browser": "node scripts/business-browser-smoke.mjs",
+    "discovery:demo": "node scripts/discovery-smoke.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.10.0",

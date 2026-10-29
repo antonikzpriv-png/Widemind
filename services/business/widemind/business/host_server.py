@@ -70,6 +70,21 @@ class Host:
     def handle(self,path,payload):
         run=payload.get('runId');business=self.business(run)
         try:
+            # Discovery configuration only records bounded work. The Node runtime
+            # selects the same durable event queue and authorizes business.step;
+            # opening the operator page never performs research or starts work.
+            if path=='/v1/discovery-status':return business.discovery_status(offset=payload.get('offset',0),limit=payload.get('limit',100))
+            if path=='/v1/discovery-configure':
+                business.configure_discovery(payload['config']);return {'saved':True}
+            if path=='/v1/discovery-wake':
+                result=business.schedule_discovery(payload['marketId'],payload['requestId']);return {**result,**({'eventId':result['event_id']} if result.get('event_id') else {})}
+            if path=='/v1/experiment-start':
+                experiment=business.start_experiment(payload['opportunityId'],payload['spec'],payload['requestId']);return {'experimentId':experiment,'scheduled':True}
+            if path=='/v1/experiment-stop':
+                business.stop_experiment(payload['experimentId'],payload['reason']);return {'recorded':True}
+            if path=='/v1/experiment-link-order':
+                business.link_experiment_order(payload['experimentId'],payload['orderId'],payload['evidenceReference']);return {'recorded':True}
+            if path=='/v1/experiment-artifact':return business.experiment_artifact(payload['experimentId'])
             if path=='/v1/work-state':self.observe_payments(business);return self.work(business)
             if path=='/v1/offerings':return {'available':True,'offerings':self.offerings(business)}
             if path=='/v1/public':
@@ -89,6 +104,13 @@ class Host:
                 else:raise ValueError('invalid recovery mode')
                 if business.store.one('SELECT id FROM orders WHERE id=? AND run_id=?',(effect['job_id'],run)):
                     business.notify(source='operator-recovery',external_id=reference+':advance',kind='advance',payload={'id':effect['job_id']},due_at=time.time()+1)
+                elif mode=='reconcile':
+                    experiment=business.store.one("SELECT id FROM discovery_experiments WHERE id=? AND run_id=? AND state IN ('awaiting_start','running','unknown')",(effect['job_id'],run))
+                    if experiment:
+                        # Only re-inspect the original effect after reconciliation.
+                        # The frozen plan, action IDs, allowance and deadline still
+                        # fence dispatch; unknown effects are never retried here.
+                        business.notify(source='operator-recovery',external_id=reference+':experiment:'+experiment['id'],kind='experiment.step',payload={'id':experiment['id']},due_at=time.time()+1)
                 return {'scheduled':True,'actionId':action}
             if path=='/v1/resolve-hold':business.resolve_hold(payload['orderId'],decision=payload['decision'],evidence_reference=payload['evidenceReference']);return {'recorded':True}
             if path=='/v1/reconsider':business.reconsider(payload['opportunityId'],evidence_reference=payload['evidenceReference'],scope=payload.get('scope'),customer_email=payload.get('email'));return {'scheduled':True}

@@ -56,7 +56,8 @@ fs.appendFileSync(process.env.FIXTURE_SELECTOR_OUTPUT, JSON.stringify({pythonPat
         assert.equal(item.pythonPath, false);
         assert.equal(item.pythonHome, false);
         assert.equal(item.gateway, false);
-        assert.equal(item.argv[0], "-m");
+        assert.equal(item.argv[0], "-I");
+        assert.equal(item.argv[1], "-m");
       }
     } finally {
       rmSync(directory, { recursive: true, force: true });
