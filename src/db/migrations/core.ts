@@ -108,4 +108,21 @@ CREATE TRIGGER pilot_snapshots_retract_only BEFORE UPDATE ON pilot_snapshots
  BEGIN SELECT RAISE(ABORT,'pilot snapshots are append-only; only retracting a publication is allowed'); END;
 `,
   },
+  {
+    version: 5,
+    sql: `
+CREATE TABLE agent_profiles (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ document TEXT NOT NULL, created_at INTEGER NOT NULL
+);
+CREATE INDEX agent_profiles_run ON agent_profiles(run_id,id);
+CREATE TRIGGER agent_profiles_append_only BEFORE UPDATE ON agent_profiles BEGIN SELECT RAISE(ABORT,'agent profile versions are append-only'); END;
+CREATE TABLE agent_plans (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ proposal TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('approved','dismissed')),
+ result TEXT NOT NULL, decided_at INTEGER NOT NULL
+);
+CREATE INDEX agent_plans_run ON agent_plans(run_id,id);
+`,
+  },
 ];

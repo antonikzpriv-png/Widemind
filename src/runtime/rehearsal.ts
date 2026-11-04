@@ -12,6 +12,7 @@ import { alertSettings, deliver, evaluateConditions } from "./alerts.ts";
 import { backupFresh, backupSettings } from "./backup.ts";
 import { pilotReport, type PilotReport } from "./pilot.ts";
 import { takeSnapshot, verifyChain } from "./pilot-snapshots.ts";
+import { Store } from "./store.ts";
 
 export interface RehearsalCheck {
   id: string;
@@ -245,9 +246,11 @@ export async function rehearse(input: {
   if (backups) check("backups_recent", backups.fresh, backups.detail);
   else skip("backups_recent", "WIDEMIND_BACKUP_DIR is not set");
 
-  return {
-    ok: checks.every((item) => item.status !== "failed"),
-    orderStatus: done.status,
-    checks,
-  };
+  const ok = checks.every((item) => item.status !== "failed");
+  new Store(input.db).event(
+    input.runId,
+    ok ? "pilot.rehearsal.passed" : "pilot.rehearsal.failed",
+    `${checks.filter((item) => item.status === "passed").length} rehearsal check(s) passed`,
+  );
+  return { ok, orderStatus: done.status, checks };
 }

@@ -22,7 +22,7 @@ A single Linux host with systemd, running every service on loopback behind Caddy
    ```
    Install the economy package into `/opt/widemind-economy/.venv` as described in `deploy/widemind-economy.service` and [ECONOMY_INTEGRATION.md](ECONOMY_INTEGRATION.md).
 3. **Settings.** Copy `deployment/widemind.env.example` to `/opt/widemind/.env` and fill it in. Generate each service token separately (`openssl rand -hex 32`) and the operator hash with `npm run operator:hash`. Give the economy the matching tokens in `/etc/widemind/economy.env`. Keep `WIDEMIND_ENABLE_LIVE_EFFECTS=false` and sandbox modes for now.
-4. **Data.** `npm run migrate` as the `widemind` user. Create `/var/backups/widemind` as `root:widemind` mode 0750.
+4. **Data.** `npm run migrate` as the `widemind` user. Sign in at `/operator`; on first sign-in it opens Getting started, where you create the agent ([GETTING_STARTED.md](GETTING_STARTED.md)). Create `/var/backups/widemind` as `root:widemind` mode 0750.
 5. **Services.** Copy the unit files to `/etc/systemd/system/`, then:
    ```sh
    systemctl daemon-reload

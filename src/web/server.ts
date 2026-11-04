@@ -13,6 +13,19 @@ import {
 } from "./pilot-operator-page.ts";
 import { pilotReadiness, pilotReport } from "../runtime/pilot.ts";
 import {
+  applyProfile,
+  approveFirstPlan,
+  currentProfile,
+  latestPlanDecision,
+  profileFromInput,
+  proposeFirstPlan,
+  saveAgent,
+  sourceUrls,
+} from "../runtime/agent.ts";
+import { setupGuide } from "../runtime/setup.ts";
+import { activityTimeline } from "../runtime/timeline.ts";
+import { activityPage, startPage, type StartData } from "./agent-pages.ts";
+import {
   outsideLedgerCosts,
   recordAttestation,
   recordCost,
@@ -81,6 +94,60 @@ export function webServer(context: {
 }) {
   const { db, config, secrets, services } = context;
   const env = context.env ?? process.env;
+  const startData = async (): Promise<StartData> => {
+    const runId =
+      config.publicRunId && /^[a-f0-9-]{36}$/.test(config.publicRunId)
+        ? config.publicRunId
+        : null;
+    const readiness = await pilotReadiness({
+      env,
+      config,
+      operatorPasswordConfigured: Boolean(secrets.operatorPasswordHash),
+      services,
+      db,
+      runId,
+    });
+    const run = runId ? store.run(runId) : undefined;
+    const profile = run ? currentProfile(db, runId!) : null;
+    const applied = run
+      ? (db
+          .prepare(
+            "SELECT kind,at,detail FROM runtime_events WHERE run_id=? AND kind IN ('agent.applied','agent.apply_failed') ORDER BY id DESC LIMIT 1",
+          )
+          .get(runId!) as
+          | { kind: string; at: number; detail: string }
+          | undefined)
+      : undefined;
+    let funded = false;
+    if (run)
+      try {
+        funded = Boolean(await services.economy.summary(runId!));
+      } catch {
+        funded = false;
+      }
+    return {
+      runId,
+      guide: setupGuide(db, run ? runId : null, readiness),
+      profile,
+      applied: applied
+        ? {
+            ok: applied.kind === "agent.applied",
+            detail: applied.detail,
+            at: new Date(Number(applied.at)).toISOString(),
+          }
+        : null,
+      plan:
+        profile && run
+          ? await proposeFirstPlan({
+              services,
+              profile,
+              runState: run.state,
+              funded,
+            })
+          : null,
+      decision: run ? latestPlanDecision(db, runId!) : null,
+    };
+  };
   const pilotData = async (): Promise<OperatorPilotData | null> => {
     const runId = config.publicRunId;
     if (!runId || !store.run(runId)) return null;
@@ -169,6 +236,9 @@ export function webServer(context: {
             services,
             config.dependencyMs ?? 5000,
             config.publicRunId,
+            config.publicRunId && store.run(config.publicRunId)
+              ? currentProfile(db, config.publicRunId)
+              : null,
           );
           send(
             200,
@@ -354,6 +424,21 @@ export function webServer(context: {
           send(result.status, result.body);
           return;
         }
+        if (
+          method === "GET" &&
+          path === "/operator" &&
+          session &&
+          config.publicRunId &&
+          /^[a-f0-9-]{36}$/.test(config.publicRunId) &&
+          !(
+            store.run(config.publicRunId) &&
+            currentProfile(db, config.publicRunId)
+          )
+        ) {
+          // First sign-in: the agent is configured but not created yet.
+          redirect("/operator/start");
+          return;
+        }
         if (method === "GET" && path === "/operator") {
           send(
             200,
@@ -420,6 +505,37 @@ export function webServer(context: {
         }
         if (!session) {
           send(401, { error: "Operator authentication required" });
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/start" || path === "/api/operator/start")
+        ) {
+          const data = await startData();
+          if (path === "/operator/start")
+            send(200, startPage(data, session.csrf), "text/html");
+          else send(200, data);
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/activity" || path === "/api/operator/activity")
+        ) {
+          const runId = config.publicRunId;
+          const data =
+            runId && store.run(runId) ? activityTimeline(db, runId) : null;
+          if (path === "/operator/activity")
+            send(
+              200,
+              activityPage(
+                data,
+                runId && data
+                  ? (currentProfile(db, runId)?.name ?? null)
+                  : null,
+              ),
+              "text/html",
+            );
+          else send(data ? 200 : 404, data ?? { error: "No agent run" });
           return;
         }
         if (
@@ -514,6 +630,104 @@ export function webServer(context: {
           }
           if (api) send(delivered.duplicate ? 200 : 202, delivered);
           else redirect("/operator");
+          return;
+        }
+        if (route === "/operator/agent" || route === "/operator/agent/plan") {
+          const fail = (message: string) => {
+            if (api) send(400, { error: message });
+            else
+              send(
+                400,
+                operatorFormErrorPage({ error: message }, "/operator/start"),
+                "text/html",
+              );
+          };
+          const runId = config.publicRunId;
+          if (!runId || !/^[a-f0-9-]{36}$/.test(runId)) {
+            fail(
+              "Run npm run services:configure and restart the website first",
+            );
+            return;
+          }
+          if (route === "/operator/agent") {
+            let saved;
+            try {
+              saved = saveAgent({
+                db,
+                config,
+                runId,
+                profile: profileFromInput(input),
+              });
+            } catch (error) {
+              fail(
+                error instanceof Error
+                  ? error.message.slice(0, 500)
+                  : "Invalid agent settings",
+              );
+              return;
+            }
+            const applied = await applyProfile(services, runId, saved.profile);
+            store.event(
+              runId,
+              applied.applied ? "agent.applied" : "agent.apply_failed",
+              applied.detail,
+            );
+            if (api) send(saved.created ? 201 : 200, { ...saved, applied });
+            else redirect("/operator/start");
+            return;
+          }
+          const profile = currentProfile(db, runId);
+          const run = store.run(runId);
+          if (!profile || !run) {
+            fail("Create the agent first");
+            return;
+          }
+          let funded = false;
+          try {
+            funded = Boolean(await services.economy.summary(runId));
+          } catch {
+            funded = false;
+          }
+          // Recompute the plan server-side; only available items can be approved.
+          const plan = await proposeFirstPlan({
+            services,
+            profile,
+            runState: run.state,
+            funded,
+          });
+          const requested = Array.isArray(input.items)
+            ? input.items.filter(
+                (item): item is string => typeof item === "string",
+              )
+            : Object.keys(input)
+                .filter((key) => key.startsWith("item:") && input[key])
+                .map((key) => key.slice(5));
+          const selected = plan.items
+            .filter((item) => item.available && requested.includes(item.id))
+            .map((item) => item.id);
+          if (!selected.length) {
+            fail("Choose at least one available step");
+            return;
+          }
+          let sources: string[] = [];
+          if (selected.includes("discovery"))
+            try {
+              sources = sourceUrls(input.sources);
+            } catch (error) {
+              fail(error instanceof Error ? error.message : "Invalid sources");
+              return;
+            }
+          const results = await approveFirstPlan({
+            db,
+            services,
+            runId,
+            profile,
+            plan,
+            selected,
+            sources,
+          });
+          if (api) send(200, { results });
+          else redirect("/operator/start");
           return;
         }
         const pilotAction =

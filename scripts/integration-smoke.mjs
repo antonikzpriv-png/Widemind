@@ -17,6 +17,14 @@ import { hashPassword } from "../src/auth/password.ts";
 import { pilotReport } from "../src/runtime/pilot.ts";
 import { rehearse } from "../src/runtime/rehearsal.ts";
 import {
+  applyProfile,
+  approveFirstPlan,
+  profileFromInput,
+  proposeFirstPlan,
+  saveAgent,
+} from "../src/runtime/agent.ts";
+import { activityTimeline } from "../src/runtime/timeline.ts";
+import {
   backupSettings,
   backupSources,
   runBackup,
@@ -521,6 +529,47 @@ try {
     assert.ok(labels.includes(label), "backup includes " + label);
   assert.ok(labels.some((label) => label.startsWith("tools-")));
   assert.equal(verifyBackup(backup.path).ok, true);
+  // Owner creates the agent and approves its first-hour plan against the real services.
+  const profile = profileFromInput({
+    name: "Rehearsal Agent",
+    mission: "Small SVG graphics, delivered privately.",
+    "offer_svg-graphic": "true",
+    "price_svg-graphic": "3.00",
+  });
+  const savedAgent = saveAgent({
+    db: app.db,
+    config: app.config,
+    runId,
+    profile,
+  });
+  assert.equal(savedAgent.created, false);
+  const applied = await applyProfile(app.services, runId, savedAgent.profile);
+  assert.equal(applied.applied, true, applied.detail);
+  const firstPlan = await proposeFirstPlan({
+    services: app.services,
+    profile,
+    runState: "waiting",
+    funded: true,
+  });
+  assert.equal(
+    firstPlan.items.find((item) => item.id === "offer:svg-graphic")?.available,
+    true,
+  );
+  const approved = await approveFirstPlan({
+    db: app.db,
+    services: app.services,
+    runId,
+    profile,
+    plan: firstPlan,
+    selected: ["offer:svg-graphic"],
+    sources: [],
+  });
+  assert.ok(
+    approved.every((item) => item.ok),
+    JSON.stringify(approved),
+  );
+  const home = await (await fetch(origin + "/")).text();
+  assert.match(home, /Rehearsal Agent/);
   const hooks = [];
   const hook = (await import("node:http")).createServer(async (req, res) => {
     let text = "";
@@ -566,6 +615,20 @@ try {
     "passed",
   );
   assert.equal(provider.stats().captured, 2);
+  // The rehearsal order used the owner's $3.00 price.
+  assert.match(
+    rehearsal.checks.find((item) => item.id === "report_counts_receipt")
+      ?.detail ?? "",
+    /from 2000000 to 5000000/,
+  );
+  const timeline = activityTimeline(app.db, runId);
+  const titles = timeline.entries.map((entry) => entry.title);
+  for (const title of [
+    "You approved the first-hour plan",
+    "Prepared and sent a quote",
+    "Checked a payment update",
+  ])
+    assert.ok(titles.includes(title), "timeline shows " + title);
   const report = {
     passed: true,
     externalPayment:
@@ -585,6 +648,8 @@ try {
     financial: afterRefund.financial,
     pilotBackupLabels: labels,
     pilotRehearsal: rehearsal.checks,
+    agentPlan: approved,
+    timelineTitles: [...new Set(titles)],
   };
   await mkdir("var", { recursive: true });
   await writeFile(

@@ -243,6 +243,10 @@ export interface Business {
   selectWork(snapshot: BusinessSnapshot): Promise<WorkSelection>;
   /** Optional free read of order outcomes for pilot reporting. */
   deliveryOutcomes?(runId: ID): Promise<DeliveryOutcomes | null>;
+  /** Optional operator reads/writes used by agent setup; never called by the agent. */
+  readPolicy?(runId: ID): Promise<Record<string, Json> | null>;
+  writePolicy?(runId: ID, policy: Record<string, Json>): Promise<void>;
+  writeDiscovery?(runId: ID, config: Record<string, Json>): Promise<void>;
 }
 export interface PublicRun {
   runId: ID;
@@ -260,6 +264,8 @@ export interface PublicWebsiteData {
   offerings: Array<{ id: string; title: string; description: string }>;
   activity: Array<{ id: string; at: string; text: string }>;
   availability: Availability;
+  /** The owner-chosen public identity, when the agent has been created. */
+  agent?: { name: string; mission: string };
 }
 export interface Website {
   health(): Availability;

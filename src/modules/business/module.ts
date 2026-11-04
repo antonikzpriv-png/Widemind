@@ -26,6 +26,8 @@ interface Step {
   recoveredOrchestration?: boolean;
   processed?: boolean;
   eventState?: string;
+  /** Which kind of business event the step handled, for the activity timeline. */
+  eventKind?: string;
   reason?: string;
 }
 const record = (value: Json): Record<string, Json> => {
@@ -64,6 +66,11 @@ function receipt(
     result: {
       processed: step.processed === true,
       eventState: step.eventState ?? "unknown",
+      eventKind:
+        typeof step.eventKind === "string" &&
+        /^[a-z][a-z._-]{0,39}$/.test(step.eventKind)
+          ? step.eventKind
+          : "unknown",
       recoveredOrchestration: step.recoveredOrchestration === true,
       transport: "private-business-portal",
     },
@@ -386,6 +393,27 @@ export const definition: ModuleDefinition = {
       },
       business: {
         health: () => ({ available: true }),
+        readPolicy: async (runId) => {
+          const status = await client.request<{ policy?: Json }>("/v1/status", {
+            runId: run(runId),
+          });
+          return status.policy &&
+            typeof status.policy === "object" &&
+            !Array.isArray(status.policy)
+            ? (status.policy as Record<string, Json>)
+            : null;
+        },
+        writePolicy: async (runId, policy) => {
+          await client.request("/v1/policy", { runId: run(runId), policy });
+          wake(runId);
+        },
+        writeDiscovery: async (runId, config) => {
+          await client.request("/v1/discovery-configure", {
+            runId: run(runId),
+            config,
+          });
+          wake(runId);
+        },
         deliveryOutcomes: async (runId) => {
           try {
             return deliveryOutcomes(
