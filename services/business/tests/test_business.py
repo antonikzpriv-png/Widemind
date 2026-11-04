@@ -99,6 +99,31 @@ class BusinessTests(unittest.TestCase):
         self.assertNotIn("SQLite", public)
         self.assertNotIn(job, public)
 
+    def test_delivery_outcomes_count_paid_delivered_refunded_and_overdue_orders(self):
+        empty = self.business.delivery_outcomes()
+        self.assertEqual(empty, {"version": 1, "orders": 0, "byStatus": {}, "paidDeliveredNotRefunded": 0,
+                                 "deliveredFullyRefunded": 0, "overdue": 0})
+        job = self.order()
+        self.paid(job)
+        self.until(job, "ready")
+        ready = self.business.delivery_outcomes()
+        self.assertEqual(ready["byStatus"], {"ready": 1})
+        self.assertEqual(ready["paidDeliveredNotRefunded"], 0)
+        self.now = self.business.order(job)["delivery_due_at"] + 1
+        self.assertEqual(self.business.delivery_outcomes()["overdue"], 1)
+        drain(self.business)
+        done = self.business.delivery_outcomes()
+        self.assertEqual(done["byStatus"], {"completed": 1})
+        self.assertEqual(done["paidDeliveredNotRefunded"], 1)
+        self.assertEqual(done["overdue"], 0)
+        # A refund in the economy counts at once, before the order's stored copy refreshes.
+        self.adapters.set_payment(job, refunds=2_000_000, status="refunded")
+        refunded = self.business.delivery_outcomes()
+        self.assertEqual(refunded["paidDeliveredNotRefunded"], 0)
+        self.assertEqual(refunded["deliveredFullyRefunded"], 1)
+        self.assertNotIn("private", json.dumps(refunded))
+        self.assertNotIn(job, json.dumps(refunded))
+
     def test_insufficient_funds_block_then_explicit_bounded_retry(self):
         job = self.order()
         self.adapters.set("funds", 0)

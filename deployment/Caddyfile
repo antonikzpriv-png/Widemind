@@ -1,0 +1,11 @@
+# HTTPS front end. Replace the domain, point its DNS at this host, and Caddy
+# obtains and renews the certificate. Only the web app is exposed; the
+# economy, tools and business services stay on loopback.
+widemind.example.com {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy 127.0.0.1:3000
+}

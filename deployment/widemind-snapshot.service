@@ -1,0 +1,17 @@
+# Saves a pilot snapshot. Add --publish to ExecStart (for example with
+# "systemctl edit widemind-snapshot.service") to show each one on /pilot.
+[Unit]
+Description=WideMind pilot snapshot
+
+[Service]
+Type=oneshot
+User=widemind
+Group=widemind
+WorkingDirectory=/opt/widemind
+ExecStart=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/pilot-snapshot-main.js
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/widemind

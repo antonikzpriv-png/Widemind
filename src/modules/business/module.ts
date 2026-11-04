@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ModuleDefinition } from "../registry.ts";
 import type {
+  DeliveryOutcomes,
   Json,
   Reservation,
   ToolAction,
@@ -25,6 +26,8 @@ interface Step {
   recoveredOrchestration?: boolean;
   processed?: boolean;
   eventState?: string;
+  /** Which kind of business event the step handled, for the activity timeline. */
+  eventKind?: string;
   reason?: string;
 }
 const record = (value: Json): Record<string, Json> => {
@@ -63,6 +66,11 @@ function receipt(
     result: {
       processed: step.processed === true,
       eventState: step.eventState ?? "unknown",
+      eventKind:
+        typeof step.eventKind === "string" &&
+        /^[a-z][a-z._-]{0,39}$/.test(step.eventKind)
+          ? step.eventKind
+          : "unknown",
       recoveredOrchestration: step.recoveredOrchestration === true,
       transport: "private-business-portal",
     },
@@ -75,6 +83,41 @@ function receipt(
       provisional: false,
       evidenceRef: `business-bridge:${action.actionId}`,
     },
+  };
+}
+/** Free local business polling interval; also how soon a new payment is noticed. */
+export const BUSINESS_POLL_MS = 30_000;
+/** Accept only the aggregate counts shape; anything else is unavailable. */
+export function deliveryOutcomes(value: unknown): DeliveryOutcomes | null {
+  const count = (item: unknown) =>
+    Number.isSafeInteger(item) && (item as number) >= 0;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const byStatus = row.byStatus;
+  if (
+    row.version !== 1 ||
+    ![
+      "orders",
+      "paidDeliveredNotRefunded",
+      "deliveredFullyRefunded",
+      "overdue",
+    ].every((key) => count(row[key])) ||
+    !byStatus ||
+    typeof byStatus !== "object" ||
+    Array.isArray(byStatus) ||
+    Object.keys(byStatus).length > 20 ||
+    !Object.entries(byStatus).every(
+      ([key, item]) => /^[a-z_]{1,40}$/.test(key) && count(item),
+    )
+  )
+    return null;
+  return {
+    version: 1,
+    orders: row.orders as number,
+    byStatus: { ...(byStatus as Record<string, number>) },
+    paidDeliveredNotRefunded: row.paidDeliveredNotRefunded as number,
+    deliveredFullyRefunded: row.deliveredFullyRefunded as number,
+    overdue: row.overdue as number,
   };
 }
 async function start(reservation: Reservation, env: NodeJS.ProcessEnv) {
@@ -350,6 +393,38 @@ export const definition: ModuleDefinition = {
       },
       business: {
         health: () => ({ available: true }),
+        readPolicy: async (runId) => {
+          const status = await client.request<{ policy?: Json }>("/v1/status", {
+            runId: run(runId),
+          });
+          return status.policy &&
+            typeof status.policy === "object" &&
+            !Array.isArray(status.policy)
+            ? (status.policy as Record<string, Json>)
+            : null;
+        },
+        writePolicy: async (runId, policy) => {
+          await client.request("/v1/policy", { runId: run(runId), policy });
+          wake(runId);
+        },
+        writeDiscovery: async (runId, config) => {
+          await client.request("/v1/discovery-configure", {
+            runId: run(runId),
+            config,
+          });
+          wake(runId);
+        },
+        deliveryOutcomes: async (runId) => {
+          try {
+            return deliveryOutcomes(
+              await client.request("/v1/delivery-outcomes", {
+                runId: run(runId),
+              }),
+            );
+          } catch {
+            return null;
+          }
+        },
         selectWork: async (snapshot) => {
           const state = await client.request<Work>("/v1/work-state", {
             runId: snapshot.runId,
@@ -359,7 +434,7 @@ export const definition: ModuleDefinition = {
               kind: "wait",
               reason:
                 "No ready business work; waiting for customer/provider events",
-              wakeAt: new Date(Date.now() + 30000).toISOString(),
+              wakeAt: new Date(Date.now() + BUSINESS_POLL_MS).toISOString(),
               acknowledgeEventIds: snapshot.events.map(
                 (event) => event.eventId,
               ),
@@ -368,7 +443,11 @@ export const definition: ModuleDefinition = {
             return {
               kind: "wait",
               reason: "Business event scheduled",
-              wakeAt: new Date(state.dueAt * 1000).toISOString(),
+              // Payments are observed when work state is read, so re-check at
+              // least every 30 seconds even when the next event is far away.
+              wakeAt: new Date(
+                Math.min(state.dueAt * 1000, Date.now() + BUSINESS_POLL_MS),
+              ).toISOString(),
             };
           return {
             kind: "work",

@@ -4,7 +4,7 @@
 
 The runnable foundation and integrated economy, tools, business, public commerce and operator modules are implemented. Local acceptance uses the real persistent worker and all three services with an explicitly local PayPal protocol fixture. No live payment, dedicated mailbox verification, deployed website or real survival run is claimed.
 
-The other agent's standalone tools implementation and verification records are preserved; its live-account and sandbox prerequisites still apply. Milestone 1 is implemented. Milestones 2–6 have working local implementations and deterministic integration coverage; live/provider acceptance remains conditional on credentials, accounts, isolation, network configuration and funding. The checkboxes below track code availability, not completed live acceptance. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and the service integration guides. Milestone 7 remains unstarted.
+The other agent's standalone tools implementation and verification records are preserved; its live-account and sandbox prerequisites still apply. Milestone 1 is implemented. Milestones 2–6 have working local implementations and deterministic integration coverage; live/provider acceptance remains conditional on credentials, accounts, isolation, network configuration and funding. The checkboxes below track code availability, not completed live acceptance. See [INTEGRATED_SETUP.md](INTEGRATED_SETUP.md) and the service integration guides. Milestone 7's live run has not started; its read-only go-live checklist and run-record tooling are in [PILOT.md](PILOT.md).
 
 The first business model is an experiment, not a permanent restriction. The five Codex roles below build one initial WideMind identity.
 
@@ -83,6 +83,8 @@ Resolve payment timing before implementation so the agent can fund the work it p
 **Acceptance:** Visitors can understand and hire WideMind. Customer information, mailbox contents, credentials, and unpublished work remain private. Public financial totals reconcile with accounting.
 
 ## 7. Real paid survival pilot
+
+Tooling: `npm run pilot:preflight` lists remaining go-live blockers; `npm run pilot:report` records interventions, outside funding, operator-attested customer independence, costs outside the ledger and measured outcomes against these criteria; `npm run pilot:alerts` notifies the operator during the run; `npm run pilot:snapshot -- --publish` publishes hash-chained snapshots to the website's `/pilot` page ([PILOT.md](PILOT.md)). [DEPLOYMENT.md](DEPLOYMENT.md) covers hosting, verified backups and the go-live order. The boxes stay unchecked until a real run exists.
 
 - [ ] Document a run with exactly $5 opening operating credit.
 - [ ] Enable configured real tools and customer work.

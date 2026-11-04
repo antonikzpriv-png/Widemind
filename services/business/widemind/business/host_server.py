@@ -139,6 +139,7 @@ class Host:
                                      'at':datetime.fromtimestamp(item['at_utc_epoch'],timezone.utc).isoformat(),
                                      'text':f"Completed {item['service'].replace('-',' ')} work."} for item in business.public_activity()]}
             if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,)),'conversations':business.conversation_list()}
+            if path=='/v1/delivery-outcomes':return business.delivery_outcomes()
             if path=='/v1/conversations':return {'conversations':business.conversation_list()}
             if path=='/v1/conversation':return {'conversation':business.conversation_view(payload['conversationId'])}
             if path=='/v1/conversation-resolve':
@@ -252,7 +253,8 @@ class Host:
                     expected=self.work(business)
                     if expected['eventId']!=event or expected['dueAt']>time.time():raise ValueError('business event is not due')
                     business.store.db.execute("INSERT INTO host_invocations VALUES (?,?,?,'running',NULL,?)",(action,run,event,time.time()))
-                processed=business.tick();event_state=business.store.one('SELECT state FROM events WHERE id=? AND run_id=?',(event,run));result={'kind':'completed','processed':processed,'eventState':event_state['state'] if event_state else 'unknown',**self.work(business)}
+                event_kind=business.store.one('SELECT kind FROM events WHERE id=? AND run_id=?',(event,run))
+                processed=business.tick();event_state=business.store.one('SELECT state FROM events WHERE id=? AND run_id=?',(event,run));result={'kind':'completed','processed':processed,'eventState':event_state['state'] if event_state else 'unknown','eventKind':event_kind['kind'] if event_kind else 'unknown',**self.work(business)}
                 business.store.db.execute("UPDATE host_invocations SET state='completed',result=? WHERE action_id=?",(encode(result),action));return result
             if path=='/v1/reconcile':
                 row=business.store.one('SELECT * FROM host_invocations WHERE action_id=? AND run_id=?',(payload['actionId'],run))

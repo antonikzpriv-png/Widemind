@@ -814,6 +814,37 @@ class Business(DiscoveryMixin):
                     for order in (self.order(row["id"]) for row in self.store.all("SELECT id FROM orders WHERE run_id=?", (self.run_id,)))],
                 "opportunities": self.store.all("SELECT id,service,status,assessment FROM opportunities WHERE run_id=?", (self.run_id,))}
 
+    def delivery_outcomes(self, now=None):
+        """Aggregate order outcomes for the pilot report: counts only, no identities or content."""
+        now = self.clock() if now is None else now
+        by_status = {}
+        paid_delivered = fully_refunded = overdue = 0
+        for row in self.store.all("SELECT id FROM orders WHERE run_id=?", (self.run_id,)):
+            order = self.order(row["id"])
+            by_status[order["status"]] = by_status.get(order["status"], 0) + 1
+            payment = json.loads(order["payment"])
+            if order["status"] in {"delivered", "completed"}:
+                # The stored copy refreshes only when work is next polled; read
+                # the economy's current record so a refund is never counted as kept.
+                try:
+                    snapshot = self.economy.payment(run_id=self.run_id, job_id=order["id"])
+                    if isinstance(snapshot, dict) and snapshot.get("job_id") == order["id"]:
+                        payment = snapshot
+                except Exception:
+                    pass
+            receipts = payment.get("receipts_micro_usd", 0)
+            unrefunded = max(0, receipts - payment.get("refunds_micro_usd", 0))
+            if order["status"] in {"delivered", "completed"} and receipts > 0:
+                if unrefunded > 0:
+                    paid_delivered += 1
+                else:
+                    fully_refunded += 1
+            if order["delivery_obligation_open"] and order["delivery_due_at"] is not None and order["delivery_due_at"] < now:
+                overdue += 1
+        return {"version": 1, "orders": sum(by_status.values()), "byStatus": by_status,
+                "paidDeliveredNotRefunded": paid_delivered, "deliveredFullyRefunded": fully_refunded,
+                "overdue": overdue}
+
     def _conversation_manager(self):
         from .conversation import Conversations
         return Conversations(self)

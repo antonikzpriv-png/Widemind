@@ -69,7 +69,7 @@ test("version-one saved runs and receipts upgrade without executing their tool a
           "SELECT COUNT(*) AS n FROM schema_migrations WHERE module='core'",
         )
         .get()?.n,
-      2,
+      coreMigrations.length,
     );
   } finally {
     legacy.close();

@@ -1,0 +1,19 @@
+# Verified backups of the runtime, economy, business and tools databases.
+# Runs as root so backups sit outside the agent's and services' write access
+# (WIDEMIND_BACKUP_DIR, for example /var/backups/widemind, owned by root, 0700).
+# It must be able to read every database and its -wal/-shm companions.
+[Unit]
+Description=WideMind database backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/widemind
+ExecStart=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/backup-main.js run
+ExecStartPost=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/backup-main.js verify
+# Encrypt to the operator's public key and upload; skipped when WIDEMIND_OFFSITE_* is unset.
+ExecStartPost=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/backup-main.js offsite
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true

@@ -1,4 +1,42 @@
 import { commercePage, commerceScript, integrationsPage } from "./commerce.ts";
+import {
+  listSnapshots,
+  publishedPilot,
+  retractSnapshot,
+  takeSnapshot,
+  verifyChain,
+} from "../runtime/pilot-snapshots.ts";
+import { pilotPage } from "./pilot-page.ts";
+import { readFileSync } from "node:fs";
+// Served from the repository's public/ directory in both src/ and dist/ layouts.
+const geistFont = readFileSync(
+  new URL("../../public/fonts/geist-variable.woff2", import.meta.url),
+);
+import {
+  pilotOperatorPage,
+  type OperatorPilotData,
+} from "./pilot-operator-page.ts";
+import { pilotReadiness, pilotReport } from "../runtime/pilot.ts";
+import {
+  applyProfile,
+  approveFirstPlan,
+  currentProfile,
+  latestPlanDecision,
+  profileFromInput,
+  proposeFirstPlan,
+  saveAgent,
+  sourceUrls,
+} from "../runtime/agent.ts";
+import { setupGuide } from "../runtime/setup.ts";
+import { activityTimeline } from "../runtime/timeline.ts";
+import { activityPage, startPage, type StartData } from "./agent-pages.ts";
+import {
+  outsideLedgerCosts,
+  recordAttestation,
+  recordCost,
+  usdToMicros,
+  type CostCategory,
+} from "../runtime/pilot-records.ts";
 import { callDependency, DependencyTimeout } from "../runtime/dependencies.ts";
 import { RequestError } from "./errors.ts";
 import { createServer } from "node:http";
@@ -57,8 +95,87 @@ export function webServer(context: {
   config: RuntimeConfig;
   secrets: ServerSecrets;
   services: Services;
+  env?: NodeJS.ProcessEnv;
 }) {
   const { db, config, secrets, services } = context;
+  const env = context.env ?? process.env;
+  const startData = async (): Promise<StartData> => {
+    const runId =
+      config.publicRunId && /^[a-f0-9-]{36}$/.test(config.publicRunId)
+        ? config.publicRunId
+        : null;
+    const run = runId ? store.run(runId) : undefined;
+    // Read the summary once; readiness and the plan both use it.
+    let summary = null;
+    if (run)
+      try {
+        summary = await services.economy.summary(runId!);
+      } catch {
+        summary = null;
+      }
+    const funded = Boolean(summary);
+    const readiness = await pilotReadiness({
+      env,
+      config,
+      operatorPasswordConfigured: Boolean(secrets.operatorPasswordHash),
+      services,
+      db,
+      runId,
+      summary,
+    });
+    const profile = run ? currentProfile(db, runId!) : null;
+    const applied = run
+      ? (db
+          .prepare(
+            "SELECT kind,at,detail FROM runtime_events WHERE run_id=? AND kind IN ('agent.applied','agent.apply_failed') ORDER BY id DESC LIMIT 1",
+          )
+          .get(runId!) as
+          | { kind: string; at: number; detail: string }
+          | undefined)
+      : undefined;
+    return {
+      runId,
+      running: run?.state === "active" || run?.state === "waiting",
+      guide: setupGuide(db, run ? runId : null, readiness),
+      profile,
+      applied: applied
+        ? {
+            ok: applied.kind === "agent.applied",
+            detail: applied.detail,
+            at: new Date(Number(applied.at)).toISOString(),
+          }
+        : null,
+      plan:
+        profile && run
+          ? await proposeFirstPlan({
+              services,
+              profile,
+              runState: run.state,
+              funded,
+            })
+          : null,
+      decision: run ? latestPlanDecision(db, runId!) : null,
+    };
+  };
+  const pilotData = async (): Promise<OperatorPilotData | null> => {
+    const runId = config.publicRunId;
+    if (!runId || !store.run(runId)) return null;
+    return {
+      runId,
+      readiness: await pilotReadiness({
+        env,
+        config,
+        operatorPasswordConfigured: Boolean(secrets.operatorPasswordHash),
+        services,
+        db,
+        runId,
+      }),
+      report: await pilotReport({ db, services, runId, view: "private" }),
+      costs: outsideLedgerCosts(db, runId, true).records ?? [],
+      snapshots: listSnapshots(db, runId),
+      chain: verifyChain(db, runId),
+    };
+  };
   if (
     secrets.operatorPasswordHash &&
     !validPasswordHash(secrets.operatorPasswordHash)
@@ -75,7 +192,7 @@ export function webServer(context: {
       response.setHeader("X-Frame-Options", "DENY");
       response.setHeader(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       );
       const send = (
         status: number,
@@ -108,8 +225,26 @@ export function webServer(context: {
           send(200, css, "text/css");
           return;
         }
+        if (method === "GET" && path === "/fonts/geist-variable.woff2") {
+          response.writeHead(200, {
+            "Content-Type": "font/woff2",
+            "Cache-Control": "public, max-age=31536000, immutable",
+          });
+          response.end(geistFont);
+          return;
+        }
         if (method === "GET" && path === "/healthz") {
           send(200, { ok: true, service: "web", profile: config.profile });
+          return;
+        }
+        if (method === "GET" && (path === "/pilot" || path === "/api/pilot")) {
+          // Only operator-published, unretracted snapshots; never a live read.
+          const data =
+            config.publicRunId && store.run(config.publicRunId)
+              ? publishedPilot(db, config.publicRunId)
+              : null;
+          if (path === "/pilot") send(200, pilotPage(data), "text/html");
+          else send(200, data ?? { latest: null, timeline: [], chain: null });
           return;
         }
         if (method === "GET" && (path === "/" || path === "/api/public")) {
@@ -118,6 +253,9 @@ export function webServer(context: {
             services,
             config.dependencyMs ?? 5000,
             config.publicRunId,
+            config.publicRunId && store.run(config.publicRunId)
+              ? currentProfile(db, config.publicRunId)
+              : null,
           );
           send(
             200,
@@ -303,6 +441,21 @@ export function webServer(context: {
           send(result.status, result.body);
           return;
         }
+        if (
+          method === "GET" &&
+          path === "/operator" &&
+          session &&
+          config.publicRunId &&
+          /^[a-f0-9-]{36}$/.test(config.publicRunId) &&
+          !(
+            store.run(config.publicRunId) &&
+            currentProfile(db, config.publicRunId)
+          )
+        ) {
+          // First sign-in: the agent is configured but not created yet.
+          redirect("/operator/start");
+          return;
+        }
         if (method === "GET" && path === "/operator") {
           send(
             200,
@@ -339,12 +492,13 @@ export function webServer(context: {
             send(503, { error: "Operator authentication is not configured" });
             return;
           }
+          const formLogin = path === "/operator/login";
           if (
             !sessions.allowAttempt(request.socket.remoteAddress ?? "unknown")
           ) {
-            send(429, {
-              error: "Too many sign-in attempts; retry after 15 minutes",
-            });
+            const error = "Too many sign-in attempts; retry after 15 minutes";
+            if (formLogin) send(429, loginPage(true, error), "text/html");
+            else send(429, { error });
             return;
           }
           const input = await body(request);
@@ -355,7 +509,13 @@ export function webServer(context: {
               secrets.operatorPasswordHash,
             ))
           ) {
-            send(401, { error: "Invalid credentials" });
+            if (formLogin)
+              send(
+                401,
+                loginPage(true, "That password didn't match. Try again."),
+                "text/html",
+              );
+            else send(401, { error: "Invalid credentials" });
             return;
           }
           const created = sessions.create();
@@ -369,6 +529,47 @@ export function webServer(context: {
         }
         if (!session) {
           send(401, { error: "Operator authentication required" });
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/start" || path === "/api/operator/start")
+        ) {
+          const data = await startData();
+          if (path === "/operator/start")
+            send(200, startPage(data, session.csrf), "text/html");
+          else send(200, data);
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/activity" || path === "/api/operator/activity")
+        ) {
+          const runId = config.publicRunId;
+          const data =
+            runId && store.run(runId) ? activityTimeline(db, runId) : null;
+          if (path === "/operator/activity")
+            send(
+              200,
+              activityPage(
+                data,
+                runId && data
+                  ? (currentProfile(db, runId)?.name ?? null)
+                  : null,
+              ),
+              "text/html",
+            );
+          else send(data ? 200 : 404, data ?? { error: "No agent run" });
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/pilot" || path === "/api/operator/pilot")
+        ) {
+          const data = await pilotData();
+          if (path === "/operator/pilot")
+            send(200, pilotOperatorPage(data, session.csrf), "text/html");
+          else send(data ? 200 : 404, data ?? { error: "No pilot run" });
           return;
         }
         if (method === "GET" && path === "/operator/integrations") {
@@ -453,6 +654,174 @@ export function webServer(context: {
           }
           if (api) send(delivered.duplicate ? 200 : 202, delivered);
           else redirect("/operator");
+          return;
+        }
+        if (route === "/operator/agent" || route === "/operator/agent/plan") {
+          const fail = (message: string) => {
+            if (api) send(400, { error: message });
+            else
+              send(
+                400,
+                operatorFormErrorPage({ error: message }, "/operator/start"),
+                "text/html",
+              );
+          };
+          const runId = config.publicRunId;
+          if (!runId || !/^[a-f0-9-]{36}$/.test(runId)) {
+            fail(
+              "Run npm run services:configure and restart the website first",
+            );
+            return;
+          }
+          if (route === "/operator/agent") {
+            let saved;
+            try {
+              saved = saveAgent({
+                db,
+                config,
+                runId,
+                profile: profileFromInput(input),
+              });
+            } catch (error) {
+              fail(
+                error instanceof Error
+                  ? error.message.slice(0, 500)
+                  : "Invalid agent settings",
+              );
+              return;
+            }
+            const applied = await applyProfile(services, runId, saved.profile);
+            store.event(
+              runId,
+              applied.applied ? "agent.applied" : "agent.apply_failed",
+              applied.detail,
+            );
+            if (api) send(saved.created ? 201 : 200, { ...saved, applied });
+            else redirect("/operator/start");
+            return;
+          }
+          const profile = currentProfile(db, runId);
+          const run = store.run(runId);
+          if (!profile || !run) {
+            fail("Create the agent first");
+            return;
+          }
+          let funded = false;
+          try {
+            funded = Boolean(await services.economy.summary(runId));
+          } catch {
+            funded = false;
+          }
+          // Recompute the plan server-side; only available items can be approved.
+          const plan = await proposeFirstPlan({
+            services,
+            profile,
+            runState: run.state,
+            funded,
+          });
+          const requested = Array.isArray(input.items)
+            ? input.items.filter(
+                (item): item is string => typeof item === "string",
+              )
+            : Object.keys(input)
+                .filter((key) => key.startsWith("item:") && input[key])
+                .map((key) => key.slice(5));
+          const selected = plan.items
+            .filter((item) => item.available && requested.includes(item.id))
+            .map((item) => item.id);
+          if (!selected.length) {
+            fail("Choose at least one available step");
+            return;
+          }
+          let sources: string[] = [];
+          if (selected.includes("discovery"))
+            try {
+              sources = sourceUrls(input.sources);
+            } catch (error) {
+              fail(error instanceof Error ? error.message : "Invalid sources");
+              return;
+            }
+          const results = await approveFirstPlan({
+            db,
+            services,
+            runId,
+            profile,
+            plan,
+            selected,
+            sources,
+          });
+          if (api) send(200, { results });
+          else redirect("/operator/start");
+          return;
+        }
+        const pilotAction =
+          /^\/operator\/pilot\/(attest|cost|snapshot|retract)$/.exec(route);
+        if (pilotAction) {
+          const runId = config.publicRunId;
+          const text = (name: string) =>
+            typeof input[name] === "string" ? (input[name] as string) : "";
+          let result: unknown;
+          try {
+            if (!runId || !store.run(runId))
+              throw new Error("No pilot run is configured");
+            if (pilotAction[1] === "attest")
+              result = recordAttestation(db, {
+                runId,
+                stance:
+                  text("stance") === "withdrawn" ? "withdrawn" : "affirmed",
+                evidenceRef: text("evidence"),
+                note: text("note"),
+              });
+            else if (pilotAction[1] === "cost") {
+              const amountMicros = usdToMicros(text("amount"));
+              const common = {
+                runId,
+                amountMicros,
+                evidenceRef: text("evidence"),
+                note: text("note"),
+              };
+              result = text("corrects")
+                ? recordCost(db, {
+                    ...common,
+                    correctsId: /^[1-9][0-9]{0,15}$/.test(text("corrects"))
+                      ? Number(text("corrects"))
+                      : NaN,
+                  })
+                : recordCost(db, {
+                    ...common,
+                    category: text("category") as CostCategory,
+                    periodStart: text("from"),
+                    periodEnd: text("to"),
+                  });
+            } else if (pilotAction[1] === "snapshot")
+              result = await takeSnapshot({
+                db,
+                services,
+                runId,
+                publish: input.publish === true || input.publish === "true",
+              });
+            else {
+              const id = text("snapshotId") || String(input.snapshotId ?? "");
+              if (!/^[1-9][0-9]{0,15}$/.test(id))
+                throw new Error("Snapshot id required");
+              result = retractSnapshot(db, runId, Number(id));
+            }
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message.slice(0, 500)
+                : "Invalid request";
+            if (api) send(400, { error: message });
+            else
+              send(
+                400,
+                operatorFormErrorPage({ error: message }, "/operator/pilot"),
+                "text/html",
+              );
+            return;
+          }
+          if (api) send(200, result);
+          else redirect("/operator/pilot");
           return;
         }
         const match =

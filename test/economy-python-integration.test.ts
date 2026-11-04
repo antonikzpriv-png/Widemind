@@ -16,6 +16,9 @@ import { createEconomyModule } from "../src/modules/economy/module.ts";
 import { hashPassword } from "../src/auth/password.ts";
 import { webServer } from "../src/web/server.ts";
 import { money } from "../src/contracts/index.ts";
+import { pilotReport } from "../src/runtime/pilot.ts";
+import { takeSnapshot, verifyChain } from "../src/runtime/pilot-snapshots.ts";
+import { alertPass } from "../src/runtime/alerts.ts";
 import type {
   BudgetLimit,
   Json,
@@ -602,6 +605,107 @@ test(
       assert.equal(summary.postedMicros, "5000000");
       assert.equal(summary.reservedMicros, "0");
       assert.equal(f.store.actions(runId)[0]!.receipt_json, null);
+    } finally {
+      await f.close();
+    }
+  },
+);
+
+test(
+  "pilot report, published snapshot and alerts read the real Python economy",
+  { timeout: 30000 },
+  async () => {
+    const f = await setup();
+    try {
+      const runId = await f.newRun();
+      f.selectOnce();
+      f.services.tools = {
+        health: () => ({ available: true }),
+        capabilities: () => [
+          { id: "fixture.tool", availability: { available: true } },
+        ],
+        execute: async (action, reservation) => {
+          await f.verify(action, reservation, true);
+          return {
+            kind: "receipt",
+            receipt: f.toolReceipt(action, "250000"),
+          };
+        },
+        reconcile: async () => ({ kind: "unavailable", reason: "unused" }),
+      };
+      f.store.control(runId, "resume");
+      await f.runtime.tick();
+      f.store.control(runId, "pause");
+
+      const report = await pilotReport({
+        db: f.db,
+        services: f.services,
+        runId,
+        view: "private",
+      });
+      assert.equal(report.accounting?.mode, "sandbox");
+      assert.equal(report.outsideSupport?.openingCreditMicros, "5000000");
+      assert.equal(report.outcomes?.operatingChargesMicros, "250000");
+      assert.equal(report.outcomes?.spendableMicros, "4750000");
+      assert.equal(report.outcomes?.netCustomerReceiptsMicros, "0");
+      assert.deepEqual(report.activity.byState, { completed: 1 });
+      assert.deepEqual(report.interventions.byKind, {
+        "operator.resume": 1,
+        "operator.pause": 1,
+      });
+      const status = (id: string) =>
+        report.criteria.find((item) => item.id === id)?.status;
+      assert.equal(status("live_mode"), "not_met");
+      assert.equal(status("opening_exactly_5usd"), "met");
+      assert.equal(status("customer_receipts"), "not_met");
+      assert.equal(report.verdict, "not_met");
+
+      f.config.publicRunId = runId;
+      await takeSnapshot({
+        db: f.db,
+        services: f.services,
+        runId,
+        publish: true,
+      });
+      assert.equal(verifyChain(f.db, runId).ok, true);
+      const page = await (await fetch(f.origin + "/pilot")).text();
+      assert.match(page, /\$4\.75/);
+      assert.equal(page.includes(runId), false);
+      assert.equal(page.includes(gatewayToken), false);
+
+      const settings = {
+        webhookUrl: null,
+        repeatMs: 3_600_000,
+        economy: { url: f.backendUrl, operatorToken },
+      };
+      const healthy = await alertPass({
+        db: f.db,
+        services: f.services,
+        config: f.config,
+        runId,
+        settings,
+      });
+      assert.equal(healthy.active.includes("economy_unavailable"), false);
+      // No payment provider is configured, so dead letters are not observable.
+      assert.equal(
+        healthy.conditions.find((c) => c.id === "reconciliation_dead_letters")
+          ?.active,
+        null,
+      );
+      await f.stopBackend();
+      const down = await alertPass({
+        db: f.db,
+        services: f.services,
+        config: f.config,
+        runId,
+        settings,
+      });
+      assert.ok(down.active.includes("economy_unavailable"));
+      assert.ok(
+        down.notices.some(
+          (n) => n.condition === "economy_unavailable" && n.change === "raised",
+        ),
+      );
     } finally {
       await f.close();
     }

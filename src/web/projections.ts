@@ -188,6 +188,7 @@ export async function publicProjection(
   services: Services,
   dependencyMs = 5000,
   publicRunId?: string,
+  agent?: { name: string; mission: string } | null,
 ): Promise<PublicWebsiteData> {
   const runs = store.runs();
   const latest = publicRunId
@@ -227,6 +228,7 @@ export async function publicProjection(
     offerings: publicOfferings(content.offerings),
     activity: publicActivity(content.activity),
     availability: publicAvailability(content.availability),
+    ...(agent ? { agent: { name: agent.name, mission: agent.mission } } : {}),
   };
 }
 export function privateProjection(

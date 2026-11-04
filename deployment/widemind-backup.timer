@@ -1,0 +1,10 @@
+[Unit]
+Description=WideMind database backup every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:15:00 UTC
+Persistent=true
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target
