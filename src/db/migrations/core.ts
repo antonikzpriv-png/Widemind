@@ -59,4 +59,35 @@ CREATE TABLE runtime_inbox (
 CREATE INDEX runtime_inbox_pending ON runtime_inbox(run_id,consumed_at,received_at);
 `,
   },
+  {
+    version: 3,
+    sql: `
+CREATE TABLE pilot_attestations (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ subject TEXT NOT NULL CHECK(subject IN ('independent_customer')),
+ stance TEXT NOT NULL CHECK(stance IN ('affirmed','withdrawn')),
+ evidence_ref TEXT NOT NULL, note TEXT NOT NULL, recorded_at INTEGER NOT NULL
+);
+CREATE TABLE pilot_costs (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ category TEXT NOT NULL CHECK(category IN ('hosting','domain','subscription','tooling','other')),
+ amount_micros TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL,
+ evidence_ref TEXT NOT NULL, note TEXT NOT NULL,
+ corrects_id INTEGER REFERENCES pilot_costs(id), recorded_at INTEGER NOT NULL,
+ CHECK((corrects_id IS NULL) = (substr(amount_micros,1,1) <> '-'))
+);
+CREATE TRIGGER pilot_attestations_append_only_update BEFORE UPDATE ON pilot_attestations BEGIN SELECT RAISE(ABORT,'pilot attestations are append-only'); END;
+CREATE TRIGGER pilot_attestations_append_only_delete BEFORE DELETE ON pilot_attestations BEGIN SELECT RAISE(ABORT,'pilot attestations are append-only'); END;
+CREATE TRIGGER pilot_costs_append_only_update BEFORE UPDATE ON pilot_costs BEGIN SELECT RAISE(ABORT,'pilot costs are append-only'); END;
+CREATE TRIGGER pilot_costs_append_only_delete BEFORE DELETE ON pilot_costs BEGIN SELECT RAISE(ABORT,'pilot costs are append-only'); END;
+CREATE INDEX pilot_attestations_run ON pilot_attestations(run_id,subject,id);
+CREATE INDEX pilot_costs_run ON pilot_costs(run_id,id);
+CREATE TABLE pilot_alerts (
+ run_id TEXT NOT NULL REFERENCES runtime_runs(id), condition TEXT NOT NULL,
+ active INTEGER NOT NULL, since INTEGER NOT NULL,
+ notified_active INTEGER, notified_at INTEGER,
+ PRIMARY KEY(run_id,condition)
+);
+`,
+  },
 ];

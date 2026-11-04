@@ -72,15 +72,21 @@ test("outcomes use exact integers and keep subsidies and owner funding apart fro
   assert.equal(unknown.netOperatingResultMicros, null);
 });
 
-test("criteria never certify independence and fail sandbox, test or owner-funded runs", () => {
+test("criteria require an attestation for independence and fail sandbox, test or owner-funded runs", () => {
   const met = pilotCriteria(summary());
   assert.ok(
-    met.every(
-      (item) =>
-        item.status === "met" ||
-        (item.id === "independent_customer" &&
-          item.status === "attestation_required"),
-    ),
+    met
+      .filter((item) => item.required)
+      .every(
+        (item) =>
+          item.status === "met" ||
+          (item.id === "independent_customer" &&
+            item.status === "attestation_required"),
+      ),
+  );
+  assert.equal(
+    met.find((item) => item.id === "operating_costs_covered")?.status,
+    "unknown",
   );
   const status = (s: FinancialSummary, id: string) =>
     pilotCriteria(s).find((item) => item.id === id)?.status;

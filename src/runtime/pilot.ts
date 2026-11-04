@@ -7,6 +7,12 @@ import type { DatabaseSync } from "node:sqlite";
 import type { FinancialSummary, RuntimeConfig } from "../contracts/index.ts";
 import type { Services } from "../modules/registry.ts";
 import { Store } from "./store.ts";
+import {
+  latestAttestation,
+  outsideLedgerCosts,
+  type Attestation,
+  type OutsideLedgerCosts,
+} from "./pilot-records.ts";
 
 export const PILOT_OPENING_MICROS = "5000000";
 const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/;
@@ -184,6 +190,8 @@ export type CriterionStatus =
   | "attestation_required";
 export interface Criterion {
   id: string;
+  /** Required criteria decide the milestone verdict. */
+  required: boolean;
   status: CriterionStatus;
   detail: string;
 }
@@ -239,14 +247,24 @@ export interface PilotReport {
   outcomes: PilotOutcomes | null;
   outsideSupport: OutsideSupport | null;
   criteria: Criterion[];
-  verdict: "not_met" | "pending_attestation";
+  attestation: {
+    status: "affirmed" | "withdrawn" | "none";
+    recordedAt: string | null;
+    evidenceRef?: string;
+    note?: string;
+  };
+  outsideLedgerCosts: OutsideLedgerCosts;
+  /** Net operating result minus outside-ledger costs; null when net is unknown. */
+  resultAfterOutsideCostsMicros: string | null;
+  verdict: "met" | "not_met" | "pending_attestation";
   limitations: string[];
 }
 
 const LIMITATIONS = [
   "Figures come from the local runtime and the economy service's accounting; they are not a bank or provider reconciliation.",
-  "Accounting cannot establish that a paying customer is independent of the operator; that requires a separate attestation.",
-  "Ongoing hosting, subscriptions and other operating costs outside the ledger are not included unless they were recorded as charges.",
+  "Customer independence and costs outside the ledger are operator-recorded facts, not verified by accounting.",
+  "Costs outside the ledger are complete only if the operator recorded every hosting, domain, subscription and tooling bill.",
+  "Accounting does not show that delivered work was useful; check delivery acceptance in the business records.",
 ];
 
 function sumKnown(values: (string | undefined)[]): bigint | null {
@@ -297,27 +315,68 @@ export function pilotOutcomes(summary: FinancialSummary): {
   };
 }
 
-export function pilotCriteria(summary: FinancialSummary | null): Criterion[] {
+export interface CriteriaContext {
+  attestation: Attestation | null;
+  outsideCosts: OutsideLedgerCosts;
+}
+const NO_CONTEXT: CriteriaContext = {
+  attestation: null,
+  outsideCosts: { entries: 0, totalMicros: "0", byCategory: {} },
+};
+
+function independence(attestation: Attestation | null): Criterion {
+  return attestation?.stance === "affirmed"
+    ? {
+        id: "independent_customer",
+        required: true,
+        status: "met",
+        detail: `Operator attested customer independence on ${attestation.recordedAt.slice(0, 10)}; evidence is held privately`,
+      }
+    : {
+        id: "independent_customer",
+        required: true,
+        status: "attestation_required",
+        detail: attestation
+          ? "The latest independence attestation was withdrawn"
+          : "Accounting cannot show that the payer is independent of the operator; record an attestation with npm run pilot:attest",
+      };
+}
+
+/** Net operating result after costs the operator recorded outside the ledger. */
+export function resultAfterOutsideCosts(
+  outcomes: PilotOutcomes | null,
+  outsideCosts: OutsideLedgerCosts,
+): string | null {
+  if (!outcomes || outcomes.netOperatingResultMicros === null) return null;
+  return String(
+    BigInt(outcomes.netOperatingResultMicros) -
+      BigInt(outsideCosts.totalMicros),
+  );
+}
+
+export function pilotCriteria(
+  summary: FinancialSummary | null,
+  context: CriteriaContext = NO_CONTEXT,
+): Criterion[] {
   if (!summary)
     return [
       {
         id: "accounting_available",
+        required: true,
         status: "not_met",
         detail: "No financial summary is available for the run",
       },
-      {
-        id: "independent_customer",
-        status: "attestation_required",
-        detail: "Independence of the paying customer must be attested",
-      },
+      independence(context.attestation),
     ];
   const { outcomes } = pilotOutcomes(summary);
   const criterion = (
     id: string,
     status: CriterionStatus,
     detail: string,
-  ): Criterion => ({ id, status, detail });
+    required = true,
+  ): Criterion => ({ id, required, status, detail });
   const net = outcomes.netCustomerReceiptsMicros;
+  const afterCosts = resultAfterOutsideCosts(outcomes, context.outsideCosts);
   return [
     criterion(
       "live_mode",
@@ -345,11 +404,7 @@ export function pilotCriteria(summary: FinancialSummary | null): Criterion[] {
       BigInt(summary.customerReceiptsMicros) > 0n ? "met" : "not_met",
       `Verified customer receipts are ${summary.customerReceiptsMicros} micro-USD`,
     ),
-    criterion(
-      "independent_customer",
-      "attestation_required",
-      "Accounting cannot show that the payer is independent of the operator",
-    ),
+    independence(context.attestation),
     criterion(
       "delivery_costs_covered",
       net === null
@@ -367,11 +422,28 @@ export function pilotCriteria(summary: FinancialSummary | null): Criterion[] {
       summary.ownerFundingMicros === "0" ? "met" : "not_met",
       `Owner funding after opening is ${summary.ownerFundingMicros} micro-USD`,
     ),
+    criterion(
+      "operating_costs_covered",
+      context.outsideCosts.entries === 0 || afterCosts === null
+        ? "unknown"
+        : BigInt(afterCosts) >= 0n
+          ? "met"
+          : "not_met",
+      context.outsideCosts.entries === 0
+        ? "No costs outside the ledger were recorded; record hosting and subscriptions with npm run pilot:cost"
+        : afterCosts === null
+          ? "Net receipts are unknown"
+          : `Result after ${context.outsideCosts.totalMicros} micro-USD of outside costs is ${afterCosts} micro-USD`,
+      false,
+    ),
   ];
 }
 
+/** Only required criteria decide the verdict; profitability is reported separately. */
 function verdict(criteria: Criterion[]): PilotReport["verdict"] {
-  return criteria.every(
+  const required = criteria.filter((item) => item.required);
+  if (required.every((item) => item.status === "met")) return "met";
+  return required.every(
     (item) => item.status === "met" || item.status === "attestation_required",
   )
     ? "pending_attestation"
@@ -431,7 +503,9 @@ export async function pilotReport(input: {
 
   const summary = await safeSummary(services, runId);
   const money = summary ? pilotOutcomes(summary) : null;
-  const criteria = pilotCriteria(summary);
+  const attestation = latestAttestation(db, runId);
+  const outsideCosts = outsideLedgerCosts(db, runId, !isPublic);
+  const criteria = pilotCriteria(summary, { attestation, outsideCosts });
   return {
     version: 1,
     verificationScope: "local_records_only",
@@ -470,6 +544,18 @@ export async function pilotReport(input: {
     },
     outcomes: money?.outcomes ?? null,
     outsideSupport: money?.outsideSupport ?? null,
+    attestation: {
+      status: attestation?.stance ?? "none",
+      recordedAt: attestation?.recordedAt ?? null,
+      ...(isPublic || !attestation
+        ? {}
+        : { evidenceRef: attestation.evidenceRef, note: attestation.note }),
+    },
+    outsideLedgerCosts: outsideCosts,
+    resultAfterOutsideCostsMicros: resultAfterOutsideCosts(
+      money?.outcomes ?? null,
+      outsideCosts,
+    ),
     criteria,
     verdict: verdict(criteria),
     limitations: LIMITATIONS,

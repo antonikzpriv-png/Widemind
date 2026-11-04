@@ -1,6 +1,14 @@
 # Real paid survival pilot tooling
 
-Two read-only commands support [Milestone 7](ROADMAP.md#7-real-paid-survival-pilot). Neither creates a run, grants credit, contacts a payment provider or changes state. Both select the run from `--run <id>` or `WIDEMIND_COMMERCE_RUN_ID`.
+These commands support [Milestone 7](ROADMAP.md#7-real-paid-survival-pilot). None creates a run, grants credit, contacts a payment provider or changes a balance or the ledger. All select the run from `--run <id>` or `WIDEMIND_COMMERCE_RUN_ID`.
+
+| Command | Purpose |
+| --- | --- |
+| `pilot:preflight` | Read-only go-live checklist |
+| `pilot:report` | Auditable run record (`--public` for a redacted version) |
+| `pilot:attest` | Record or withdraw the customer-independence attestation |
+| `pilot:cost` | Record costs paid outside the ledger, or correct one |
+| `pilot:alerts` | Notify the operator when the run needs attention |
 
 ## Go-live checklist
 
@@ -38,15 +46,64 @@ The report combines the runtime database and the economy summary:
 - **Activity**: action counts by state and total attempts. The private view adds counts per tool.
 - **Outcomes**: gross and net customer receipts (after processor fees, refunds and chargebacks, plus reversals), operating charges, net operating result, spendable, reserved and held amounts, and exhaustion. Exact integer micro-USD strings. Net values are `null` when the economy did not report a deduction category.
 - **Outside support**: opening credit, owner funding, test funding and noncash infrastructure subsidies, kept separate from receipts.
-- **Criteria** for the milestone acceptance: `live_mode`, `opening_exactly_5usd`, `no_test_funding`, `customer_receipts`, `delivery_costs_covered`, `no_owner_funding`, each `met`, `not_met` or `unknown`. `independent_customer` is always `attestation_required`.
-- **Verdict**: `pending_attestation` when every accounting criterion is met, otherwise `not_met`. The tool never reports the pilot as passed: customer independence needs a separate attestation.
+- **Attestation**: the latest customer-independence attestation (`affirmed`, `withdrawn` or `none`).
+- **Outside-ledger costs**: totals by category, and `resultAfterOutsideCostsMicros` (net operating result minus those costs).
+- **Criteria**: `live_mode`, `opening_exactly_5usd`, `no_test_funding`, `customer_receipts`, `independent_customer`, `delivery_costs_covered`, `no_owner_funding` are required. `operating_costs_covered` is reported but not required: the roadmap treats covering a job's delivery costs as the first milestone, and full profitability as a later one. Each is `met`, `not_met`, `unknown`, or for independence `attestation_required`.
+- **Verdict**: `met` when every required criterion is met, `pending_attestation` when only the attestation is missing, otherwise `not_met`.
 
-The public view omits the run identity, per-event times and tool names. It never includes customer, payment, action or provider identifiers.
+The public view omits the run identity, per-event times, tool names, attestation evidence and notes, and individual cost records. It never includes customer, payment, action or provider identifiers.
+
+## Customer independence
+
+Accounting can show that money arrived, not who paid it. After checking the payer is not you or someone acting for you:
+
+```sh
+npm run pilot:attest -- --independent-customer --evidence "<private reference>" [--note "..."]
+npm run pilot:attest -- --withdraw --evidence "<reason>"
+```
+
+The latest entry decides; a withdrawal supersedes an earlier affirmation. Entries are append-only (database triggers reject edits and deletes) and are also written to the run's event log. The evidence reference stays private: use a pointer such as a transaction or correspondence ID, not raw customer data.
+
+## Costs outside the ledger
+
+Hosting, domains, subscriptions and tooling that WideMind does not pay from its balance:
+
+```sh
+npm run pilot:cost -- --category hosting --amount 6.50 --from 2026-11-01 --to 2026-11-30 --evidence "invoice 881"
+npm run pilot:cost -- --corrects 1 --amount 1.50 --evidence "credit note"
+npm run pilot:cost -- --list
+```
+
+Categories: `hosting`, `domain`, `subscription`, `tooling`, `other`. Amounts are USD with up to six decimals, stored as exact micro-USD. A correction is a new negative entry against an original entry, and cannot reduce it below zero. History is never edited. These entries do not change balances or spendable credit.
+
+## Alerts
+
+```sh
+npm run pilot:alerts                    # one pass, for cron
+npm run pilot:alerts -- --watch 300     # check every 300 seconds
+```
+
+Run this as its own process, separate from the worker, so it can notice the worker stopping. Run one alert process per run; several would each send the same notification.
+
+| Condition | Severity | Active when |
+| --- | --- | --- |
+| `worker_down` | critical | No current persistent worker heartbeat |
+| `run_failed` | critical | The run state is `failed` |
+| `economy_unavailable` | critical | The economy is unhealthy or its summary read fails |
+| `reconciliation_dead_letters` | critical | Payment reconciliation tasks exhausted their retries |
+| `credit_exhausted` | warning | Spendable credit is zero or less, or the run is `exhausted` |
+| `unresolved_actions` | warning | Actions have an unknown external outcome |
+
+Dead letters are read from the economy's operator API when `WIDEMIND_ECONOMY_URL` and `WIDEMIND_ECONOMY_OPERATOR_TOKEN` are set; otherwise that condition is reported as not observable and never alerts. A condition that cannot be observed neither raises nor clears.
+
+A notification is sent when a condition is raised, when it clears, and every `WIDEMIND_ALERT_REPEAT_MINUTES` (default 360, minimum 5) while it stays active. Set `WIDEMIND_ALERT_WEBHOOK_URL` (HTTPS, or HTTP on loopback; no embedded credentials) to receive a JSON POST with `text` and `content` fields, so Slack-style and Discord-style incoming webhooks work directly; `alerts` holds the structured notices. Email works through any webhook-to-email relay. Without a webhook, notices are printed only. Delivery is recorded only after a 2xx answer, so a failed delivery is retried on the next pass. Messages contain condition names, states and counts only. The webhook URL is never printed.
+
+Exit status: 0 nothing active, 2 a condition is active, 3 delivery failed.
 
 ## Limits
 
-Figures are local records only: they are not a bank or provider reconciliation. Hosting, subscriptions and other costs outside the ledger are excluded unless recorded as charges. For accounting consistency, also run the economy's integrity audit ([reporting](ECONOMY_REPORTING.md)).
+Figures are local records only: they are not a bank or provider reconciliation. Independence and outside costs are operator statements; the report is only as complete as what you recorded. Delivery usefulness is not assessed here; check delivery acceptance in the business records. For accounting consistency, also run the economy's integrity audit ([reporting](ECONOMY_REPORTING.md)).
 
 ## Verification
 
-`node --test test/pilot.test.ts` covers run selection, exact-integer outcomes, criteria for sandbox, test-funded, owner-funded and unprofitable runs, intervention and activity counting, public redaction, an offline economy, and secret non-disclosure in readiness. These are local fixtures, not a live pilot.
+`node --test test/pilot*.test.ts` covers attestation and cost recording, append-only enforcement, correction limits, exact USD parsing, verdicts with and without attestation, alert raise/repeat/clear, failed-delivery retry and secret non-disclosure, plus run selection, exact-integer outcomes, criteria for sandbox, test-funded, owner-funded and unprofitable runs, intervention and activity counting, public redaction, an offline economy, and secret non-disclosure in readiness. These are local fixtures, not a live pilot.
