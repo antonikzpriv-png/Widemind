@@ -131,7 +131,7 @@ export async function pilotReadiness(input: {
   add(
     "economy_available",
     economy.available,
-    "Economy service reachable",
+    "Economy module configured (reachability is shown by economy_live_opening)",
     `Economy unavailable: ${economy.available ? "" : economy.reason}`,
   );
   const summary = await safeSummary(services, run ? runId : null);

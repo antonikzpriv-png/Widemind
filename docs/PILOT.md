@@ -9,6 +9,7 @@ These commands support [Milestone 7](ROADMAP.md#7-real-paid-survival-pilot). Non
 | `pilot:attest` | Record or withdraw the customer-independence attestation |
 | `pilot:cost` | Record costs paid outside the ledger, or correct one |
 | `pilot:alerts` | Notify the operator when the run needs attention |
+| `pilot:snapshot` | Save the public report over time and choose what the website shows |
 
 ## Go-live checklist
 
@@ -53,6 +54,21 @@ The report combines the runtime database and the economy summary:
 
 The public view omits the run identity, per-event times, tool names, attestation evidence and notes, and individual cost records. It never includes customer, payment, action or provider identifiers.
 
+## Snapshots and the public pilot page
+
+```sh
+npm run pilot:snapshot                      # save a snapshot, not published
+npm run pilot:snapshot -- --publish         # save and publish on the website
+npm run pilot:snapshot -- --publish --every 86400   # daily published snapshots
+npm run pilot:snapshot -- --list            # ids, times, hashes, publication state
+npm run pilot:snapshot -- --verify          # check the hash chain (exit 2 if broken)
+npm run pilot:snapshot -- --retract <id>    # remove a snapshot from the website
+```
+
+A snapshot stores the **public view** of the report, so it never holds private evidence, notes, cost records, tool names or the run identity. Each snapshot's SHA-256 hash covers the previous snapshot's hash, the run, the time and the report, so changing or removing an earlier record breaks the chain. The table is append-only; the only permitted change is retracting a publication, which keeps the snapshot and its hash. `--every` takes at least 300 seconds; cron running the plain command works too.
+
+`/pilot` on the website (and `/api/pilot` as JSON) shows the latest published, unretracted snapshot for `WIDEMIND_COMMERCE_RUN_ID`. It shows the verdict, each criterion, money in and out, outside help, interventions, running costs, a timeline of published snapshots, whether the chain verifies, and the latest hash. It never reads the economy live, so nothing reaches the public page until you publish it. With nothing published it says so instead of estimating.
+
 ## Customer independence
 
 Accounting can show that money arrived, not who paid it. After checking the payer is not you or someone acting for you:
@@ -89,7 +105,7 @@ Run this as its own process, separate from the worker, so it can notice the work
 | --- | --- | --- |
 | `worker_down` | critical | No current persistent worker heartbeat |
 | `run_failed` | critical | The run state is `failed` |
-| `economy_unavailable` | critical | The economy is unhealthy or its summary read fails |
+| `economy_unavailable` | critical | No accounting summary can be read (economy unreachable or failing, or the run was never opened) |
 | `reconciliation_dead_letters` | critical | Payment reconciliation tasks exhausted their retries |
 | `credit_exhausted` | warning | Spendable credit is zero or less, or the run is `exhausted` |
 | `unresolved_actions` | warning | Actions have an unknown external outcome |
@@ -106,4 +122,4 @@ Figures are local records only: they are not a bank or provider reconciliation. 
 
 ## Verification
 
-`node --test test/pilot*.test.ts` covers attestation and cost recording, append-only enforcement, correction limits, exact USD parsing, verdicts with and without attestation, alert raise/repeat/clear, failed-delivery retry and secret non-disclosure, plus run selection, exact-integer outcomes, criteria for sandbox, test-funded, owner-funded and unprofitable runs, intervention and activity counting, public redaction, an offline economy, and secret non-disclosure in readiness. These are local fixtures, not a live pilot.
+`node --test test/pilot*.test.ts` covers snapshot hash chaining, tamper detection, retraction, the public page's publication boundary, attestation and cost recording, append-only enforcement, correction limits, exact USD parsing, verdicts with and without attestation, alert raise/repeat/clear, failed-delivery retry and secret non-disclosure, plus run selection, exact-integer outcomes, criteria for sandbox, test-funded, owner-funded and unprofitable runs, intervention and activity counting, public redaction, an offline economy, and secret non-disclosure in readiness. The last test in `test/economy-python-integration.test.ts` runs the report, a published snapshot, the `/pilot` page and alerts against the real Python economy service with a sandbox opening, including the economy being stopped. These are local fixtures and sandbox accounting, not a live pilot.

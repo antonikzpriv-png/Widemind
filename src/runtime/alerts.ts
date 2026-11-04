@@ -127,20 +127,25 @@ export async function evaluateConditions(input: {
     `Run state is ${run.state}`,
   );
 
-  let summary = null,
-    economyOk = services.economy.health().available;
-  if (economyOk) {
+  // The economy client reports failures as a missing summary rather than an
+  // error, and a pilot run is always opened, so no summary means accounting
+  // cannot be read.
+  let summary = null;
+  if (services.economy.health().available) {
     try {
       summary = await services.economy.summary(runId);
     } catch {
-      economyOk = false;
+      summary = null;
     }
   }
+  const economyOk = summary !== null;
   add(
     "economy_unavailable",
     "critical",
     !economyOk,
-    economyOk ? "Economy reachable" : "Economy service unreachable or failing",
+    economyOk
+      ? "Economy accounting readable"
+      : "No accounting summary: economy unreachable, failing, or the run is not opened",
   );
   // Without a summary, only the run state can show exhaustion.
   const exhausted =

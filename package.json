@@ -33,6 +33,7 @@
     "pilot:attest": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-attest-main.ts",
     "pilot:cost": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-cost-main.ts",
     "pilot:alerts": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-alerts-main.ts",
+    "pilot:snapshot": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-snapshot-main.ts",
     "integration:smoke": "node scripts/integration-smoke.mjs",
     "integration:browser": "node scripts/integration-smoke.mjs --browser",
     "services:test": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs test",

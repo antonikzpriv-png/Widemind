@@ -90,4 +90,22 @@ CREATE TABLE pilot_alerts (
 );
 `,
   },
+  {
+    version: 4,
+    sql: `
+CREATE TABLE pilot_snapshots (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ taken_at INTEGER NOT NULL, report_json TEXT NOT NULL,
+ prev_hash TEXT, hash TEXT NOT NULL UNIQUE,
+ published INTEGER NOT NULL CHECK(published IN (0,1)), retracted_at INTEGER
+);
+CREATE INDEX pilot_snapshots_run ON pilot_snapshots(run_id,id);
+CREATE TRIGGER pilot_snapshots_append_only_delete BEFORE DELETE ON pilot_snapshots BEGIN SELECT RAISE(ABORT,'pilot snapshots are append-only'); END;
+CREATE TRIGGER pilot_snapshots_retract_only BEFORE UPDATE ON pilot_snapshots
+ WHEN NOT (OLD.published=1 AND NEW.published=0 AND OLD.retracted_at IS NULL AND NEW.retracted_at IS NOT NULL
+  AND NEW.id=OLD.id AND NEW.run_id=OLD.run_id AND NEW.taken_at=OLD.taken_at AND NEW.report_json=OLD.report_json
+  AND NEW.prev_hash IS OLD.prev_hash AND NEW.hash=OLD.hash)
+ BEGIN SELECT RAISE(ABORT,'pilot snapshots are append-only; only retracting a publication is allowed'); END;
+`,
+  },
 ];

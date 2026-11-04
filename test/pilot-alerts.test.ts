@@ -187,6 +187,17 @@ test("economy failure raises its own alert and unresolved actions are counted", 
       null,
     );
     assert.equal(result.channel, "stdout");
+
+    // The real client returns null instead of throwing when unreachable.
+    f.services.economy.summary = async () => null;
+    const missing = await alertPass({
+      db: f.db,
+      services: f.services,
+      config: f.config,
+      runId: id,
+      settings: { webhookUrl: null, repeatMs: 3_600_000, economy: null },
+    });
+    assert.ok(missing.active.includes("economy_unavailable"));
     assert.equal(result.delivered, true);
   } finally {
     f.close();

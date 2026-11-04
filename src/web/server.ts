@@ -1,4 +1,6 @@
 import { commercePage, commerceScript, integrationsPage } from "./commerce.ts";
+import { publishedPilot } from "../runtime/pilot-snapshots.ts";
+import { pilotPage } from "./pilot-page.ts";
 import { callDependency, DependencyTimeout } from "../runtime/dependencies.ts";
 import { RequestError } from "./errors.ts";
 import { createServer } from "node:http";
@@ -110,6 +112,16 @@ export function webServer(context: {
         }
         if (method === "GET" && path === "/healthz") {
           send(200, { ok: true, service: "web", profile: config.profile });
+          return;
+        }
+        if (method === "GET" && (path === "/pilot" || path === "/api/pilot")) {
+          // Only operator-published, unretracted snapshots; never a live read.
+          const data =
+            config.publicRunId && store.run(config.publicRunId)
+              ? publishedPilot(db, config.publicRunId)
+              : null;
+          if (path === "/pilot") send(200, pilotPage(data), "text/html");
+          else send(200, data ?? { latest: null, timeline: [], chain: null });
           return;
         }
         if (method === "GET" && (path === "/" || path === "/api/public")) {

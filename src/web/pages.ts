@@ -29,7 +29,7 @@ function usd(value: unknown) {
   }
 }
 export function layout(title: string, body: string) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · WideMind</title><link rel="stylesheet" href="/style.css"></head><body><header><a href="/" class="brand">W<span>•</span> WideMind</a><nav aria-label="Primary"><a href="/">Headquarters</a><a href="/commerce">Work with WideMind</a><a href="/operator">Operator</a></nav></header><main>${body}</main><footer>Independent worker · Private commitments · Times shown in UTC</footer></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · WideMind</title><link rel="stylesheet" href="/style.css"></head><body><header><a href="/" class="brand">W<span>•</span> WideMind</a><nav aria-label="Primary"><a href="/">Headquarters</a><a href="/commerce">Work with WideMind</a><a href="/pilot">Pilot</a><a href="/operator">Operator</a></nav></header><main>${body}</main><footer>Independent worker · Private commitments · Times shown in UTC</footer></body></html>`;
 }
 export function publicPage(data: PublicWebsiteData) {
   return layout(
