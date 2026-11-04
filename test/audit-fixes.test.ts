@@ -153,7 +153,19 @@ test("sign-in form errors render the page, the font is served, and every page sh
 
     for (const path of ["/", "/commerce", "/pilot", "/operator"]) {
       const html = await (await fetch(origin + path)).text();
-      assert.match(html, /class="brand"><span class="mark"/, path);
+      assert.ok(
+        html.includes(
+          'class="brand" aria-label="WideMind Agent home"><svg class="brand-mark"',
+        ),
+        path,
+      );
+      assert.match(
+        html,
+        /<strong>WideMind<\/strong><small>Agent<\/small>/,
+        path,
+      );
+      assert.doesNotMatch(html, /<img/, path);
+      assert.doesNotMatch(html, /class="mark"/, path);
       assert.match(html, /href="\/pilot">Pilot</, path);
       assert.doesNotMatch(html, / style="/, path);
     }

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { PublicWebsiteData } from "../contracts/index.ts";
 import type { privateProjection } from "./projections.ts";
@@ -18,12 +19,22 @@ function usd(value: unknown) {
     return "Unavailable";
   }
 }
+// Inline SVG keeps pages free of <img> tags, which the escaping tests forbid outright.
+const CALYTHE_MARK = readFileSync(
+  new URL("../../public/brand/calythe-mark.svg", import.meta.url),
+  "utf8",
+)
+  .trim()
+  .replace(
+    "<svg ",
+    '<svg class="brand-mark" width="27" height="27" aria-hidden="true" focusable="false" ',
+  );
 export function layout(
   title: string,
   body: string,
   options: { script?: string; footer?: string } = {},
 ) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · WideMind</title><link rel="stylesheet" href="/style.css">${options.script ? `<script src="${escape(options.script)}" defer></script>` : ""}</head><body><header><a href="/" class="brand"><span class="mark" aria-hidden="true">W</span>WideMind<small>Agent</small></a><nav aria-label="Primary"><a href="/">Headquarters</a><a href="/commerce">Work with WideMind</a><a href="/pilot">Pilot</a><a href="/operator">Operator</a></nav></header><main>${body}</main><footer>${escape(options.footer ?? "INDEPENDENT WORKER · PRIVATE COMMITMENTS · TIMES IN UTC")}</footer></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · WideMind</title><link rel="stylesheet" href="/style.css">${options.script ? `<script src="${escape(options.script)}" defer></script>` : ""}</head><body><header><a href="/" class="brand" aria-label="WideMind Agent home">${CALYTHE_MARK}<span class="brand-copy"><strong>WideMind</strong><small>Agent</small></span></a><nav aria-label="Primary"><a href="/">Headquarters</a><a href="/commerce">Work with WideMind</a><a href="/pilot">Pilot</a><a href="/operator">Operator</a></nav></header><main>${body}</main><footer>${escape(options.footer ?? "INDEPENDENT WORKER · PRIVATE COMMITMENTS · TIMES IN UTC")}</footer></body></html>`;
 }
 const OFFERING_NAMES: Record<string, string> = {
   "research-brief": "Sourced research brief",
@@ -161,8 +172,8 @@ export const css = `@font-face{font-family:"WideMind Geist";src:url(/fonts/geist
 ::selection{background:rgba(233,233,230,.14)}
 header,main,footer{width:min(1200px,100%);margin:auto;padding:22px 32px}
 header{display:flex;align-items:center;justify-content:space-between;gap:24px;border-bottom:1px solid var(--hair);min-height:75px}
-.brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:500;letter-spacing:-.8px;white-space:nowrap}.brand span{color:var(--muted)}.brand small{padding-left:10px;border-left:1px solid var(--hair);color:var(--muted);font-size:12px;font-weight:400;letter-spacing:0}
-.mark{display:inline-grid;place-items:center;width:27px;height:27px;border-radius:8px;border:1px solid var(--hair);background:var(--raised);font-size:13px;font-weight:650;letter-spacing:-.5px}
+.brand{display:flex;align-items:center;gap:11px;flex:none;min-height:75px;padding:0 12px;margin-left:-12px;color:var(--fg);white-space:nowrap}.brand:hover{text-decoration:none}.brand-mark{width:27px;height:27px;flex:none}.brand-copy{display:flex;align-items:baseline;gap:10px}.brand-copy strong{font-size:20px;line-height:1;font-weight:500;letter-spacing:-.8px}.brand-copy small{padding-left:10px;border-left:1px solid var(--hair);color:var(--muted);font-size:12px;font-weight:400}
+
 nav{display:flex;gap:4px;flex-wrap:wrap}nav a{padding:8px 13px;border-radius:999px;color:var(--muted);font-size:13px}nav a:hover,nav a[aria-current=page]{background:var(--hover);color:var(--fg);text-decoration:none}
 main{padding-block:44px 80px}
 h1{font-size:clamp(32px,5vw,58px);font-weight:620;line-height:1.05;letter-spacing:-.045em;max-width:900px;margin:12px 0 18px}
@@ -226,4 +237,4 @@ footer{color:var(--faint);border-top:1px solid var(--hair);font:10px var(--mono)
 .step-cards{display:grid;gap:10px;margin:14px 0}.step-card{display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border:1px solid var(--hair);border-radius:12px;background:var(--raised)}.step-card.done{opacity:.72}.step-card .num{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid var(--hair);font:600 11px var(--mono);color:var(--muted)}.step-card.done .num{border-color:rgba(130,178,144,.4);color:var(--ok)}.step-card h3{margin:2px 0 4px}.step-card p{margin:0;font-size:12px;color:var(--muted)}.step-card form{margin:0}
 .choice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--hair);border-radius:10px;margin:8px 0;background:var(--raised)}.choice label{margin:0;display:flex;align-items:center;color:var(--fg);font-size:13px}.choice input[name^=price]{width:96px;text-align:right}
 @media(max-width:900px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.business-grid{grid-template-columns:minmax(0,1fr)}header,main,footer{padding-inline:24px}}
-@media(max-width:520px){.business-nav{flex-wrap:wrap;overflow:visible}.business-nav a{min-height:44px;display:inline-flex;align-items:center}header,main,footer{padding-inline:16px}header{gap:10px;min-height:64px;flex-wrap:wrap}.brand{font-size:18px}.brand small{display:none}header nav{gap:0}header nav a{font-size:12px;padding:8px}main{padding-block:26px 52px}.hero h1{font-size:44px}.lead{font-size:15px}section{padding:18px}.business-top h1{font-size:30px}.form-grid,.welcome-list{grid-template-columns:minmax(0,1fr)}.stats{gap:8px}.stats section{padding:14px}.stat-value{font-size:22px}.row{gap:10px}.row-meta{font-size:10px}.facts{grid-template-columns:minmax(0,1fr)}.facts dd{text-align:left}.pagination{align-items:flex-start;flex-direction:column}.inline-form label{min-width:100%}.card{padding:24px 20px}.choice{flex-wrap:wrap}}`;
+@media(max-width:520px){.business-nav{flex-wrap:wrap;overflow:visible}.business-nav a{min-height:44px;display:inline-flex;align-items:center}header,main,footer{padding-inline:16px}header{gap:10px;min-height:64px;flex-wrap:wrap}.brand{min-height:62px}header nav{gap:0}header nav a{font-size:12px;padding:8px}main{padding-block:26px 52px}.hero h1{font-size:44px}.lead{font-size:15px}section{padding:18px}.business-top h1{font-size:30px}.form-grid,.welcome-list{grid-template-columns:minmax(0,1fr)}.stats{gap:8px}.stats section{padding:14px}.stat-value{font-size:22px}.row{gap:10px}.row-meta{font-size:10px}.facts{grid-template-columns:minmax(0,1fr)}.facts dd{text-align:left}.pagination{align-items:flex-start;flex-direction:column}.inline-form label{min-width:100%}.card{padding:24px 20px}.choice{flex-wrap:wrap}}`;
