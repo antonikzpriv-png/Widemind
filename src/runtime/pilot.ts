@@ -4,9 +4,14 @@
  * contact payment providers or certify facts that accounting cannot establish.
  */
 import type { DatabaseSync } from "node:sqlite";
-import type { FinancialSummary, RuntimeConfig } from "../contracts/index.ts";
+import type {
+  DeliveryOutcomes,
+  FinancialSummary,
+  RuntimeConfig,
+} from "../contracts/index.ts";
 import type { Services } from "../modules/registry.ts";
 import { Store } from "./store.ts";
+import { backupFresh, backupSettings } from "./backup.ts";
 import {
   latestAttestation,
   outsideLedgerCosts,
@@ -37,6 +42,22 @@ export function pilotRunId(
   const index = argv.indexOf("--run");
   const value = index >= 0 ? argv[index + 1] : env.WIDEMIND_COMMERCE_RUN_ID;
   return value && RUN_ID.test(value) ? value : null;
+}
+
+async function safeDeliveries(
+  services: Services,
+  runId: string,
+): Promise<DeliveryOutcomes | null> {
+  if (
+    !services.business.deliveryOutcomes ||
+    !services.business.health().available
+  )
+    return null;
+  try {
+    return await services.business.deliveryOutcomes(runId);
+  } catch {
+    return null;
+  }
 }
 
 async function safeSummary(
@@ -167,6 +188,18 @@ export async function pilotReadiness(input: {
     `Email capability available (${email.map((item) => item.id).join(", ")})`,
     "No Gmail capability available; complete dedicated mailbox OAuth",
   );
+  let backups: { fresh: boolean; detail: string } | null = null;
+  try {
+    backups = backupFresh(backupSettings(env), now);
+  } catch (error) {
+    backups = { fresh: false, detail: (error as Error).message };
+  }
+  add(
+    "backups_recent",
+    backups?.fresh === true,
+    backups?.detail ?? "",
+    backups?.detail ?? "Set WIDEMIND_BACKUP_DIR and schedule npm run backup",
+  );
   const business = services.business.health();
   add(
     "business_available",
@@ -254,6 +287,8 @@ export interface PilotReport {
     note?: string;
   };
   outsideLedgerCosts: OutsideLedgerCosts;
+  /** Aggregate order outcomes from the business service; null when unavailable. */
+  deliveries: DeliveryOutcomes | null;
   /** Net operating result minus outside-ledger costs; null when net is unknown. */
   resultAfterOutsideCostsMicros: string | null;
   verdict: "met" | "not_met" | "pending_attestation";
@@ -264,7 +299,7 @@ const LIMITATIONS = [
   "Figures come from the local runtime and the economy service's accounting; they are not a bank or provider reconciliation.",
   "Customer independence and costs outside the ledger are operator-recorded facts, not verified by accounting.",
   "Costs outside the ledger are complete only if the operator recorded every hosting, domain, subscription and tooling bill.",
-  "Accounting does not show that delivered work was useful; check delivery acceptance in the business records.",
+  "Useful work is approximated by paid deliveries that were not fully refunded; customer satisfaction itself is not recorded.",
 ];
 
 function sumKnown(values: (string | undefined)[]): bigint | null {
@@ -318,11 +353,40 @@ export function pilotOutcomes(summary: FinancialSummary): {
 export interface CriteriaContext {
   attestation: Attestation | null;
   outsideCosts: OutsideLedgerCosts;
+  deliveries?: DeliveryOutcomes | null;
 }
 const NO_CONTEXT: CriteriaContext = {
   attestation: null,
   outsideCosts: { entries: 0, totalMicros: "0", byCategory: {} },
 };
+
+function deliveryCriteria(
+  deliveries: DeliveryOutcomes | null | undefined,
+): Criterion[] {
+  if (!deliveries)
+    return [
+      {
+        id: "paid_work_delivered",
+        required: true,
+        status: "unknown",
+        detail: "Business delivery records are unavailable",
+      },
+    ];
+  return [
+    {
+      id: "paid_work_delivered",
+      required: true,
+      status: deliveries.paidDeliveredNotRefunded > 0 ? "met" : "not_met",
+      detail: `${deliveries.paidDeliveredNotRefunded} paid order(s) delivered and not fully refunded; ${deliveries.deliveredFullyRefunded} delivered but fully refunded`,
+    },
+    {
+      id: "no_overdue_deliveries",
+      required: false,
+      status: deliveries.overdue === 0 ? "met" : "not_met",
+      detail: `${deliveries.overdue} open delivery obligation(s) past due`,
+    },
+  ];
+}
 
 function independence(attestation: Attestation | null): Criterion {
   return attestation?.stance === "affirmed"
@@ -367,6 +431,7 @@ export function pilotCriteria(
         detail: "No financial summary is available for the run",
       },
       independence(context.attestation),
+      ...deliveryCriteria(context.deliveries),
     ];
   const { outcomes } = pilotOutcomes(summary);
   const criterion = (
@@ -436,6 +501,7 @@ export function pilotCriteria(
           : `Result after ${context.outsideCosts.totalMicros} micro-USD of outside costs is ${afterCosts} micro-USD`,
       false,
     ),
+    ...deliveryCriteria(context.deliveries),
   ];
 }
 
@@ -505,7 +571,12 @@ export async function pilotReport(input: {
   const money = summary ? pilotOutcomes(summary) : null;
   const attestation = latestAttestation(db, runId);
   const outsideCosts = outsideLedgerCosts(db, runId, !isPublic);
-  const criteria = pilotCriteria(summary, { attestation, outsideCosts });
+  const deliveries = await safeDeliveries(services, runId);
+  const criteria = pilotCriteria(summary, {
+    attestation,
+    outsideCosts,
+    deliveries,
+  });
   return {
     version: 1,
     verificationScope: "local_records_only",
@@ -552,6 +623,7 @@ export async function pilotReport(input: {
         : { evidenceRef: attestation.evidenceRef, note: attestation.note }),
     },
     outsideLedgerCosts: outsideCosts,
+    deliveries,
     resultAfterOutsideCostsMicros: resultAfterOutsideCosts(
       money?.outcomes ?? null,
       outsideCosts,

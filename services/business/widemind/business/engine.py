@@ -814,6 +814,26 @@ class Business(DiscoveryMixin):
                     for order in (self.order(row["id"]) for row in self.store.all("SELECT id FROM orders WHERE run_id=?", (self.run_id,)))],
                 "opportunities": self.store.all("SELECT id,service,status,assessment FROM opportunities WHERE run_id=?", (self.run_id,))}
 
+    def delivery_outcomes(self, now=None):
+        """Aggregate order outcomes for the pilot report: counts only, no identities or content."""
+        now = self.clock() if now is None else now
+        by_status = {}
+        paid_delivered = fully_refunded = overdue = 0
+        for row in self.store.all("SELECT id FROM orders WHERE run_id=?", (self.run_id,)):
+            order = self.order(row["id"])
+            by_status[order["status"]] = by_status.get(order["status"], 0) + 1
+            receipts = json.loads(order["payment"]).get("receipts_micro_usd", 0)
+            if order["status"] in {"delivered", "completed"} and receipts > 0:
+                if order["unrefunded_receipts_micro_usd"] > 0:
+                    paid_delivered += 1
+                else:
+                    fully_refunded += 1
+            if order["delivery_obligation_open"] and order["delivery_due_at"] is not None and order["delivery_due_at"] < now:
+                overdue += 1
+        return {"version": 1, "orders": sum(by_status.values()), "byStatus": by_status,
+                "paidDeliveredNotRefunded": paid_delivered, "deliveredFullyRefunded": fully_refunded,
+                "overdue": overdue}
+
     def _conversation_manager(self):
         from .conversation import Conversations
         return Conversations(self)

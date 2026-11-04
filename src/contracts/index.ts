@@ -226,10 +226,23 @@ export type WorkSelection = (
   | { kind: "wait"; reason: string; wakeAt?: string }
   | { kind: "unavailable"; reason: string }
 ) & { acknowledgeEventIds?: ID[] };
+/** Aggregate order outcomes; counts only, never customer or order identities. */
+export interface DeliveryOutcomes {
+  version: 1;
+  orders: number;
+  byStatus: Record<string, number>;
+  /** Delivered or completed orders with receipts that were not fully refunded. */
+  paidDeliveredNotRefunded: number;
+  deliveredFullyRefunded: number;
+  /** Open delivery obligations past their due time. */
+  overdue: number;
+}
 export interface Business {
   health(): Availability;
   /** Pure, free local selection. Paid planning is itself a proposed tool action. */
   selectWork(snapshot: BusinessSnapshot): Promise<WorkSelection>;
+  /** Optional free read of order outcomes for pilot reporting. */
+  deliveryOutcomes?(runId: ID): Promise<DeliveryOutcomes | null>;
 }
 export interface PublicRun {
   runId: ID;

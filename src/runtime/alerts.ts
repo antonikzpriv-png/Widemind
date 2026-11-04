@@ -10,6 +10,7 @@ import type { RuntimeConfig } from "../contracts/index.ts";
 import type { Services } from "../modules/registry.ts";
 import { transaction } from "../db/database.ts";
 import { Store } from "./store.ts";
+import { backupFresh, backupSettings, type BackupSettings } from "./backup.ts";
 
 export type Severity = "critical" | "warning";
 export interface Condition {
@@ -30,6 +31,8 @@ export interface AlertSettings {
   repeatMs: number;
   /** Optional economy operator read for reconciliation dead letters. */
   economy: { url: string; operatorToken: string } | null;
+  /** Backup location and maximum age; null when backups are not configured. */
+  backup?: BackupSettings | null;
 }
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"];
@@ -64,6 +67,7 @@ export function alertSettings(env: NodeJS.ProcessEnv): AlertSettings {
       economyUrl && operatorToken
         ? { url: new URL(economyUrl).origin, operatorToken }
         : null,
+    backup: backupSettings(env),
   };
 }
 
@@ -182,6 +186,13 @@ export async function evaluateConditions(input: {
     letters === null
       ? "Reconciliation tasks not observable (economy operator access not configured or unavailable)"
       : `${letters} payment reconciliation task(s) exhausted their retries`,
+  );
+  const backups = backupFresh(input.settings.backup ?? null, now);
+  add(
+    "backup_stale",
+    "warning",
+    backups === null ? null : !backups.fresh,
+    backups?.detail ?? "Backups not configured (WIDEMIND_BACKUP_DIR unset)",
   );
   return conditions;
 }

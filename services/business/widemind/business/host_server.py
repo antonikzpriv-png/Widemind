@@ -139,6 +139,7 @@ class Host:
                                      'at':datetime.fromtimestamp(item['at_utc_epoch'],timezone.utc).isoformat(),
                                      'text':f"Completed {item['service'].replace('-',' ')} work."} for item in business.public_activity()]}
             if path=='/v1/status':return {**business.diagnostics(),'policy':business.policy.document(),'effects':business.store.all('SELECT id,job_id,provider,action,state,reason,attempt,created_at FROM effects WHERE run_id=? ORDER BY created_at DESC LIMIT 100',(run,)),'notifications':business.store.all('SELECT id,entity_id,purpose,created_at FROM host_notifications WHERE run_id=?',(run,)),'conversations':business.conversation_list()}
+            if path=='/v1/delivery-outcomes':return business.delivery_outcomes()
             if path=='/v1/conversations':return {'conversations':business.conversation_list()}
             if path=='/v1/conversation':return {'conversation':business.conversation_view(payload['conversationId'])}
             if path=='/v1/conversation-resolve':

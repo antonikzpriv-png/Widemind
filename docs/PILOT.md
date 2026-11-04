@@ -10,6 +10,7 @@ These commands support [Milestone 7](ROADMAP.md#7-real-paid-survival-pilot). Non
 | `pilot:cost` | Record costs paid outside the ledger, or correct one |
 | `pilot:alerts` | Notify the operator when the run needs attention |
 | `pilot:snapshot` | Save the public report over time and choose what the website shows |
+| `backup`, `backup:verify`, `backup:restore` | Verified database backups ([DEPLOYMENT.md](DEPLOYMENT.md#backups-and-restore)) |
 
 ## Go-live checklist
 
@@ -30,6 +31,7 @@ Prints JSON checks and exits with status 2 until every check passes:
 | `economy_available`, `economy_live_opening` | The economy is reachable and the run's opening is a live 5000000 micro-USD grant |
 | `tools_available`, `email_capability` | The tools service is reachable and at least one `gmail.*` capability is available |
 | `business_available` | The business module is available |
+| `backups_recent` | A complete backup exists in `WIDEMIND_BACKUP_DIR` within `WIDEMIND_BACKUP_MAX_AGE_HOURS` |
 
 Only the presence of a secret is inspected; values are never printed. A passing check means configuration is present, not that the provider account has been verified.
 
@@ -47,9 +49,10 @@ The report combines the runtime database and the economy summary:
 - **Activity**: action counts by state and total attempts. The private view adds counts per tool.
 - **Outcomes**: gross and net customer receipts (after processor fees, refunds and chargebacks, plus reversals), operating charges, net operating result, spendable, reserved and held amounts, and exhaustion. Exact integer micro-USD strings. Net values are `null` when the economy did not report a deduction category.
 - **Outside support**: opening credit, owner funding, test funding and noncash infrastructure subsidies, kept separate from receipts.
+- **Deliveries**: order counts by status from the business service, paid orders delivered and not fully refunded, delivered orders fully refunded, and overdue delivery obligations. Counts only; `null` when the business service is unavailable.
 - **Attestation**: the latest customer-independence attestation (`affirmed`, `withdrawn` or `none`).
 - **Outside-ledger costs**: totals by category, and `resultAfterOutsideCostsMicros` (net operating result minus those costs).
-- **Criteria**: `live_mode`, `opening_exactly_5usd`, `no_test_funding`, `customer_receipts`, `independent_customer`, `delivery_costs_covered`, `no_owner_funding` are required. `operating_costs_covered` is reported but not required: the roadmap treats covering a job's delivery costs as the first milestone, and full profitability as a later one. Each is `met`, `not_met`, `unknown`, or for independence `attestation_required`.
+- **Criteria**: `live_mode`, `opening_exactly_5usd`, `no_test_funding`, `customer_receipts`, `independent_customer`, `delivery_costs_covered`, `no_owner_funding` and `paid_work_delivered` are required. `paid_work_delivered` stands in for "useful delivered work": at least one paid order was delivered and not fully refunded. The business service does not record customer satisfaction itself. `operating_costs_covered` and `no_overdue_deliveries` are reported but not required: the roadmap treats covering a job's delivery costs as the first milestone, and full profitability as a later one. Each is `met`, `not_met`, `unknown`, or for independence `attestation_required`.
 - **Verdict**: `met` when every required criterion is met, `pending_attestation` when only the attestation is missing, otherwise `not_met`.
 
 The public view omits the run identity, per-event times, tool names, attestation evidence and notes, and individual cost records. It never includes customer, payment, action or provider identifiers.
@@ -109,6 +112,7 @@ Run this as its own process, separate from the worker, so it can notice the work
 | `reconciliation_dead_letters` | critical | Payment reconciliation tasks exhausted their retries |
 | `credit_exhausted` | warning | Spendable credit is zero or less, or the run is `exhausted` |
 | `unresolved_actions` | warning | Actions have an unknown external outcome |
+| `backup_stale` | warning | The newest backup is older than `WIDEMIND_BACKUP_MAX_AGE_HOURS`, or none exists (not observable without `WIDEMIND_BACKUP_DIR`) |
 
 Dead letters are read from the economy's operator API when `WIDEMIND_ECONOMY_URL` and `WIDEMIND_ECONOMY_OPERATOR_TOKEN` are set; otherwise that condition is reported as not observable and never alerts. A condition that cannot be observed neither raises nor clears.
 

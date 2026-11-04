@@ -72,8 +72,21 @@ test("outcomes use exact integers and keep subsidies and owner funding apart fro
   assert.equal(unknown.netOperatingResultMicros, null);
 });
 
+const delivered = {
+  version: 1 as const,
+  orders: 1,
+  byStatus: { completed: 1 },
+  paidDeliveredNotRefunded: 1,
+  deliveredFullyRefunded: 0,
+  overdue: 0,
+};
+
 test("criteria require an attestation for independence and fail sandbox, test or owner-funded runs", () => {
-  const met = pilotCriteria(summary());
+  const met = pilotCriteria(summary(), {
+    attestation: null,
+    outsideCosts: { entries: 0, totalMicros: "0", byCategory: {} },
+    deliveries: delivered,
+  });
   assert.ok(
     met
       .filter((item) => item.required)
@@ -119,6 +132,31 @@ test("criteria require an attestation for independence and fail sandbox, test or
     "not_met",
   );
   assert.equal(pilotCriteria(null)[0]!.status, "not_met");
+  const delivery = (deliveries: typeof delivered | null) =>
+    pilotCriteria(summary(), {
+      attestation: null,
+      outsideCosts: { entries: 0, totalMicros: "0", byCategory: {} },
+      deliveries,
+    });
+  assert.equal(
+    delivery(null).find((item) => item.id === "paid_work_delivered")?.status,
+    "unknown",
+  );
+  const refundedOnly = delivery({
+    ...delivered,
+    paidDeliveredNotRefunded: 0,
+    deliveredFullyRefunded: 1,
+    overdue: 2,
+  });
+  assert.equal(
+    refundedOnly.find((item) => item.id === "paid_work_delivered")?.status,
+    "not_met",
+  );
+  const overdue = refundedOnly.find(
+    (item) => item.id === "no_overdue_deliveries",
+  );
+  assert.equal(overdue?.status, "not_met");
+  assert.equal(overdue?.required, false);
 });
 
 test("report records interventions and actions, and the public view omits private identities", async () => {
@@ -130,6 +168,7 @@ test("report records interventions and actions, and the public view omits privat
     f.store.control(id, "pause");
     f.store.control(id, "resume");
     f.services.economy.health = () => ({ available: true });
+    f.services.business.deliveryOutcomes = async () => delivered;
     f.services.economy.summary = async (runId) => {
       assert.equal(runId, id);
       return summary();

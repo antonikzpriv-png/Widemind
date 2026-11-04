@@ -11,6 +11,8 @@ const CRITERIA: Record<string, string> = {
   delivery_costs_covered: "Receipts covered delivery costs",
   no_owner_funding: "No owner top-ups",
   operating_costs_covered: "Covered hosting and other running costs",
+  paid_work_delivered: "Paid work was delivered and kept",
+  no_overdue_deliveries: "No overdue deliveries",
 };
 const STATUS: Record<string, string> = {
   met: "Met",
@@ -89,7 +91,22 @@ export function pilotPage(data: PublishedPilot | null) {
             ? "Attestation withdrawn"
             : "Not attested",
       ],
-    ])}</section><section><h2>Running costs outside the ledger</h2>${
+    ])}</section><section><h2>Deliveries</h2>${
+      report.deliveries
+        ? facts([
+            ["Orders", String(report.deliveries.orders)],
+            [
+              "Paid, delivered and kept",
+              String(report.deliveries.paidDeliveredNotRefunded),
+            ],
+            [
+              "Delivered but fully refunded",
+              String(report.deliveries.deliveredFullyRefunded),
+            ],
+            ["Overdue", String(report.deliveries.overdue)],
+          ])
+        : '<p class="muted">Delivery records unavailable.</p>'
+    }</section><section><h2>Running costs outside the ledger</h2>${
       categories.length
         ? facts(
             categories.map(([category, micros]) => [

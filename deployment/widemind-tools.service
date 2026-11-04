@@ -1,0 +1,25 @@
+# Tools gateway (files, graphics, Gmail, research). Installed into
+# /opt/widemind/.venvs/tools by "npm run services:setup".
+[Unit]
+Description=WideMind tools service
+After=network-online.target widemind-economy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=widemind
+Group=widemind
+WorkingDirectory=/opt/widemind
+EnvironmentFile=/opt/widemind/.env
+ExecStart=/opt/widemind/.venvs/tools/bin/python -I -m widemind.integrated_service --host 127.0.0.1 --port 8081
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/widemind
+
+[Install]
+WantedBy=multi-user.target

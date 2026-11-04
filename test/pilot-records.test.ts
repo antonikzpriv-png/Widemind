@@ -179,6 +179,14 @@ test("report reaches a met verdict only with an affirmed attestation and shows o
     const id = f.store.create("demo");
     f.services.economy.health = () => ({ available: true });
     f.services.economy.summary = async () => liveSummary;
+    f.services.business.deliveryOutcomes = async () => ({
+      version: 1,
+      orders: 1,
+      byStatus: { completed: 1 },
+      paidDeliveredNotRefunded: 1,
+      deliveredFullyRefunded: 0,
+      overdue: 0,
+    });
     const before = await pilotReport({
       db: f.db,
       services: f.services,
@@ -258,6 +266,17 @@ test("report reaches a met verdict only with an affirmed attestation and shows o
       stance: "affirmed",
       evidenceRef: "again",
     });
+    f.services.business.deliveryOutcomes = async () => {
+      throw new Error("business offline");
+    };
+    const offline = await pilotReport({
+      db: f.db,
+      services: f.services,
+      runId: id,
+      view: "public",
+    });
+    assert.equal(offline.deliveries, null);
+    assert.equal(offline.verdict, "not_met");
     const sandbox = await pilotReport({
       db: f.db,
       services: f.services,
@@ -268,4 +287,32 @@ test("report reaches a met verdict only with an affirmed attestation and shows o
   } finally {
     f.close();
   }
+});
+
+test("business delivery outcomes accept only the aggregate counts shape", async () => {
+  const { deliveryOutcomes } = await import(
+    "../src/modules/business/module.ts"
+  );
+  const good = {
+    version: 1,
+    orders: 2,
+    byStatus: { completed: 1, payment_hold: 1 },
+    paidDeliveredNotRefunded: 1,
+    deliveredFullyRefunded: 0,
+    overdue: 0,
+  };
+  assert.deepEqual(deliveryOutcomes(good), good);
+  for (const bad of [
+    null,
+    [],
+    { ...good, version: 2 },
+    { ...good, orders: -1 },
+    { ...good, overdue: 1.5 },
+    { ...good, byStatus: { "Private Customer": 1 } },
+    { ...good, byStatus: { completed: "1" } },
+    { ...good, paidDeliveredNotRefunded: undefined },
+  ])
+    assert.equal(deliveryOutcomes(bad), null, JSON.stringify(bad));
+  const extra = deliveryOutcomes({ ...good, customerEmail: "x@example.com" });
+  assert.equal(JSON.stringify(extra).includes("example.com"), false);
 });

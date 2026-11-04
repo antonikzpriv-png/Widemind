@@ -1,0 +1,25 @@
+# Business workflows (orders, quotes, conversations). Install with
+# "npm run services:setup" in /opt/widemind, which creates .venvs/business.
+[Unit]
+Description=WideMind business service
+After=network-online.target widemind-economy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=widemind
+Group=widemind
+WorkingDirectory=/opt/widemind
+EnvironmentFile=/opt/widemind/.env
+ExecStart=/opt/widemind/.venvs/business/bin/python -I -m widemind.business.host_server --host 127.0.0.1 --port 8082
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/widemind
+
+[Install]
+WantedBy=multi-user.target

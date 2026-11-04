@@ -84,7 +84,7 @@ Resolve payment timing before implementation so the agent can fund the work it p
 
 ## 7. Real paid survival pilot
 
-Tooling: `npm run pilot:preflight` lists remaining go-live blockers; `npm run pilot:report` records interventions, outside funding, operator-attested customer independence, costs outside the ledger and measured outcomes against these criteria; `npm run pilot:alerts` notifies the operator during the run; `npm run pilot:snapshot -- --publish` publishes hash-chained snapshots to the website's `/pilot` page ([PILOT.md](PILOT.md)). The boxes stay unchecked until a real run exists.
+Tooling: `npm run pilot:preflight` lists remaining go-live blockers; `npm run pilot:report` records interventions, outside funding, operator-attested customer independence, costs outside the ledger and measured outcomes against these criteria; `npm run pilot:alerts` notifies the operator during the run; `npm run pilot:snapshot -- --publish` publishes hash-chained snapshots to the website's `/pilot` page ([PILOT.md](PILOT.md)). [DEPLOYMENT.md](DEPLOYMENT.md) covers hosting, verified backups and the go-live order. The boxes stay unchecked until a real run exists.
 
 - [ ] Document a run with exactly $5 opening operating credit.
 - [ ] Enable configured real tools and customer work.

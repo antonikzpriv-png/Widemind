@@ -1,0 +1,25 @@
+# Pilot alerts. Runs apart from the worker so a dead worker is noticed.
+[Unit]
+Description=WideMind pilot alerts
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=widemind
+Group=widemind
+WorkingDirectory=/opt/widemind
+ExecStart=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/pilot-alerts-main.js --watch 300
+# Exit status 2 (a condition is active) and 3 (delivery failed) are reports, not crashes.
+SuccessExitStatus=2 3
+Restart=always
+RestartSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/widemind
+
+[Install]
+WantedBy=multi-user.target

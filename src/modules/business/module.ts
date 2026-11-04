@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ModuleDefinition } from "../registry.ts";
 import type {
+  DeliveryOutcomes,
   Json,
   Reservation,
   ToolAction,
@@ -75,6 +76,39 @@ function receipt(
       provisional: false,
       evidenceRef: `business-bridge:${action.actionId}`,
     },
+  };
+}
+/** Accept only the aggregate counts shape; anything else is unavailable. */
+export function deliveryOutcomes(value: unknown): DeliveryOutcomes | null {
+  const count = (item: unknown) =>
+    Number.isSafeInteger(item) && (item as number) >= 0;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const byStatus = row.byStatus;
+  if (
+    row.version !== 1 ||
+    ![
+      "orders",
+      "paidDeliveredNotRefunded",
+      "deliveredFullyRefunded",
+      "overdue",
+    ].every((key) => count(row[key])) ||
+    !byStatus ||
+    typeof byStatus !== "object" ||
+    Array.isArray(byStatus) ||
+    Object.keys(byStatus).length > 20 ||
+    !Object.entries(byStatus).every(
+      ([key, item]) => /^[a-z_]{1,40}$/.test(key) && count(item),
+    )
+  )
+    return null;
+  return {
+    version: 1,
+    orders: row.orders as number,
+    byStatus: { ...(byStatus as Record<string, number>) },
+    paidDeliveredNotRefunded: row.paidDeliveredNotRefunded as number,
+    deliveredFullyRefunded: row.deliveredFullyRefunded as number,
+    overdue: row.overdue as number,
   };
 }
 async function start(reservation: Reservation, env: NodeJS.ProcessEnv) {
@@ -350,6 +384,17 @@ export const definition: ModuleDefinition = {
       },
       business: {
         health: () => ({ available: true }),
+        deliveryOutcomes: async (runId) => {
+          try {
+            return deliveryOutcomes(
+              await client.request("/v1/delivery-outcomes", {
+                runId: run(runId),
+              }),
+            );
+          } catch {
+            return null;
+          }
+        },
         selectWork: async (snapshot) => {
           const state = await client.request<Work>("/v1/work-state", {
             runId: snapshot.runId,

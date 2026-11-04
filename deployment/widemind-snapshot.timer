@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily WideMind pilot snapshot
+
+[Timer]
+OnCalendar=*-*-* 23:50:00 UTC
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
