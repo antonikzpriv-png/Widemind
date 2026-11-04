@@ -28,6 +28,8 @@
     "services:status": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs status",
     "dev:all": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs all",
     "pilot:init": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/pilot-init.mjs",
+    "pilot:preflight": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-preflight-main.ts",
+    "pilot:report": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-report-main.ts",
     "integration:smoke": "node scripts/integration-smoke.mjs",
     "integration:browser": "node scripts/integration-smoke.mjs --browser",
     "services:test": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env scripts/services.mjs test",
