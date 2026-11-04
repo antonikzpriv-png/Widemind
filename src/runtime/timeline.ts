@@ -85,6 +85,13 @@ function json(text: string | null): Record<string, unknown> {
 }
 const iso = (ms: number) => new Date(ms).toISOString();
 
+/** Narrow an already-parsed value to a plain object without re-serializing it. */
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 export function activityTimeline(
   db: DatabaseSync,
   runId: string,
@@ -94,26 +101,35 @@ export function activityTimeline(
   const run = store.run(runId);
   if (!run) throw new Error("Agent run not found");
   const entries: TimelineEntry[] = [];
-  let spent = 0n;
-  for (const row of store.actions(runId)) {
+  // Only the newest actions are shown; totals come from aggregate queries.
+  const rows = db
+    .prepare(
+      "SELECT state,action_json,receipt_json,reason,attempts,updated_at FROM runtime_actions WHERE run_id=? ORDER BY updated_at DESC,id DESC LIMIT ?",
+    )
+    .all(runId, limit) as {
+    state: string;
+    action_json: string;
+    receipt_json: string | null;
+    reason: string | null;
+    attempts: number;
+    updated_at: number;
+  }[];
+  for (const row of rows) {
     const action = json(row.action_json);
     const receipt = json(row.receipt_json);
-    const usage = json(JSON.stringify(receipt.usage ?? null));
-    const charge = json(JSON.stringify(usage.actualCharge ?? null));
+    const charge = record(record(receipt.usage).actualCharge);
     const micros =
       typeof charge.micros === "string" && /^\d{1,20}$/.test(charge.micros)
         ? charge.micros
         : null;
-    if (micros) spent += BigInt(micros);
     const tool = typeof action.tool === "string" ? action.tool : "unknown";
-    const result = json(JSON.stringify(receipt.result ?? null));
+    const result = record(receipt.result);
     let title =
       tool === "business.step"
         ? (BUSINESS_STEPS[String(result.eventKind)] ??
           "Handled a business step")
         : (TOOLS[tool] ?? `Used ${tool}`);
-    const bounds = json(JSON.stringify(action.limit ?? null));
-    const maximum = json(JSON.stringify(bounds.maximum ?? null)).micros;
+    const maximum = record(record(action.limit).maximum).micros;
     const why =
       row.state === "completed"
         ? receipt.status === "failed"
@@ -129,7 +145,7 @@ export function activityTimeline(
       at: iso(Number(row.updated_at)),
       kind: "work",
       title,
-      detail: `${why}${typeof maximum === "string" && maximum !== "0" ? ` · budget up to ${maximum} micro-USD` : ""}${row.attempts > 1 ? ` · ${row.attempts} attempts` : ""}`,
+      detail: `${why}${typeof maximum === "string" && maximum !== "0" ? ` · budget up to ${maximum} micro-USD` : ""}${Number(row.attempts) > 1 ? ` · ${row.attempts} attempts` : ""}`,
       costMicros: micros,
       state: row.state,
     });
@@ -146,14 +162,21 @@ export function activityTimeline(
       at: iso(Number(event.at)),
       kind: known?.[0] ?? "owner",
       title: known?.[1] ?? event.kind,
-      detail: event.kind.startsWith("pilot.snapshot")
-        ? ""
-        : event.detail.slice(0, 200),
+      detail:
+        event.kind.startsWith("pilot.snapshot") ||
+        event.kind === "inbox.received"
+          ? ""
+          : event.detail.slice(0, 200),
       costMicros: null,
       state: null,
     });
   }
   entries.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  const totals = db
+    .prepare(
+      "SELECT COALESCE(SUM(CASE WHEN json_valid(receipt_json) THEN CAST(json_extract(receipt_json,'$.usage.actualCharge.micros') AS INTEGER) END),0) AS spent, COALESCE(SUM(state='unresolved'),0) AS unresolved FROM runtime_actions WHERE run_id=?",
+    )
+    .get(runId) as { spent: number | bigint; unresolved: number };
   return {
     now: {
       state: run.state,
@@ -169,11 +192,9 @@ export function activityTimeline(
             .get(runId) as { n: number }
         ).n,
       ),
-      unresolved: store
-        .actions(runId)
-        .filter((row) => row.state === "unresolved").length,
+      unresolved: Number(totals.unresolved),
     },
     entries: entries.slice(0, limit),
-    spentMicros: String(spent),
+    spentMicros: String(totals.spent),
   };
 }

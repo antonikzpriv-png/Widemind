@@ -13,6 +13,7 @@ import {
   proposeFirstPlan,
   saveAgent,
   sourceUrls,
+  SANDBOX_OPEN,
 } from "../src/runtime/agent.ts";
 import { setupGuide } from "../src/runtime/setup.ts";
 import { activityTimeline } from "../src/runtime/timeline.ts";
@@ -141,6 +142,7 @@ test("the first-hour plan reflects real availability and runs only approved item
       activity: [],
       availability: { available: true },
     });
+    // No economy route and no research tool: nothing can run yet.
     let plan = await proposeFirstPlan({
       services: f.services,
       profile,
@@ -148,11 +150,25 @@ test("the first-hour plan reflects real availability and runs only approved item
       funded: false,
     });
     const status = (id: string) => plan.items.find((item) => item.id === id);
-    assert.equal(status("offer:svg-graphic")?.available, true);
-    assert.equal(status("offer:research-brief")?.available, false);
+    assert.deepEqual(
+      plan.items.map((item) => item.id),
+      ["fund", "start", "discovery"],
+    );
+    assert.match(status("fund")!.blocker!, /economy service/);
+    assert.match(status("start")!.blocker!, /\$5.00 credit/);
     assert.match(status("discovery")!.blocker!, /research tool/);
-    assert.match(status("start")!.blocker!, /Fund/);
 
+    // Sandbox funding goes through the economy's own operator route.
+    const opened: Json[] = [];
+    f.services.routes.push({
+      path: SANDBOX_OPEN,
+      method: "POST",
+      access: "operator",
+      handle: async (request) => {
+        opened.push(request.body);
+        return { status: 200, body: {} };
+      },
+    });
     f.services.tools.capabilities = () => [
       { id: "research.collect", availability: { available: true } },
     ];
@@ -160,21 +176,12 @@ test("the first-hour plan reflects real availability and runs only approved item
       services: f.services,
       profile,
       runState: "paused",
-      funded: true,
+      funded: false,
     });
-    assert.ok(
-      plan.items.every(
-        (item) => item.id === "offer:research-brief" || item.available,
-      ),
-    );
+    assert.ok(plan.items.every((item) => item.available));
 
     const discovery: Record<string, Json>[] = [];
-    const policies: Record<string, Json>[] = [];
     f.services.business.health = () => ({ available: true });
-    f.services.business.readPolicy = async () => ({});
-    f.services.business.writePolicy = async (_run, value) => {
-      policies.push(value);
-    };
     f.services.business.writeDiscovery = async (_run, value) => {
       discovery.push(value);
     };
@@ -184,31 +191,50 @@ test("the first-hour plan reflects real availability and runs only approved item
       runId,
       profile,
       plan,
-      selected: ["offer:svg-graphic", "discovery", "start"],
+      selected: ["fund", "discovery", "start"],
       sources: ["https://requests.example/graphics"],
     });
     assert.ok(
       results.every((item) => item.ok),
       JSON.stringify(results),
     );
-    assert.deepEqual(policies[0]!.prices, { "svg-graphic": 4000000 });
-    const market = (discovery[0]!.markets as Record<string, Json>[])[0]!;
-    // Only the graphic offering is live and approved, so discovery targets it.
-    assert.equal(market.service, "svg-graphic");
-    assert.deepEqual(market.need_terms, [
-      "logo",
-      "icon",
-      "svg",
-      "badge",
-      "illustration",
+    assert.deepEqual(opened, [
+      { runId, mode: "sandbox", confirmOpeningCredit: true },
     ]);
+    const market = (discovery[0]!.markets as Record<string, Json>[])[0]!;
+    // The graphic offering is the one live now, so discovery targets it.
+    assert.equal(market.service, "svg-graphic");
     assert.deepEqual(market.source_urls, ["https://requests.example/graphics"]);
     assert.equal(discovery[0]!.allowance_micro_usd, 500000);
     assert.notEqual(f.store.run(runId)?.state, "paused");
     assert.equal(latestPlanDecision(f.db, runId)?.results.length, 3);
+
+    // Once funded and running, both steps show as done and cannot be re-run.
+    plan = await proposeFirstPlan({
+      services: f.services,
+      profile,
+      runState: "waiting",
+      funded: true,
+    });
+    assert.equal(status("fund")?.done, true);
+    assert.equal(status("fund")?.available, false);
+    assert.equal(status("start")?.done, true);
   } finally {
     f.close();
   }
+});
+
+test("prices are capped so policy numbers stay exact", () => {
+  assert.throws(
+    () => profileFromInput({ ...input, "price_svg-graphic": "10000.01" }),
+    /\$10,000.00/,
+  );
+  assert.equal(
+    profileFromInput({ ...input, "price_svg-graphic": "10000" }).offerings[
+      "svg-graphic"
+    ],
+    "10000000000",
+  );
 });
 
 test("setup orders steps and the timeline speaks plainly", async () => {
@@ -308,8 +334,8 @@ test("a new owner is sent to setup, creates the agent from the form and sees it 
     const start = await (
       await fetch(origin + "/operator/start", { headers: { Cookie: cookie } })
     ).text();
-    assert.match(start, /Next: Agent created/);
-    assert.match(start, /Create agent/);
+    assert.match(start, /Let's set up your agent/);
+    assert.match(start, /Create my agent/);
     const post = (
       path: string,
       fields: Record<string, string>,
@@ -350,9 +376,9 @@ test("a new owner is sent to setup, creates the agent from the form and sees it 
     assert.match(page, /Pixel &amp; Proof/);
     assert.match(
       page,
-      /Business settings: The business service is not connected/,
+      /Settings saved, but not active yet: The business service is not connected/,
     );
-    assert.match(page, /Fund the opening/);
+    assert.match(page, /Add \$5.00 of test credit/);
     assert.equal(
       (await post("/operator/agent/plan", { csrf, "item:start": "true" }))
         .status,

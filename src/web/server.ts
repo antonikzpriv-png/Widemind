@@ -7,6 +7,11 @@ import {
   verifyChain,
 } from "../runtime/pilot-snapshots.ts";
 import { pilotPage } from "./pilot-page.ts";
+import { readFileSync } from "node:fs";
+// Served from the repository's public/ directory in both src/ and dist/ layouts.
+const geistFont = readFileSync(
+  new URL("../../public/fonts/geist-variable.woff2", import.meta.url),
+);
 import {
   pilotOperatorPage,
   type OperatorPilotData,
@@ -99,6 +104,16 @@ export function webServer(context: {
       config.publicRunId && /^[a-f0-9-]{36}$/.test(config.publicRunId)
         ? config.publicRunId
         : null;
+    const run = runId ? store.run(runId) : undefined;
+    // Read the summary once; readiness and the plan both use it.
+    let summary = null;
+    if (run)
+      try {
+        summary = await services.economy.summary(runId!);
+      } catch {
+        summary = null;
+      }
+    const funded = Boolean(summary);
     const readiness = await pilotReadiness({
       env,
       config,
@@ -106,8 +121,8 @@ export function webServer(context: {
       services,
       db,
       runId,
+      summary,
     });
-    const run = runId ? store.run(runId) : undefined;
     const profile = run ? currentProfile(db, runId!) : null;
     const applied = run
       ? (db
@@ -118,15 +133,9 @@ export function webServer(context: {
           | { kind: string; at: number; detail: string }
           | undefined)
       : undefined;
-    let funded = false;
-    if (run)
-      try {
-        funded = Boolean(await services.economy.summary(runId!));
-      } catch {
-        funded = false;
-      }
     return {
       runId,
+      running: run?.state === "active" || run?.state === "waiting",
       guide: setupGuide(db, run ? runId : null, readiness),
       profile,
       applied: applied
@@ -183,7 +192,7 @@ export function webServer(context: {
       response.setHeader("X-Frame-Options", "DENY");
       response.setHeader(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        "default-src 'none'; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
       );
       const send = (
         status: number,
@@ -214,6 +223,14 @@ export function webServer(context: {
         }
         if (method === "GET" && path === "/style.css") {
           send(200, css, "text/css");
+          return;
+        }
+        if (method === "GET" && path === "/fonts/geist-variable.woff2") {
+          response.writeHead(200, {
+            "Content-Type": "font/woff2",
+            "Cache-Control": "public, max-age=31536000, immutable",
+          });
+          response.end(geistFont);
           return;
         }
         if (method === "GET" && path === "/healthz") {
@@ -475,12 +492,13 @@ export function webServer(context: {
             send(503, { error: "Operator authentication is not configured" });
             return;
           }
+          const formLogin = path === "/operator/login";
           if (
             !sessions.allowAttempt(request.socket.remoteAddress ?? "unknown")
           ) {
-            send(429, {
-              error: "Too many sign-in attempts; retry after 15 minutes",
-            });
+            const error = "Too many sign-in attempts; retry after 15 minutes";
+            if (formLogin) send(429, loginPage(true, error), "text/html");
+            else send(429, { error });
             return;
           }
           const input = await body(request);
@@ -491,7 +509,13 @@ export function webServer(context: {
               secrets.operatorPasswordHash,
             ))
           ) {
-            send(401, { error: "Invalid credentials" });
+            if (formLogin)
+              send(
+                401,
+                loginPage(true, "That password didn't match. Try again."),
+                "text/html",
+              );
+            else send(401, { error: "Invalid credentials" });
             return;
           }
           const created = sessions.create();

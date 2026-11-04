@@ -1,6 +1,11 @@
-import { escape } from "./pages.ts";
+import { escape, layout } from "./pages.ts";
+// The customer pages share the site layout and load their client script.
 const frame = (title: string, body: string) =>
-  `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · WideMind</title><link rel="stylesheet" href="/style.css"><script src="/commerce.js" defer></script></head><body><header><a class="brand" href="/">W<span>•</span> WideMind</a><nav aria-label="Primary"><a href="/">Headquarters</a><a href="/commerce">Work with WideMind</a><a href="/operator">Operator</a></nav></header><main>${body}</main><footer>Private delivery · Verified payments · No balance from unverified claims</footer></body></html>`;
+  layout(title, body, {
+    script: "/commerce.js",
+    footer:
+      "PRIVATE DELIVERY · VERIFIED PAYMENTS · NO BALANCE FROM UNVERIFIED CLAIMS",
+  });
 export function commercePage() {
   return frame(
     "Work with WideMind",

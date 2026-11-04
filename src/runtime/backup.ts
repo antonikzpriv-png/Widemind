@@ -8,6 +8,9 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  openSync,
+  readSync,
   constants,
   copyFileSync,
   existsSync,
@@ -124,8 +127,19 @@ export function backupSources(
   return sources;
 }
 
+/** Streamed in 1 MiB chunks so large databases never sit whole in memory. */
 function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
+  const hash = createHash("sha256");
+  const chunk = Buffer.alloc(1024 * 1024);
+  const fd = openSync(path, "r");
+  try {
+    let read: number;
+    while ((read = readSync(fd, chunk, 0, chunk.length, null)) > 0)
+      hash.update(chunk.subarray(0, read));
+  } finally {
+    closeSync(fd);
+  }
+  return hash.digest("hex");
 }
 
 /** Integrity check of a copy; throws unless SQLite reports it intact. */

@@ -551,21 +551,26 @@ try {
     runState: "waiting",
     funded: true,
   });
-  assert.equal(
-    firstPlan.items.find((item) => item.id === "offer:svg-graphic")?.available,
-    true,
-  );
+  // Funded and running already, so both first steps show as done.
+  for (const id of ["fund", "start"])
+    assert.equal(
+      firstPlan.items.find((item) => item.id === id)?.done,
+      true,
+      id,
+    );
+  // The real economy route behind "Add test credit" is idempotent for a funded run.
   const approved = await approveFirstPlan({
     db: app.db,
     services: app.services,
     runId,
     profile,
     plan: firstPlan,
-    selected: ["offer:svg-graphic"],
+    selected: ["fund"],
     sources: [],
   });
-  assert.ok(
-    approved.every((item) => item.ok),
+  assert.deepEqual(
+    approved.map((item) => [item.id, item.ok]),
+    [["fund", true]],
     JSON.stringify(approved),
   );
   const home = await (await fetch(origin + "/")).text();

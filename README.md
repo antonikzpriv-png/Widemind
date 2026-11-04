@@ -14,7 +14,7 @@ The runnable foundation is implemented: a Node.js 24/TypeScript web app, an inde
 
 Economy, business, customer commerce and dedicated-account tool adapters are implemented as authenticated services. **PayPal Business** is the selected new checkout provider. Existing Stripe support is retained explicitly; it is not selected silently. Live accounts, credentials, funding, HTTPS and a real customer pilot are still required before claiming autonomous earnings.
 
-New owner? Start with [getting started](docs/GETTING_STARTED.md): install, create your agent, follow the guided setup, approve its first hour and watch its activity. [Integrated setup](docs/INTEGRATED_SETUP.md) covers all services, the private customer portal and payment workflow, and [deployment](docs/DEPLOYMENT.md) covers hosting. The explicit zero-cost `demo` profile remains available for foundation-only checks.
+New owner? Run `npm run quickstart`, sign in with the password it prints, and follow the guided setup ([getting started](docs/GETTING_STARTED.md)). It takes about a minute to a running agent with test credit. [Integrated setup](docs/INTEGRATED_SETUP.md) covers all services, the private customer portal and payment workflow, and [deployment](docs/DEPLOYMENT.md) covers hosting. The explicit zero-cost `demo` profile remains available for foundation-only checks.
 
 The integrated PayPal service supports [scheduled discovery and bounded experiments](docs/DISCOVERY.md): owner-selected market sources, evidence-backed opportunities, private sample experiments, durable attempt history and capped adaptation from verified outcomes. Discovery starts disabled and does not expand outreach permissions.
 

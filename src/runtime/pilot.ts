@@ -61,6 +61,38 @@ async function safeDeliveries(
   }
 }
 
+/** Reachability of an HTTP-backed service, or the module's own health when it has no address. */
+async function reachable(
+  health: { available: boolean; reason?: string },
+  url: string | undefined,
+  token: string | undefined,
+): Promise<{ ok: boolean; detail: string }> {
+  if (!health.available)
+    return {
+      ok: false,
+      detail: `unavailable: ${health.reason ?? "not configured"}`,
+    };
+  if (!url) return { ok: true, detail: "module available" };
+  try {
+    const response = await fetch(new URL("/health", url), {
+      headers: token ? { Authorization: "Bearer " + token } : {},
+      signal: AbortSignal.timeout(3000),
+      redirect: "error",
+    });
+    return response.ok
+      ? { ok: true, detail: "service reachable" }
+      : {
+          ok: false,
+          detail: `service answered HTTP ${response.status}; check that it is running`,
+        };
+  } catch {
+    return {
+      ok: false,
+      detail: "service not reachable; check that it is running",
+    };
+  }
+}
+
 async function safeSummary(
   services: Services,
   runId: string | null,
@@ -86,6 +118,8 @@ export async function pilotReadiness(input: {
   db: DatabaseSync;
   runId: string | null;
   now?: number;
+  /** A summary the caller already read, to avoid a second economy call. */
+  summary?: FinancialSummary | null;
 }): Promise<PilotReadiness> {
   const { env, config, services, runId } = input;
   const now = input.now ?? Date.now();
@@ -149,14 +183,35 @@ export async function pilotReadiness(input: {
     `Payment provider ${provider} credential missing (${providerKey})`,
   );
 
-  const economy = services.economy.health();
+  // Module health() is static for HTTP-backed services, so probe the service
+  // itself when its address is configured.
+  const [economyUp, toolsUp, businessUp] = await Promise.all([
+    reachable(
+      services.economy.health(),
+      env.WIDEMIND_ECONOMY_URL,
+      env.WIDEMIND_ECONOMY_GATEWAY_TOKEN ?? env.WIDEMIND_GATEWAY_TOKEN,
+    ),
+    reachable(
+      services.tools.health(),
+      env.WIDEMIND_TOOLS_URL,
+      env.WIDEMIND_TOOLS_TOKEN,
+    ),
+    reachable(
+      services.business.health(),
+      env.WIDEMIND_BUSINESS_URL,
+      env.WIDEMIND_BUSINESS_TOKEN,
+    ),
+  ]);
   add(
     "economy_available",
-    economy.available,
-    "Economy module configured (reachability is shown by economy_live_opening)",
-    `Economy unavailable: ${economy.available ? "" : economy.reason}`,
+    economyUp.ok,
+    `Economy ${economyUp.detail}`,
+    `Economy ${economyUp.detail}`,
   );
-  const summary = await safeSummary(services, run ? runId : null);
+  const summary =
+    input.summary !== undefined
+      ? input.summary
+      : await safeSummary(services, run ? runId : null);
   add(
     "economy_live_opening",
     summary?.mode === "live" &&
@@ -172,12 +227,11 @@ export async function pilotReadiness(input: {
   } catch {
     // Observation failure is reported through health below.
   }
-  const tools = services.tools.health();
   add(
     "tools_available",
-    tools.available,
-    "Tools service reachable",
-    `Tools unavailable: ${tools.available ? "" : tools.reason}`,
+    toolsUp.ok,
+    `Tools ${toolsUp.detail}`,
+    `Tools ${toolsUp.detail}`,
   );
   const capabilities = services.tools.capabilities();
   const email = capabilities.filter(
@@ -218,12 +272,11 @@ export async function pilotReadiness(input: {
     offsite?.detail ??
       "Set WIDEMIND_OFFSITE_* so encrypted backups are copied off this host",
   );
-  const business = services.business.health();
   add(
     "business_available",
-    business.available,
-    "Business module available",
-    `Business unavailable: ${business.available ? "" : business.reason}`,
+    businessUp.ok,
+    `Business ${businessUp.detail}`,
+    `Business ${businessUp.detail}`,
   );
 
   return {
@@ -557,7 +610,7 @@ export async function pilotReport(input: {
 
   const events = db
     .prepare(
-      "SELECT kind,at FROM runtime_events WHERE run_id=? AND kind LIKE 'operator.%' ORDER BY id",
+      "SELECT kind,at FROM runtime_events WHERE run_id=? AND (kind LIKE 'operator.%' OR kind IN ('agent.updated','agent.plan.approved')) ORDER BY id",
     )
     .all(runId) as { kind: string; at: number }[];
   const byKind: Record<string, number> = {};

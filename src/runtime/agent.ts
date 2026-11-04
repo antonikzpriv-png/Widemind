@@ -11,6 +11,7 @@ import type { Services } from "../modules/registry.ts";
 import { transaction } from "../db/database.ts";
 import { Store } from "./store.ts";
 import { usdToMicros } from "./pilot-records.ts";
+import { displayUsd } from "../money.ts";
 
 export interface OfferingInfo {
   id: string;
@@ -69,6 +70,9 @@ export const OFFERINGS: readonly OfferingInfo[] = [
   },
 ];
 
+/** Prices stay far below 2^53 so policy numbers are exact. */
+const MAX_PRICE_MICROS = 10_000_000_000n;
+
 export interface AgentProfile {
   name: string;
   mission: string;
@@ -107,6 +111,8 @@ export function profileFromInput(input: Record<string, unknown>): AgentProfile {
       typeof price === "string" && price.trim()
         ? usdToMicros(price.trim())
         : offering.defaultPriceMicros;
+    if (BigInt(micros) > MAX_PRICE_MICROS)
+      throw new Error(`${offering.label} cannot cost more than $10,000.00`);
     if (BigInt(micros) < 1_000_000n)
       throw new Error(`${offering.label} must cost at least $1.00`);
     if (BigInt(micros) % 10_000n) throw new Error("Prices must be whole cents");
@@ -262,10 +268,13 @@ export async function applyProfile(
 }
 
 export interface PlanItem {
-  id: string;
+  id: "fund" | "discovery" | "start";
   title: string;
   detail: string;
+  /** Can be approved now. */
   available: boolean;
+  /** Already done; shown checked and not re-run. */
+  done?: boolean;
   /** Why the item cannot run yet, when unavailable. */
   blocker?: string;
   /** For discovery: the offering it looks for buyers of. */
@@ -276,7 +285,12 @@ export interface FirstHourPlan {
   items: PlanItem[];
 }
 
-/** Propose the agent's first moves from its profile and the tools it can actually use. */
+export const SANDBOX_OPEN = "/api/modules/economy/open";
+
+/**
+ * Propose the agent's first moves from its profile and the tools it can
+ * actually use. What it sells is decided by the saved profile itself.
+ */
 export async function proposeFirstPlan(input: {
   services: Services;
   profile: AgentProfile;
@@ -298,44 +312,49 @@ export async function proposeFirstPlan(input: {
     .some(
       (item) => item.id.startsWith("research") && item.availability.available,
     );
+  const canFund = services.routes.some(
+    (route) => route.path === SANDBOX_OPEN && route.method === "POST",
+  );
+  const running = input.runState === "active" || input.runState === "waiting";
   const items: PlanItem[] = [];
-  for (const offering of chosen) {
-    const available = live.includes(offering.id);
-    items.push({
-      id: `offer:${offering.id}`,
-      title: `Sell ${offering.phrase} for ${formatUsd(profile.offerings[offering.id]!)}`,
-      detail:
-        "Listed on the public site so visitors can request it and pay before work starts.",
-      available,
-      ...(available
-        ? {}
-        : { blocker: `The ${offering.capability} tool is not available yet` }),
-    });
-  }
-  // Look for buyers of something the agent can actually deliver now.
-  const first = chosen.find((item) => live.includes(item.id)) ?? chosen[0]!;
   items.push({
-    id: "discovery",
-    title: `Look for people who need ${first.phrase}`,
-    detail: `Scans the sources you give for requests matching ${first.needTerms.slice(0, 3).join(", ")} and proposes bounded experiments. Spending is capped at ${formatUsd(minMicros(profile.experimentBudgetMicros, "500000"))}.`,
-    available: research,
-    offeringId: first.id,
-    ...(research
-      ? {}
-      : { blocker: "Needs the research tool (OpenAI) configured" }),
+    id: "fund",
+    title: "Add $5.00 of test credit",
+    detail:
+      "Sandbox money, labelled as test funding, so you can try everything safely. Real funding comes when you go live.",
+    available: !input.funded && canFund,
+    ...(input.funded
+      ? { done: true }
+      : canFund
+        ? {}
+        : { blocker: "The economy service is not connected" }),
   });
   items.push({
     id: "start",
     title: "Start working",
     detail:
-      "Resumes the agent so it answers requests and runs the approved steps. Waiting never triggers paid model calls.",
-    available: input.funded && input.runState !== "stopped",
-    ...(input.funded
+      "The agent answers requests, sends quotes and delivers paid work. Waiting never triggers paid model calls.",
+    available:
+      !running && input.runState !== "stopped" && (input.funded || canFund),
+    ...(running
+      ? { done: true }
+      : input.runState === "stopped"
+        ? { blocker: "The agent was stopped; create a new run to start again" }
+        : input.funded || canFund
+          ? {}
+          : { blocker: "Needs the $5.00 credit first" }),
+  });
+  // Look for buyers of something the agent can actually deliver now.
+  const first = chosen.find((item) => live.includes(item.id)) ?? chosen[0]!;
+  items.push({
+    id: "discovery",
+    title: `Optional: look for people who need ${first.phrase}`,
+    detail: `Scans pages you choose for matching requests (${first.needTerms.slice(0, 3).join(", ")}) and proposes small experiments, spending at most ${formatUsd(minMicros(profile.experimentBudgetMicros, "500000"))}.`,
+    available: research,
+    offeringId: first.id,
+    ...(research
       ? {}
-      : {
-          blocker:
-            "Fund the opening $5 first (sandbox: npm run pilot:init -- --sandbox)",
-        }),
+      : { blocker: "Needs the research tool (OpenAI) connected" }),
   });
   return { generatedFrom: "profile-and-available-tools", items };
 }
@@ -343,11 +362,8 @@ export async function proposeFirstPlan(input: {
 function minMicros(a: string, b: string): string {
   return BigInt(a) < BigInt(b) ? a : b;
 }
-export function formatUsd(micros: string): string {
-  const value = BigInt(micros);
-  const cents = (value + 5_000n) / 10_000n;
-  return `$${cents / 100n}.${String(cents % 100n).padStart(2, "0")}`;
-}
+/** Exact USD for display; shared with the website so amounts never disagree. */
+export const formatUsd = displayUsd;
 
 /** Validate discovery source URLs the owner provides. */
 export function sourceUrls(value: unknown): string[] {
@@ -384,30 +400,37 @@ export async function approveFirstPlan(input: {
   const chosen = input.plan.items.filter((item) =>
     input.selected.includes(item.id),
   );
-  const offers = chosen.filter((item) => item.id.startsWith("offer:"));
-  if (offers.length) {
-    const kept = Object.fromEntries(
-      Object.entries(input.profile.offerings).filter(([id]) =>
-        offers.some((item) => item.id === `offer:${id}`),
-      ),
+  if (chosen.some((item) => item.id === "fund")) {
+    const route = input.services.routes.find(
+      (item) => item.path === SANDBOX_OPEN && item.method === "POST",
     );
-    const applied = await applyProfile(input.services, input.runId, {
-      ...input.profile,
-      offerings: kept,
+    const response = route
+      ? await route
+          .handle({
+            body: {
+              runId: input.runId,
+              mode: "sandbox",
+              confirmOpeningCredit: true,
+            },
+            query: {},
+            headers: {},
+            operator: true,
+          })
+          .catch(() => ({ status: 503, body: null }))
+      : { status: 503, body: null };
+    results.push({
+      id: "fund",
+      ok: response.status === 200,
+      detail:
+        response.status === 200
+          ? "$5.00 of test credit added"
+          : "The economy service did not add test credit",
     });
-    for (const item of offers)
-      results.push({
-        id: item.id,
-        ok: applied.applied,
-        detail: applied.detail,
-      });
   }
   const discoveryItem = chosen.find((item) => item.id === "discovery");
   if (discoveryItem) {
-    // Discovery must target an offering that is being sold after this approval.
-    const sold = offers.length
-      ? offers.map((item) => item.id.slice("offer:".length))
-      : Object.keys(input.profile.offerings);
+    // Discovery must target an offering the agent sells.
+    const sold = Object.keys(input.profile.offerings);
     const offering =
       OFFERINGS.find(
         (item) =>
