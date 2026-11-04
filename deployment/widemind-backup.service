@@ -10,6 +10,8 @@ Type=oneshot
 WorkingDirectory=/opt/widemind
 ExecStart=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/backup-main.js run
 ExecStartPost=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/backup-main.js verify
+# Encrypt to the operator's public key and upload; skipped when WIDEMIND_OFFSITE_* is unset.
+ExecStartPost=/usr/bin/node --env-file=/opt/widemind/.env /opt/widemind/dist/runtime/backup-main.js offsite
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true

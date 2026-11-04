@@ -1,7 +1,7 @@
 import type { PublishedPilot } from "../runtime/pilot-snapshots.ts";
 import { displayUsd, escape, layout } from "./pages.ts";
 
-const CRITERIA: Record<string, string> = {
+export const CRITERIA: Record<string, string> = {
   accounting_available: "Accounting records available",
   live_mode: "Live money, not a sandbox",
   opening_exactly_5usd: "Started with exactly $5.00",
@@ -14,19 +14,19 @@ const CRITERIA: Record<string, string> = {
   paid_work_delivered: "Paid work was delivered and kept",
   no_overdue_deliveries: "No overdue deliveries",
 };
-const STATUS: Record<string, string> = {
+export const STATUS: Record<string, string> = {
   met: "Met",
   not_met: "Not met",
   unknown: "Unknown",
   attestation_required: "Awaiting attestation",
 };
-const VERDICT: Record<string, string> = {
+export const VERDICT: Record<string, string> = {
   met: "Milestone met",
   pending_attestation: "Awaiting independence attestation",
   not_met: "Milestone not yet met",
 };
 
-function usd(value: string | null | undefined) {
+export function usd(value: string | null | undefined) {
   if (typeof value !== "string") return "Unknown";
   try {
     return displayUsd(value);
@@ -36,7 +36,7 @@ function usd(value: string | null | undefined) {
 }
 const stat = (label: string, value: string, note = "") =>
   `<section><div class="stat-label">${escape(label)}</div><div class="stat-value">${escape(value)}</div>${note ? `<p class="muted">${escape(note)}</p>` : ""}</section>`;
-const facts = (rows: [string, string][]) =>
+export const facts = (rows: [string, string][]) =>
   `<dl class="facts">${rows.map(([label, value]) => `<dt>${escape(label)}</dt><dd>${escape(value)}</dd>`).join("")}</dl>`;
 
 export function pilotPage(data: PublishedPilot | null) {

@@ -11,6 +11,7 @@ import type { Services } from "../modules/registry.ts";
 import { transaction } from "../db/database.ts";
 import { Store } from "./store.ts";
 import { backupFresh, backupSettings, type BackupSettings } from "./backup.ts";
+import { offsiteFresh } from "./offsite.ts";
 
 export type Severity = "critical" | "warning";
 export interface Condition {
@@ -33,6 +34,8 @@ export interface AlertSettings {
   economy: { url: string; operatorToken: string } | null;
   /** Backup location and maximum age; null when backups are not configured. */
   backup?: BackupSettings | null;
+  /** Whether off-host copies are configured (WIDEMIND_OFFSITE_ENDPOINT set). */
+  offsiteConfigured?: boolean;
 }
 
 const LOOPBACK = ["127.0.0.1", "localhost", "[::1]"];
@@ -68,6 +71,7 @@ export function alertSettings(env: NodeJS.ProcessEnv): AlertSettings {
         ? { url: new URL(economyUrl).origin, operatorToken }
         : null,
     backup: backupSettings(env),
+    offsiteConfigured: Boolean(env.WIDEMIND_OFFSITE_ENDPOINT),
   };
 }
 
@@ -193,6 +197,17 @@ export async function evaluateConditions(input: {
     "warning",
     backups === null ? null : !backups.fresh,
     backups?.detail ?? "Backups not configured (WIDEMIND_BACKUP_DIR unset)",
+  );
+  const offsite = offsiteFresh(
+    Boolean(input.settings.offsiteConfigured),
+    input.settings.backup ?? null,
+    now,
+  );
+  add(
+    "offsite_backup_stale",
+    "warning",
+    offsite === null ? null : !offsite.fresh,
+    offsite?.detail ?? "Off-host backups not configured",
   );
   return conditions;
 }

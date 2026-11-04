@@ -12,6 +12,7 @@ import type {
 import type { Services } from "../modules/registry.ts";
 import { Store } from "./store.ts";
 import { backupFresh, backupSettings } from "./backup.ts";
+import { offsiteFresh } from "./offsite.ts";
 import {
   latestAttestation,
   outsideLedgerCosts,
@@ -199,6 +200,23 @@ export async function pilotReadiness(input: {
     backups?.fresh === true,
     backups?.detail ?? "",
     backups?.detail ?? "Set WIDEMIND_BACKUP_DIR and schedule npm run backup",
+  );
+  let offsite: { fresh: boolean; detail: string } | null;
+  try {
+    offsite = offsiteFresh(
+      Boolean(env.WIDEMIND_OFFSITE_ENDPOINT),
+      backupSettings(env),
+      now,
+    );
+  } catch (error) {
+    offsite = { fresh: false, detail: (error as Error).message };
+  }
+  add(
+    "offsite_backups",
+    offsite?.fresh === true,
+    offsite?.detail ?? "",
+    offsite?.detail ??
+      "Set WIDEMIND_OFFSITE_* so encrypted backups are copied off this host",
   );
   const business = services.business.health();
   add(

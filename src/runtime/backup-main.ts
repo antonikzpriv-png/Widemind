@@ -1,7 +1,14 @@
 // Backups: `backup` (default), `backup verify [--path <dir>]`,
 // `backup restore --label <name> --to <new path> [--path <dir>]`.
 // Exit status 2 when verification fails.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig } from "../config.ts";
+import {
+  decryptArchive,
+  generateBackupKeys,
+  offsiteSettings,
+  uploadBackup,
+} from "./offsite.ts";
 import { option, required } from "./cli-args.ts";
 import {
   backupSettings,
@@ -12,6 +19,35 @@ import {
   verifyBackup,
 } from "./backup.ts";
 const [operation = "run", ...args] = process.argv.slice(2);
+// These two run on the operator's own machine and need no backup settings.
+if (operation === "keygen") {
+  const privatePath = required(args, "--private"),
+    publicPath = required(args, "--public");
+  for (const path of [privatePath, publicPath])
+    if (existsSync(path))
+      throw new Error(`${path} exists; refusing to overwrite`);
+  const keys = generateBackupKeys();
+  writeFileSync(privatePath, keys.privateKeyPem, { mode: 0o600, flag: "wx" });
+  writeFileSync(publicPath, keys.publicKeyPem, { mode: 0o644, flag: "wx" });
+  console.log(
+    `Private key written to ${privatePath}: keep it off the server, with a second copy somewhere safe. Without it the off-host backups cannot be opened.\nPublic key written to ${publicPath}: copy it to the server and set WIDEMIND_OFFSITE_PUBLIC_KEY.`,
+  );
+  process.exit(0);
+}
+if (operation === "decrypt") {
+  const out = required(args, "--out");
+  const names = decryptArchive(
+    readFileSync(required(args, "--in")),
+    readFileSync(required(args, "--key"), "utf8"),
+    out,
+  );
+  const check = verifyBackup(out);
+  console.log(
+    JSON.stringify({ out, files: names, verification: check }, null, 2),
+  );
+  if (!check.ok) process.exitCode = 2;
+  process.exit();
+}
 const settings = backupSettings(process.env);
 if (!settings) throw new Error("Set WIDEMIND_BACKUP_DIR to an absolute path");
 const chosen = () => {
@@ -57,4 +93,21 @@ if (operation === "run") {
       2,
     ),
   );
-} else throw new Error("Operation must be run, verify or restore");
+} else if (operation === "offsite") {
+  const offsite = offsiteSettings(process.env);
+  if (!offsite) {
+    console.log(
+      "Off-host backups are not configured (WIDEMIND_OFFSITE_*); skipped.",
+    );
+  } else {
+    const marker = await uploadBackup({
+      settings: offsite,
+      backup: settings,
+      backupPath: chosen(),
+    });
+    console.log(JSON.stringify(marker, null, 2));
+  }
+} else
+  throw new Error(
+    "Operation must be run, verify, restore, offsite, keygen or decrypt",
+  );

@@ -32,7 +32,11 @@ A single Linux host with systemd, running every service on loopback behind Caddy
    `npm run services:status` checks the loopback services and `npm run status` the worker.
 6. **HTTPS.** Put `deployment/Caddyfile` (with your domain) in `/etc/caddy/Caddyfile` and reload Caddy. Only the web app is exposed.
 7. **Accounts.** Register the PayPal webhook at `https://<domain>/api/modules/economy/webhook` and complete Gmail OAuth ([GMAIL.md](GMAIL.md)) and the OpenAI key ([AI-PROVIDERS.md](AI-PROVIDERS.md)).
-8. **Sandbox rehearsal.** Open the run in sandbox (`npm run pilot:init -- --sandbox`), run one order end to end, and confirm alerts reach your webhook.
+8. **Sandbox rehearsal.** Open the run in sandbox (`npm run pilot:init -- --sandbox`), then:
+   ```sh
+   npm run pilot:rehearse -- --email <an inbox you control>
+   ```
+   It places one order, prints the PayPal sandbox checkout link for you to pay with a sandbox buyer account, waits for delivery, and then checks that the report, an unpublished snapshot, the public site, alerts, a test webhook notification and backup freshness agree. Every check must pass. It refuses to run with live commerce, live effects or a live payment provider.
 9. **Go live.** Switch to live credentials and modes, set `WIDEMIND_ENABLE_LIVE_EFFECTS=true`, open the run with verified live $5 funding through the economy operator flow, and restart the services. Then:
    ```sh
    npm run backup && npm run backup:verify
@@ -55,6 +59,26 @@ npm run backup:restore -- --path /var/backups/widemind/<backup> --label economy 
 
 Restore never overwrites an existing database or its `-wal`/`-shm` files. Restore a consistent set (all databases from the same backup), fix ownership, then start the services and run `npm run pilot:preflight`.
 
+## Off-host encrypted copies
+
+After each backup the timer encrypts it and uploads it to S3-compatible storage (Backblaze B2, Cloudflare R2, AWS S3 and similar). Each archive is encrypted with AES-256-GCM under a fresh key, and that key is sealed with your RSA public key. The server holds only the public key, so neither it nor the storage provider can read the archives.
+
+1. On your own computer, not the server:
+   ```sh
+   npm run backup:keygen -- --private ~/widemind-backup-private.pem --public widemind-backup-public.pem
+   ```
+   Keep the private key off the server, with a second copy somewhere safe. Without it the off-host copies cannot be opened.
+2. Copy the public key to `/etc/widemind/backup-public.pem`. Create a bucket and an access key limited to writing into it, and set the `WIDEMIND_OFFSITE_*` settings ([example](../deployment/widemind.env.example)). Turn on the bucket's object versioning or lifecycle rules for retention; WideMind never deletes uploaded copies.
+3. `npm run backup && npm run backup:offsite` uploads the newest backup and records `offsite.json`. The `offsite_backup_stale` alert and the `offsite_backups` preflight check use it.
+
+To restore from an off-host copy, download the `.wmbk` file with your storage provider's tools, then on your own computer:
+
+```sh
+npm run backup:decrypt -- --in <file>.wmbk --key ~/widemind-backup-private.pem --out <empty directory>
+```
+
+It refuses a tampered archive or the wrong key, and verifies the decrypted backup the same way as `backup:verify`. Restore the databases from that directory with `backup:restore -- --path <directory>`.
+
 ## Not covered
 
-Off-host backup copies (sync `/var/backups/widemind` elsewhere), host hardening, log retention and firewalling are left to the host. Run one alerts process per run.
+Host hardening, log retention and firewalling are left to the host. Run one alerts process per run.

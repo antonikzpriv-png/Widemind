@@ -10,7 +10,11 @@ These commands support [Milestone 7](ROADMAP.md#7-real-paid-survival-pilot). Non
 | `pilot:cost` | Record costs paid outside the ledger, or correct one |
 | `pilot:alerts` | Notify the operator when the run needs attention |
 | `pilot:snapshot` | Save the public report over time and choose what the website shows |
+| `pilot:rehearse` | One sandbox order through the running services, then a cross-check of every pilot tool ([DEPLOYMENT.md](DEPLOYMENT.md#steps), step 8) |
 | `backup`, `backup:verify`, `backup:restore` | Verified database backups ([DEPLOYMENT.md](DEPLOYMENT.md#backups-and-restore)) |
+| `backup:offsite`, `backup:keygen`, `backup:decrypt` | Encrypted off-host copies ([DEPLOYMENT.md](DEPLOYMENT.md#off-host-encrypted-copies)) |
+
+The signed-in operator page `/operator/pilot` shows the verdict, criteria, go-live checklist and money, and has forms to record or withdraw the independence attestation, record and correct costs, and take, publish or retract snapshots. The same actions are available as JSON under `/api/operator/pilot` (`GET` for the data; `POST .../attest`, `.../cost`, `.../snapshot`, `.../retract`). Every form uses the operator session, same-origin check and CSRF token.
 
 ## Go-live checklist
 
@@ -32,6 +36,7 @@ Prints JSON checks and exits with status 2 until every check passes:
 | `tools_available`, `email_capability` | The tools service is reachable and at least one `gmail.*` capability is available |
 | `business_available` | The business module is available |
 | `backups_recent` | A complete backup exists in `WIDEMIND_BACKUP_DIR` within `WIDEMIND_BACKUP_MAX_AGE_HOURS` |
+| `offsite_backups` | An encrypted off-host copy of a backup within that age has been uploaded |
 
 Only the presence of a secret is inspected; values are never printed. A passing check means configuration is present, not that the provider account has been verified.
 
@@ -112,6 +117,7 @@ Run this as its own process, separate from the worker, so it can notice the work
 | `reconciliation_dead_letters` | critical | Payment reconciliation tasks exhausted their retries |
 | `credit_exhausted` | warning | Spendable credit is zero or less, or the run is `exhausted` |
 | `unresolved_actions` | warning | Actions have an unknown external outcome |
+| `offsite_backup_stale` | warning | The newest off-host copy is from a backup older than the limit, or none was uploaded (not observable without `WIDEMIND_OFFSITE_ENDPOINT`) |
 | `backup_stale` | warning | The newest backup is older than `WIDEMIND_BACKUP_MAX_AGE_HOURS`, or none exists (not observable without `WIDEMIND_BACKUP_DIR`) |
 
 Dead letters are read from the economy's operator API when `WIDEMIND_ECONOMY_URL` and `WIDEMIND_ECONOMY_OPERATOR_TOKEN` are set; otherwise that condition is reported as not observable and never alerts. A condition that cannot be observed neither raises nor clears.

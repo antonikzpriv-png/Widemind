@@ -1,6 +1,24 @@
 import { commercePage, commerceScript, integrationsPage } from "./commerce.ts";
-import { publishedPilot } from "../runtime/pilot-snapshots.ts";
+import {
+  listSnapshots,
+  publishedPilot,
+  retractSnapshot,
+  takeSnapshot,
+  verifyChain,
+} from "../runtime/pilot-snapshots.ts";
 import { pilotPage } from "./pilot-page.ts";
+import {
+  pilotOperatorPage,
+  type OperatorPilotData,
+} from "./pilot-operator-page.ts";
+import { pilotReadiness, pilotReport } from "../runtime/pilot.ts";
+import {
+  outsideLedgerCosts,
+  recordAttestation,
+  recordCost,
+  usdToMicros,
+  type CostCategory,
+} from "../runtime/pilot-records.ts";
 import { callDependency, DependencyTimeout } from "../runtime/dependencies.ts";
 import { RequestError } from "./errors.ts";
 import { createServer } from "node:http";
@@ -59,8 +77,29 @@ export function webServer(context: {
   config: RuntimeConfig;
   secrets: ServerSecrets;
   services: Services;
+  env?: NodeJS.ProcessEnv;
 }) {
   const { db, config, secrets, services } = context;
+  const env = context.env ?? process.env;
+  const pilotData = async (): Promise<OperatorPilotData | null> => {
+    const runId = config.publicRunId;
+    if (!runId || !store.run(runId)) return null;
+    return {
+      runId,
+      readiness: await pilotReadiness({
+        env,
+        config,
+        operatorPasswordConfigured: Boolean(secrets.operatorPasswordHash),
+        services,
+        db,
+        runId,
+      }),
+      report: await pilotReport({ db, services, runId, view: "private" }),
+      costs: outsideLedgerCosts(db, runId, true).records ?? [],
+      snapshots: listSnapshots(db, runId),
+      chain: verifyChain(db, runId),
+    };
+  };
   if (
     secrets.operatorPasswordHash &&
     !validPasswordHash(secrets.operatorPasswordHash)
@@ -383,6 +422,16 @@ export function webServer(context: {
           send(401, { error: "Operator authentication required" });
           return;
         }
+        if (
+          method === "GET" &&
+          (path === "/operator/pilot" || path === "/api/operator/pilot")
+        ) {
+          const data = await pilotData();
+          if (path === "/operator/pilot")
+            send(200, pilotOperatorPage(data, session.csrf), "text/html");
+          else send(data ? 200 : 404, data ?? { error: "No pilot run" });
+          return;
+        }
         if (method === "GET" && path === "/operator/integrations") {
           send(200, integrationsPage(), "text/html");
           return;
@@ -465,6 +514,76 @@ export function webServer(context: {
           }
           if (api) send(delivered.duplicate ? 200 : 202, delivered);
           else redirect("/operator");
+          return;
+        }
+        const pilotAction =
+          /^\/operator\/pilot\/(attest|cost|snapshot|retract)$/.exec(route);
+        if (pilotAction) {
+          const runId = config.publicRunId;
+          const text = (name: string) =>
+            typeof input[name] === "string" ? (input[name] as string) : "";
+          let result: unknown;
+          try {
+            if (!runId || !store.run(runId))
+              throw new Error("No pilot run is configured");
+            if (pilotAction[1] === "attest")
+              result = recordAttestation(db, {
+                runId,
+                stance:
+                  text("stance") === "withdrawn" ? "withdrawn" : "affirmed",
+                evidenceRef: text("evidence"),
+                note: text("note"),
+              });
+            else if (pilotAction[1] === "cost") {
+              const amountMicros = usdToMicros(text("amount"));
+              const common = {
+                runId,
+                amountMicros,
+                evidenceRef: text("evidence"),
+                note: text("note"),
+              };
+              result = text("corrects")
+                ? recordCost(db, {
+                    ...common,
+                    correctsId: /^[1-9][0-9]{0,15}$/.test(text("corrects"))
+                      ? Number(text("corrects"))
+                      : NaN,
+                  })
+                : recordCost(db, {
+                    ...common,
+                    category: text("category") as CostCategory,
+                    periodStart: text("from"),
+                    periodEnd: text("to"),
+                  });
+            } else if (pilotAction[1] === "snapshot")
+              result = await takeSnapshot({
+                db,
+                services,
+                runId,
+                publish: input.publish === true || input.publish === "true",
+              });
+            else {
+              const id = text("snapshotId") || String(input.snapshotId ?? "");
+              if (!/^[1-9][0-9]{0,15}$/.test(id))
+                throw new Error("Snapshot id required");
+              result = retractSnapshot(db, runId, Number(id));
+            }
+          } catch (error) {
+            const message =
+              error instanceof Error
+                ? error.message.slice(0, 500)
+                : "Invalid request";
+            if (api) send(400, { error: message });
+            else
+              send(
+                400,
+                operatorFormErrorPage({ error: message }, "/operator/pilot"),
+                "text/html",
+              );
+            return;
+          }
+          if (api) send(200, result);
+          else redirect("/operator/pilot");
           return;
         }
         const match =
