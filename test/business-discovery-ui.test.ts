@@ -214,10 +214,19 @@ test("discovery operator pages and commands inherit session, Origin and CSRF con
       capabilities: [],
       events: [],
     };
+    // A far-away event still re-checks work (and payments) within 30 seconds.
+    const before = Date.now();
     const selection = await services.business.selectWork(snapshot);
     assert.equal(selection.kind, "wait");
-    if (selection.kind === "wait")
-      assert.equal(selection.wakeAt, new Date(dueAt * 1000).toISOString());
+    if (selection.kind === "wait") {
+      const wake = Date.parse(selection.wakeAt!);
+      assert.ok(wake > before && wake <= Date.now() + 30_000);
+    }
+    dueAt = Date.now() / 1000 + 10;
+    const near = await services.business.selectWork(snapshot);
+    if (near.kind === "wait")
+      assert.equal(near.wakeAt, new Date(dueAt * 1000).toISOString());
+    else assert.fail("expected a scheduled wait");
     dueAt = Date.now() / 1000 - 1;
     const ready = await services.business.selectWork(snapshot);
     assert.equal(ready.kind, "work");

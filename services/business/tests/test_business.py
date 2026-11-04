@@ -116,9 +116,8 @@ class BusinessTests(unittest.TestCase):
         self.assertEqual(done["byStatus"], {"completed": 1})
         self.assertEqual(done["paidDeliveredNotRefunded"], 1)
         self.assertEqual(done["overdue"], 0)
+        # A refund in the economy counts at once, before the order's stored copy refreshes.
         self.adapters.set_payment(job, refunds=2_000_000, status="refunded")
-        self.store.db.execute("UPDATE orders SET payment=? WHERE id=?",
-                              (json.dumps(self.adapters.get(f"payment:{job}")), job))
         refunded = self.business.delivery_outcomes()
         self.assertEqual(refunded["paidDeliveredNotRefunded"], 0)
         self.assertEqual(refunded["deliveredFullyRefunded"], 1)

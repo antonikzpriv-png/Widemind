@@ -14,6 +14,14 @@ import { bootstrap } from "../src/bootstrap.ts";
 import { Store } from "../src/runtime/store.ts";
 import { webServer } from "../src/web/server.ts";
 import { hashPassword } from "../src/auth/password.ts";
+import { pilotReport } from "../src/runtime/pilot.ts";
+import { rehearse } from "../src/runtime/rehearsal.ts";
+import {
+  backupSettings,
+  backupSources,
+  runBackup,
+  verifyBackup,
+} from "../src/runtime/backup.ts";
 const directory = await mkdtemp(join(tmpdir(), "widemind-integrated-")),
   provider = await paypalFixture(),
   children = [];
@@ -485,6 +493,79 @@ try {
   assert.equal(provider.stats().captured, 1);
   assert.equal(provider.stats().refunds, 1);
   if (withBrowser) assert.deepEqual(browser.errors, []);
+  console.log("INTEGRATION pilot report, backup and rehearsal");
+  const refundedReport = await pilotReport({
+    db: app.db,
+    services: app.services,
+    runId,
+    view: "private",
+  });
+  assert.equal(refundedReport.deliveries?.deliveredFullyRefunded, 1);
+  assert.equal(refundedReport.deliveries?.paidDeliveredNotRefunded, 0);
+  assert.equal(refundedReport.outcomes?.refundsMicros, "2000000");
+  assert.equal(
+    refundedReport.criteria.find((item) => item.id === "paid_work_delivered")
+      ?.status,
+    "not_met",
+  );
+  env.WIDEMIND_BACKUP_DIR = process.env.WIDEMIND_BACKUP_DIR = join(
+    directory,
+    "backups",
+  );
+  const backup = await runBackup({
+    settings: backupSettings(env),
+    sources: backupSources(env, env.WIDEMIND_DATABASE),
+  });
+  const labels = backup.manifest.files.map((item) => item.label);
+  for (const label of ["runtime", "economy", "business"])
+    assert.ok(labels.includes(label), "backup includes " + label);
+  assert.ok(labels.some((label) => label.startsWith("tools-")));
+  assert.equal(verifyBackup(backup.path).ok, true);
+  const hooks = [];
+  const hook = (await import("node:http")).createServer(async (req, res) => {
+    let text = "";
+    for await (const part of req) text += part;
+    hooks.push(JSON.parse(text));
+    res.end();
+  });
+  await new Promise((resolve) => hook.listen(0, "127.0.0.1", resolve));
+  env.WIDEMIND_ALERT_WEBHOOK_URL = `http://127.0.0.1:${hook.address().port}/hook`;
+  const rehearsal = await rehearse({
+    origin,
+    email: "controlled-customer@example.invalid",
+    db: app.db,
+    services: app.services,
+    config: app.config,
+    env,
+    runId,
+    pollMs: 1000,
+    timeoutMs: 120000,
+    onCheckout: async (url) => {
+      await post(
+        "/api/modules/economy/webhook",
+        {
+          id: "REHEARSAL_APPROVAL_EVENT",
+          event_type: "CHECKOUT.ORDER.APPROVED",
+          resource: { id: new URL(url).searchParams.get("token") },
+        },
+        {
+          ...paypalHeaders,
+          "paypal-transmission-id": "rehearsal-transmission",
+          "paypal-transmission-time": new Date().toISOString(),
+        },
+      );
+    },
+  });
+  assert.equal(rehearsal.ok, true, JSON.stringify(rehearsal, null, 2));
+  await new Promise((resolve) => hook.close(resolve));
+  assert.equal(hooks.length, 1);
+  assert.match(hooks[0].text, /rehearsal/);
+  assert.equal(
+    rehearsal.checks.find((item) => item.id === "alert_webhook_delivers")
+      ?.status,
+    "passed",
+  );
+  assert.equal(provider.stats().captured, 2);
   const report = {
     passed: true,
     externalPayment:
@@ -502,6 +583,8 @@ try {
     providerEffects: provider.stats(),
     financialBeforeRefund: publicData.financial,
     financial: afterRefund.financial,
+    pilotBackupLabels: labels,
+    pilotRehearsal: rehearsal.checks,
   };
   await mkdir("var", { recursive: true });
   await writeFile(

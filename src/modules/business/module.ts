@@ -78,6 +78,8 @@ function receipt(
     },
   };
 }
+/** Free local business polling interval; also how soon a new payment is noticed. */
+export const BUSINESS_POLL_MS = 30_000;
 /** Accept only the aggregate counts shape; anything else is unavailable. */
 export function deliveryOutcomes(value: unknown): DeliveryOutcomes | null {
   const count = (item: unknown) =>
@@ -404,7 +406,7 @@ export const definition: ModuleDefinition = {
               kind: "wait",
               reason:
                 "No ready business work; waiting for customer/provider events",
-              wakeAt: new Date(Date.now() + 30000).toISOString(),
+              wakeAt: new Date(Date.now() + BUSINESS_POLL_MS).toISOString(),
               acknowledgeEventIds: snapshot.events.map(
                 (event) => event.eventId,
               ),
@@ -413,7 +415,11 @@ export const definition: ModuleDefinition = {
             return {
               kind: "wait",
               reason: "Business event scheduled",
-              wakeAt: new Date(state.dueAt * 1000).toISOString(),
+              // Payments are observed when work state is read, so re-check at
+              // least every 30 seconds even when the next event is far away.
+              wakeAt: new Date(
+                Math.min(state.dueAt * 1000, Date.now() + BUSINESS_POLL_MS),
+              ).toISOString(),
             };
           return {
             kind: "work",

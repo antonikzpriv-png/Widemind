@@ -822,9 +822,20 @@ class Business(DiscoveryMixin):
         for row in self.store.all("SELECT id FROM orders WHERE run_id=?", (self.run_id,)):
             order = self.order(row["id"])
             by_status[order["status"]] = by_status.get(order["status"], 0) + 1
-            receipts = json.loads(order["payment"]).get("receipts_micro_usd", 0)
+            payment = json.loads(order["payment"])
+            if order["status"] in {"delivered", "completed"}:
+                # The stored copy refreshes only when work is next polled; read
+                # the economy's current record so a refund is never counted as kept.
+                try:
+                    snapshot = self.economy.payment(run_id=self.run_id, job_id=order["id"])
+                    if isinstance(snapshot, dict) and snapshot.get("job_id") == order["id"]:
+                        payment = snapshot
+                except Exception:
+                    pass
+            receipts = payment.get("receipts_micro_usd", 0)
+            unrefunded = max(0, receipts - payment.get("refunds_micro_usd", 0))
             if order["status"] in {"delivered", "completed"} and receipts > 0:
-                if order["unrefunded_receipts_micro_usd"] > 0:
+                if unrefunded > 0:
                     paid_delivered += 1
                 else:
                     fully_refunded += 1

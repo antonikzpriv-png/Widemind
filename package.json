@@ -34,6 +34,7 @@
     "pilot:cost": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-cost-main.ts",
     "pilot:alerts": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-alerts-main.ts",
     "pilot:snapshot": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/pilot-snapshot-main.ts",
+    "pilot:rehearse": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/rehearse-main.ts",
     "backup": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/backup-main.ts run",
     "backup:verify": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/backup-main.ts verify",
     "backup:restore": "node --env-file-if-exists=.env --env-file-if-exists=var/integration.env src/runtime/backup-main.ts restore",
