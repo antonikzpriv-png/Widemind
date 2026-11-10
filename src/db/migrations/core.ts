@@ -125,4 +125,34 @@ CREATE TABLE agent_plans (
 CREATE INDEX agent_plans_run ON agent_plans(run_id,id);
 `,
   },
+  {
+    version: 6,
+    sql: `
+CREATE TABLE growth_leads (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ source_key TEXT NOT NULL, service TEXT NOT NULL, kind TEXT NOT NULL,
+ need TEXT NOT NULL, excerpt TEXT NOT NULL, source_url TEXT NOT NULL,
+ contact TEXT, draft TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('new','contacted','dismissed')),
+ created_at INTEGER NOT NULL, decided_at INTEGER,
+ UNIQUE(run_id,source_key)
+);
+CREATE INDEX growth_leads_run ON growth_leads(run_id,state,id);
+CREATE TABLE growth_samples (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ service TEXT NOT NULL, title TEXT NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('svg','html','text')),
+ content TEXT NOT NULL, origin TEXT NOT NULL,
+ state TEXT NOT NULL CHECK(state IN ('draft','published','retracted')),
+ created_at INTEGER NOT NULL, published_at INTEGER
+);
+CREATE INDEX growth_samples_run ON growth_samples(run_id,state,id);
+CREATE TABLE growth_attributions (
+ id INTEGER PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runtime_runs(id),
+ ref TEXT NOT NULL, opportunity_id TEXT NOT NULL, created_at INTEGER NOT NULL,
+ UNIQUE(run_id,opportunity_id)
+);
+CREATE INDEX growth_attributions_run ON growth_attributions(run_id,ref);
+`,
+  },
 ];

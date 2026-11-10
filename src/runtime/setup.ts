@@ -84,8 +84,8 @@ const GUIDE: { id: string; stage: Stage; title: string; todo: string }[] = [
   {
     id: "email_capability",
     stage: "Connect accounts",
-    title: "The agent's own Gmail connected",
-    todo: "Create a dedicated Gmail account for the agent and complete OAuth (docs/GMAIL.md). Google will ask you to verify it.",
+    title: "The agent's own Gmail connected, or portal-only mode chosen",
+    todo: "Create a dedicated Gmail account for the agent and complete OAuth (docs/GMAIL.md); Google will ask you to verify it. To start without email, set WIDEMIND_PORTAL_ONLY=true: customers then use their private link only.",
   },
   {
     id: "backups_recent",

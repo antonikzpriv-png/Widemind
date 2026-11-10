@@ -71,6 +71,9 @@ const EVENTS: Record<string, [TimelineEntry["kind"], string]> = {
   "pilot.snapshot.retracted": ["owner", "You retracted a pilot snapshot"],
   "pilot.rehearsal.passed": ["system", "Sandbox rehearsal passed"],
   "pilot.rehearsal.failed": ["system", "Sandbox rehearsal failed"],
+  "growth.lead.contacted": ["owner", "You sent a reply to a lead"],
+  "growth.sample.published": ["owner", "You published a sample"],
+  "growth.sample.retracted": ["owner", "You took a sample down"],
 };
 
 function json(text: string | null): Record<string, unknown> {

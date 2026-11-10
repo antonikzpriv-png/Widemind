@@ -1,0 +1,12 @@
+# HTTPS front end for docker-compose.yml. Caddy obtains and renews the
+# certificate for WIDEMIND_DOMAIN. Only the web app is reachable; the
+# economy, tools and business services stay on loopback inside the app
+# container.
+{$WIDEMIND_DOMAIN} {
+	encode zstd gzip
+	header Strict-Transport-Security "max-age=31536000"
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy app:3000
+}

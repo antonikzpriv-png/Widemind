@@ -23,7 +23,24 @@ export interface OfferingInfo {
   needTerms: string[];
   /** Example scope used when the plan proposes a discovery market. */
   exampleScope: Record<string, Json>;
+  /** Suggested prices the owner can pick instead of typing one. */
+  presets: readonly PricePreset[];
 }
+export interface PricePreset {
+  id: "starter" | "standard" | "premium";
+  label: string;
+  priceMicros: string;
+}
+/** Starting points for the owner, not market research. */
+const presets = (
+  starter: number,
+  standard: number,
+  premium: number,
+): PricePreset[] => [
+  { id: "starter", label: "Starter", priceMicros: `${starter}000000` },
+  { id: "standard", label: "Standard", priceMicros: `${standard}000000` },
+  { id: "premium", label: "Premium", priceMicros: `${premium}000000` },
+];
 export const OFFERINGS: readonly OfferingInfo[] = [
   {
     id: "research-brief",
@@ -43,6 +60,7 @@ export const OFFERINGS: readonly OfferingInfo[] = [
       sections: ["Overview", "Findings"],
       min_sources: 2,
     },
+    presets: presets(15, 29, 59),
   },
   {
     id: "svg-graphic",
@@ -55,6 +73,7 @@ export const OFFERINGS: readonly OfferingInfo[] = [
       title: "Requested graphic",
       description: "A simple SVG graphic",
     },
+    presets: presets(9, 19, 39),
   },
   {
     id: "software-starter",
@@ -67,6 +86,7 @@ export const OFFERINGS: readonly OfferingInfo[] = [
       title: "Requested page",
       description: "A static HTML starter page",
     },
+    presets: presets(19, 49, 99),
   },
 ];
 
@@ -81,6 +101,11 @@ export interface AgentProfile {
   experimentBudgetMicros: string;
   maxJobMicros: string;
   allowOutbound: boolean;
+  /**
+   * Revisions included in every quote (0 to 3). Absent on profiles saved
+   * before this setting existed; the business policy then keeps its value.
+   */
+  includedRevisions?: number;
 }
 export interface StoredProfile extends AgentProfile {
   version: number;
@@ -107,8 +132,13 @@ export function profileFromInput(input: Record<string, unknown>): AgentProfile {
     const chosen = input[`offer_${offering.id}`];
     if (chosen !== "on" && chosen !== "true" && chosen !== true) continue;
     const price = input[`price_${offering.id}`];
-    const micros =
-      typeof price === "string" && price.trim()
+    // A chosen suggested price replaces whatever is in the price field.
+    const preset = offering.presets.find(
+      (item) => item.id === input[`preset_${offering.id}`],
+    );
+    const micros = preset
+      ? preset.priceMicros
+      : typeof price === "string" && price.trim()
         ? usdToMicros(price.trim())
         : offering.defaultPriceMicros;
     if (BigInt(micros) > MAX_PRICE_MICROS)
@@ -133,7 +163,17 @@ export function profileFromInput(input: Record<string, unknown>): AgentProfile {
     BigInt(maxJobMicros) > 5_000_000n
   )
     throw new Error("Spending limits cannot exceed the $5.00 opening credit");
+  const revisions = input.revisions;
+  if (
+    revisions !== undefined &&
+    revisions !== "" &&
+    !["0", "1", "2", "3", 0, 1, 2, 3].includes(revisions as string | number)
+  )
+    throw new Error("Included revisions must be between 0 and 3");
   return {
+    ...(revisions !== undefined && revisions !== ""
+      ? { includedRevisions: Number(revisions) }
+      : {}),
     name,
     mission,
     offerings,
@@ -219,6 +259,9 @@ export function policyFromProfile(
     experiment_budget_micro_usd: Number(profile.experimentBudgetMicros),
     max_job_micro_usd: Number(profile.maxJobMicros),
     allow_outbound: profile.allowOutbound,
+    ...(profile.includedRevisions !== undefined
+      ? { conversation_revision_allowance: profile.includedRevisions }
+      : {}),
     // Negotiation floors must refer to offerings still sold, within their price.
     conversation_price_floors: Object.fromEntries(
       Object.entries(

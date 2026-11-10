@@ -49,7 +49,10 @@ const RUN_STATES: Record<string, string> = {
   stopped: "Stopped",
   failed: "Stopped by an error",
 };
-export function publicPage(data: PublicWebsiteData) {
+export function publicPage(
+  data: PublicWebsiteData,
+  extras: { samples?: number } = {},
+) {
   const run =
     data.runs.find((item) => item.runId === data.financialRunId) ??
     data.runs[0];
@@ -86,7 +89,7 @@ export function publicPage(data: PublicWebsiteData) {
     "Headquarters",
     `<p class="eyebrow">AN AUTONOMOUS AGENT THAT STARTED WITH $5</p>${
       data.agent
-        ? `<h1>${escape(data.agent.name)}</h1><p class="lead">${escape(data.agent.mission)}</p><div class="hero-actions"><a class="button" href="/commerce">Request work</a><a class="link-arrow" href="/pilot">How it's doing</a></div>`
+        ? `<h1>${escape(data.agent.name)}</h1><p class="lead">${escape(data.agent.mission)}</p><div class="hero-actions"><a class="button" href="/commerce">Request work</a><a class="link-arrow" href="/pilot">How it's doing</a>${extras.samples ? '<a class="link-arrow" href="/samples">Samples</a>' : ""}</div>`
         : `<h1>A small beginning.<br>A durable mind.</h1><p class="lead">WideMind starts with $5 of credit, chooses useful work, delivers it, and uses verified earnings to keep going.</p><section class="notice"><h2>This agent is still being set up</h2><p>Its owner hasn't finished setting it up yet. Check back soon to see what it offers.</p></section>`
     }<div class="stats">${stat(
       "Available",
@@ -236,5 +239,10 @@ footer{color:var(--faint);border-top:1px solid var(--hair);font:10px var(--mono)
 .progress{display:block;width:100%;height:5px;margin:12px 0 6px;border:0;border-radius:99px;background:var(--hair);overflow:hidden;appearance:none}.progress::-webkit-progress-bar{background:var(--hair);border-radius:99px}.progress::-webkit-progress-value{background:var(--accent-strong);border-radius:99px}.progress::-moz-progress-bar{background:var(--accent-strong);border-radius:99px}.gate-flat{min-height:0;padding-top:0}.gate-flat::before{display:none}
 .step-cards{display:grid;gap:10px;margin:14px 0}.step-card{display:flex;gap:14px;align-items:flex-start;padding:14px 16px;border:1px solid var(--hair);border-radius:12px;background:var(--raised)}.step-card.done{opacity:.72}.step-card .num{flex:none;display:grid;place-items:center;width:26px;height:26px;border-radius:50%;border:1px solid var(--hair);font:600 11px var(--mono);color:var(--muted)}.step-card.done .num{border-color:rgba(130,178,144,.4);color:var(--ok)}.step-card h3{margin:2px 0 4px}.step-card p{margin:0;font-size:12px;color:var(--muted)}.step-card form{margin:0}
 .choice{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid var(--hair);border-radius:10px;margin:8px 0;background:var(--raised)}.choice label{margin:0;display:flex;align-items:center;color:var(--fg);font-size:13px}.choice input[name^=price]{width:96px;text-align:right}
-@media(max-width:900px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.business-grid{grid-template-columns:minmax(0,1fr)}header,main,footer{padding-inline:24px}}
+.choice-more{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:-2px 0 14px;padding:0 14px}.choice-more label{margin:0;min-width:200px}.choice-more p{margin:0;font-size:12px}
+blockquote{margin:12px 0;padding:2px 14px;border-left:2px solid var(--hair);color:#b9bab6}textarea[readonly],input[readonly]{color:var(--muted)}
+.share-layout{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(220px,1fr);gap:18px}.share-card{display:block;width:100%;height:auto;margin-top:12px;border:1px solid var(--hair);border-radius:12px}
+.sample-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:14px;margin:18px 0}.sample{background:var(--surface);border:1px solid var(--hair);border-radius:16px;padding:18px}.sample h3{margin:14px 0 4px}.sample p{margin:0 0 6px}.sample-view{display:grid;place-items:center;min-height:220px;background:var(--raised);border-radius:10px;overflow:hidden}
+.sample-art{display:block;max-width:100%;max-height:320px;width:auto;height:auto}.sample-frame{display:block;width:100%;height:320px;border:0;border-radius:10px;background:#fff}.sample-text{width:100%;max-height:320px;margin:0}
+@media(max-width:900px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.business-grid,.share-layout{grid-template-columns:minmax(0,1fr)}header,main,footer{padding-inline:24px}}
 @media(max-width:520px){.business-nav{flex-wrap:wrap;overflow:visible}.business-nav a{min-height:44px;display:inline-flex;align-items:center}header,main,footer{padding-inline:16px}header{gap:10px;min-height:64px;flex-wrap:wrap}.brand{min-height:62px}header nav{gap:0}header nav a{font-size:12px;padding:8px}main{padding-block:26px 52px}.hero h1{font-size:44px}.lead{font-size:15px}section{padding:18px}.business-top h1{font-size:30px}.form-grid,.welcome-list{grid-template-columns:minmax(0,1fr)}.stats{gap:8px}.stats section{padding:14px}.stat-value{font-size:22px}.row{gap:10px}.row-meta{font-size:10px}.facts{grid-template-columns:minmax(0,1fr)}.facts dd{text-align:left}.pagination{align-items:flex-start;flex-direction:column}.inline-form label{min-width:100%}.card{padding:24px 20px}.choice{flex-wrap:wrap}}`;

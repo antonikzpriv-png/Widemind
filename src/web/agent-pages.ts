@@ -3,6 +3,8 @@ import { OFFERINGS, formatUsd } from "../runtime/agent.ts";
 import type { SetupGuide } from "../runtime/setup.ts";
 import type { Timeline } from "../runtime/timeline.ts";
 import { displayUsd, escape, layout } from "./pages.ts";
+import { feeEstimate, type FeeModel } from "../runtime/growth.ts";
+import { firstCustomerCard } from "./growth-pages.ts";
 
 export interface StartData {
   runId: string | null;
@@ -16,6 +18,14 @@ export interface StartData {
   } | null;
   /** The run is working or waiting for work. */
   running: boolean;
+  /** Estimated payment fee, for the "what you keep" note beside each price. */
+  fees: FeeModel;
+  /** Counts for the first-customer card, once the agent exists. */
+  firstCustomer: {
+    newLeads: number;
+    publishedSamples: number;
+    requests: number;
+  } | null;
 }
 
 const usdInput = (micros: string) => formatUsd(micros).slice(1);
@@ -27,14 +37,32 @@ function agentForm(
   token: string,
   profile: StoredProfile | null,
   compact: boolean,
+  fees: FeeModel,
 ) {
   const offerings = OFFERINGS.map((offering) => {
     const price = profile?.offerings[offering.id];
     const checked = profile ? Boolean(price) : offering.id !== "research-brief";
-    return `<div class="choice"><label><input type="checkbox" name="offer_${offering.id}" value="true"${checked ? " checked" : ""}>${escape(offering.label)}</label><label class="muted">$<input name="price_${offering.id}" inputmode="decimal" aria-label="${escape(offering.label)} price in USD" value="${escape(usdInput(price ?? offering.defaultPriceMicros))}"></label></div>`;
+    const current = price ?? offering.defaultPriceMicros;
+    const estimate = feeEstimate(current, fees);
+    const presets = offering.presets
+      .map(
+        (preset) =>
+          `<option value="${preset.id}">${escape(preset.label)} · ${escape(formatUsd(preset.priceMicros))}</option>`,
+      )
+      .join("");
+    return `<div class="choice"><label><input type="checkbox" name="offer_${offering.id}" value="true"${checked ? " checked" : ""}>${escape(offering.label)}</label><label class="muted">$<input name="price_${offering.id}" inputmode="decimal" aria-label="${escape(offering.label)} price in USD" value="${escape(usdInput(current))}"></label></div><div class="choice-more"><label>Or use a suggested price<select name="preset_${offering.id}" aria-label="${escape(offering.label)} suggested price"><option value="">Keep the price above</option>${presets}</select></label><p class="${estimate.heavy ? "warning-text" : "muted"}">At ${escape(formatUsd(current))} you keep about ${escape(formatUsd(estimate.keepMicros))} after an estimated ${escape(formatUsd(estimate.feeMicros))} payment fee.${estimate.heavy ? " The fee takes more than a fifth of this price." : ""}</p></div>`;
   }).join("");
-  const advanced = `<details${compact ? "" : " open"}><summary class="muted">Spending limits and outreach</summary><div class="form-grid"><label>Experiment budget (USD)<input name="experimentBudget" inputmode="decimal" value="${escape(usdInput(profile?.experimentBudgetMicros ?? "1000000"))}"></label><label>Most it may spend on one job (USD)<input name="maxJob" inputmode="decimal" value="${escape(usdInput(profile?.maxJobMicros ?? "250000"))}"></label></div><label><span><input type="checkbox" name="allowOutbound" value="true"${profile?.allowOutbound ? " checked" : ""}>Let it contact people first. Off means it only answers people who come to it.</span></label></details>`;
-  return `<form method="post" action="/operator/agent">${token}<label>Name<input name="name" required maxlength="60" value="${escape(profile?.name ?? "")}" placeholder="For example: Pixel &amp; Proof" autofocus></label><label>What is it for?<textarea name="mission" required maxlength="500" rows="3">${escape(profile?.mission ?? SUGGESTED_MISSION)}</textarea></label><p class="eyebrow">WHAT IT SELLS</p>${offerings}<p class="muted"><small>Customers pay before any work starts. Research briefs need OpenAI connected.</small></p>${advanced}<button>${profile ? "Save changes" : "Create my agent"}</button></form>`;
+  // "Leave as it is" keeps an allowance set directly in the business policy.
+  const revisions =
+    `<option value=""${profile?.includedRevisions === undefined ? " selected" : ""}>Leave as it is</option>` +
+    [0, 1, 2, 3]
+      .map(
+        (count) =>
+          `<option value="${count}"${profile?.includedRevisions === count ? " selected" : ""}>${count === 0 ? "None" : count}</option>`,
+      )
+      .join("");
+  const advanced = `<details${compact ? "" : " open"}><summary class="muted">Spending limits and outreach</summary><div class="form-grid"><label>Experiment budget (USD)<input name="experimentBudget" inputmode="decimal" value="${escape(usdInput(profile?.experimentBudgetMicros ?? "1000000"))}"></label><label>Most it may spend on one job (USD)<input name="maxJob" inputmode="decimal" value="${escape(usdInput(profile?.maxJobMicros ?? "250000"))}"></label><label class="span-all">Revisions included in every quote<select name="revisions">${revisions}</select></label></div><label><span><input type="checkbox" name="allowOutbound" value="true"${profile?.allowOutbound ? " checked" : ""}>Let it contact people first. Off means it only answers people who come to it.</span></label></details>`;
+  return `<form method="post" action="/operator/agent">${token}<label>Name<input name="name" required maxlength="60" value="${escape(profile?.name ?? "")}" placeholder="For example: Pixel &amp; Proof" autofocus></label><label>What is it for?<textarea name="mission" required maxlength="500" rows="3">${escape(profile?.mission ?? SUGGESTED_MISSION)}</textarea></label><p class="eyebrow">WHAT IT SELLS</p>${offerings}<p class="muted"><small>Customers pay before any work starts. Research briefs need OpenAI connected. Suggested prices are starting points, and the fee is an estimate; check your payment provider's rates.</small></p>${advanced}<button>${profile ? "Save changes" : "Create my agent"}</button></form>`;
 }
 
 function welcome(data: StartData, token: string) {
@@ -42,7 +70,7 @@ function welcome(data: StartData, token: string) {
     "Welcome",
     `<div class="welcome"><p class="eyebrow">WELCOME</p><h1>Let's set up your agent</h1><p class="lead">WideMind is an agent that starts with $5, sells small pieces of useful work, and uses what it earns to keep going. Setting it up takes about a minute.</p><ul class="welcome-list"><li><strong>1 · Name it</strong><span>Give it a name and say what it's for. You can change both later.</span></li><li><strong>2 · Choose what it sells</strong><span>Graphics, simple web pages or research, at prices you set.</span></li><li><strong>3 · Try it with test money</strong><span>Add $5 of sandbox credit and place a test order yourself. Nothing real is spent.</span></li><li><strong>4 · Go live when ready</strong><span>A checklist walks you through payments, email, backups and HTTPS.</span></li></ul></div>${
       data.runId
-        ? `<div class="gate gate-flat"><section class="card"><div class="card-head"><p class="eyebrow">STEP 1 OF 4</p><h1>Create your agent</h1><p>Sensible defaults are filled in.</p></div>${agentForm(token, null, true)}</section></div>`
+        ? `<div class="gate gate-flat"><section class="card"><div class="card-head"><p class="eyebrow">STEP 1 OF 4</p><h1>Create your agent</h1><p>Sensible defaults are filled in.</p></div>${agentForm(token, null, true, data.fees)}</section></div>`
         : `<section class="notice"><h2>One thing first</h2><p>${escape(data.guide.steps[0]!.todo)}</p></section>`
     }`,
   );
@@ -144,7 +172,7 @@ export function startPage(data: StartData, csrf: string) {
       data.applied && !data.applied.ok
         ? `<p class="alert" role="alert">Settings saved, but not active yet: ${escape(data.applied.detail)}</p>`
         : ""
-    }<div class="business-grid"><div><section><h2>Your first hour</h2>${decision}<div class="step-cards">${steps}</div>${discoveryCard}</section><section><details><summary><strong>Edit agent settings</strong></summary>${agentForm(token, profile, true)}</details></section></div><section><h2>Before going live</h2><progress class="progress" value="${guide.done}" max="${guide.steps.length}" aria-label="Setup progress">${percent}%</progress><p class="muted">${guide.done} of ${guide.steps.length} steps done${guide.next ? ` · next: <strong>${escape(guide.next.title)}</strong>` : " · ready for live work"}</p>${guide.next ? `<p class="notice">${escape(guide.next.todo)}</p>` : ""}${checklist}</section></div>`,
+    }<div class="business-grid"><div><section><h2>Your first hour</h2>${decision}<div class="step-cards">${steps}</div>${discoveryCard}</section>${data.firstCustomer ? firstCustomerCard(data.firstCustomer) : ""}<section><details><summary><strong>Edit agent settings</strong></summary>${agentForm(token, profile, true, data.fees)}</details></section></div><section><h2>Before going live</h2><progress class="progress" value="${guide.done}" max="${guide.steps.length}" aria-label="Setup progress">${percent}%</progress><p class="muted">${guide.done} of ${guide.steps.length} steps done${guide.next ? ` · next: <strong>${escape(guide.next.title)}</strong>` : " · ready for live work"}</p>${guide.next ? `<p class="notice">${escape(guide.next.todo)}</p>` : ""}${checklist}</section></div>`,
   );
 }
 

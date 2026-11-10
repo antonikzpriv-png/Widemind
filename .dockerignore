@@ -1,0 +1,14 @@
+.git
+.github
+node_modules
+dist
+var
+.venvs
+.env
+.env.*
+!.env.example
+**/__pycache__
+**/*.egg-info
+*.sqlite
+*.sqlite3
+*.log

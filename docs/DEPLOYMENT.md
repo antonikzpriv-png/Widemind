@@ -31,7 +31,7 @@ A single Linux host with systemd, running every service on loopback behind Caddy
    ```
    `npm run services:status` checks the loopback services and `npm run status` the worker.
 6. **HTTPS.** Put `deployment/Caddyfile` (with your domain) in `/etc/caddy/Caddyfile` and reload Caddy. Only the web app is exposed.
-7. **Accounts.** Register the PayPal webhook at `https://<domain>/api/modules/economy/webhook` and complete Gmail OAuth ([GMAIL.md](GMAIL.md)) and the OpenAI key ([AI-PROVIDERS.md](AI-PROVIDERS.md)).
+7. **Accounts.** Register the PayPal webhook at `https://<domain>/api/modules/economy/webhook` and complete Gmail OAuth ([GMAIL.md](GMAIL.md)) and the OpenAI key ([AI-PROVIDERS.md](AI-PROVIDERS.md)). To start without a mailbox, set `WIDEMIND_PORTAL_ONLY=true`: customers then use their private link only and the email check passes.
 8. **Sandbox rehearsal.** Open the run in sandbox (`npm run pilot:init -- --sandbox`), then:
    ```sh
    npm run pilot:rehearse -- --email <an inbox you control>
@@ -78,6 +78,19 @@ npm run backup:decrypt -- --in <file>.wmbk --key ~/widemind-backup-private.pem -
 ```
 
 It refuses a tampered archive or the wrong key, and verifies the decrypted backup the same way as `backup:verify`. Restore the databases from that directory with `backup:restore -- --path <directory>`.
+
+## Container (sandbox)
+
+`Dockerfile` and `docker-compose.yml` run every service in one container behind Caddy, for trying the agent with test money on a host that has only Docker:
+
+```sh
+WIDEMIND_DOMAIN=agent.example.com docker compose up -d --build
+docker compose logs app
+```
+
+The first start creates the agent identity, service tokens and owner password; the password is printed once in the logs. Data lives in the `widemind-data` volume. Portal-only mode is on by default (`WIDEMIND_PORTAL_ONLY`), so no Gmail account is needed. Use `WIDEMIND_DOMAIN=localhost` to try it on one machine.
+
+This is not the pilot layout: the economy runs in the same container and under the same user as the agent, so it is not outside the agent's write access. Use the systemd steps above for live money. The container files have not yet been exercised on a Docker host; treat the first build as a test.
 
 ## Not covered
 

@@ -33,7 +33,7 @@ Prints JSON checks and exits with status 2 until every check passes:
 | `live_effects_enabled`, `commerce_live` | `WIDEMIND_ENABLE_LIVE_EFFECTS=true` and `WIDEMIND_COMMERCE_MODE=live` |
 | `payment_provider` | The selected provider's credential is present (`WIDEMIND_PAYPAL_CLIENT_ID` or `WIDEMIND_STRIPE_API_KEY`) |
 | `economy_available`, `economy_live_opening` | The economy is reachable and the run's opening is a live 5000000 micro-USD grant |
-| `tools_available`, `email_capability` | The tools service is reachable and at least one `gmail.*` capability is available |
+| `tools_available`, `email_capability` | The tools service is reachable and at least one `gmail.*` capability is available, or `WIDEMIND_PORTAL_ONLY=true` |
 | `business_available` | The business module is available |
 | `backups_recent` | A complete backup exists in `WIDEMIND_BACKUP_DIR` within `WIDEMIND_BACKUP_MAX_AGE_HOURS` |
 | `offsite_backups` | An encrypted off-host copy of a backup within that age has been uploaded |

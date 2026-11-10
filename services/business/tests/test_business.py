@@ -99,6 +99,16 @@ class BusinessTests(unittest.TestCase):
         self.assertNotIn("SQLite", public)
         self.assertNotIn(job, public)
 
+    def test_contact_blocks_list_only_this_runs_opted_out_addresses(self):
+        self.assertEqual(self.business.contact_blocks(), [])
+        self.request("kept", customer_email="Kept@Example.invalid")
+        self.request("stopped", customer_email="Stopped@Example.invalid")
+        self.business.opt_out("stopped@example.invalid", "customer request")
+        self.assertEqual(self.business.contact_blocks(), ["stopped@example.invalid"])
+        other = Business(self.store, run_id="other-run", economy=self.adapters, tools=self.adapters,
+                         runtime=self.adapters, clock=lambda: self.now, mode="test")
+        self.assertEqual(other.contact_blocks(), [])
+
     def test_delivery_outcomes_count_paid_delivered_refunded_and_overdue_orders(self):
         empty = self.business.delivery_outcomes()
         self.assertEqual(empty, {"version": 1, "orders": 0, "byStatus": {}, "paidDeliveredNotRefunded": 0,

@@ -26,7 +26,7 @@ The password is shown **once**; save it. Only its hash is stored, in `var/integr
 Sign in. The first time, you see a short welcome and the **Create your agent** card:
 
 - **Name** and **what it's for**: shown on your public homepage. A sensible default is filled in.
-- **What it sells**: an SVG graphic, a simple web page and a sourced research brief, each at your price ($1.00 to $10,000.00, whole cents). Research needs OpenAI connected, so it starts unticked.
+- **What it sells**: an SVG graphic, a simple web page and a sourced research brief, each at your price ($1.00 to $10,000.00, whole cents). Research needs OpenAI connected, so it starts unticked. Each offering has three suggested prices, and a note shows what you keep after an estimated payment fee.
 - **Spending limits and outreach** (folded away): an experiment budget and the most it may spend on one job, both within the $5.00 opening credit, and whether it may contact people first (off by default).
 
 **Create my agent** saves it and puts the offerings on your site. Every later save is kept as a new version.
@@ -42,11 +42,21 @@ Getting started then shows four cards:
 
 **Optional: let it look for customers** scans one to five public pages you choose (forums, job boards, request threads) for matching requests, capped at the lower of your experiment budget and $0.50. It needs OpenAI.
 
+## Find your first customer
+
+Getting started also links three tools ([design and limits](GROWTH.md)):
+
+- **Share kit**: an order link, ready-to-post text and a card image for each offering.
+- **Samples**: publish examples of the work to a public gallery at `/samples`.
+- **Lead inbox**: requests the optional scan found, each with a reply drafted for you to review and send yourself.
+
+Order links carry a channel tag, so the share kit can show where requests came from.
+
 ## 4. Before going live
 
 The right-hand column lists what's left in six stages: create your agent, connect the services, connect accounts, protect the data, rehearse in sandbox, go live. A progress bar shows how far along you are, and the next step is spelled out. These are the same checks as `npm run pilot:preflight`, and the service checks really contact each service.
 
-The accounts stage needs you personally: PayPal and Google verify the identity of whoever opens the agent's PayPal Business and Gmail accounts.
+The accounts stage needs you personally: PayPal and Google verify the identity of whoever opens the agent's PayPal Business and Gmail accounts. Gmail is optional: with `WIDEMIND_PORTAL_ONLY=true` customers use their private link only.
 
 When those are done, `npm run pilot:rehearse -- --email <your inbox>` runs a full sandbox order, and a passing rehearsal completes its stage. [PILOT.md](PILOT.md) covers the run record, alerts, snapshots and the public `/pilot` page.
 

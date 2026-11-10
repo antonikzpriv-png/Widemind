@@ -414,6 +414,48 @@ export const definition: ModuleDefinition = {
           });
           wake(runId);
         },
+        readDiscoveries: async (runId) => {
+          // History is paged; read enough pages that no discovery is skipped.
+          const id = run(runId);
+          let first: Record<string, Json> | null = null;
+          const discoveries: Json[] = [],
+            experiments: Json[] = [];
+          for (let offset = 0; offset < 500; offset += 100) {
+            const page = record(
+              await client.request<Json>("/v1/discovery-status", {
+                runId: id,
+                offset,
+              }),
+            );
+            first ??= page;
+            const found = Array.isArray(page.discoveries)
+              ? page.discoveries
+              : [];
+            const tried = Array.isArray(page.experiments)
+              ? page.experiments
+              : [];
+            discoveries.push(...found);
+            experiments.push(...tried);
+            if (found.length < 100 && tried.length < 100) break;
+          }
+          return { ...first!, discoveries, experiments };
+        },
+        readOptOuts: async (runId) => {
+          const result = await client.request<{ emails?: unknown }>(
+            "/v1/opt-outs",
+            { runId: run(runId) },
+          );
+          if (!Array.isArray(result.emails))
+            throw new Error("Invalid opt-out list");
+          return result.emails
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => item.toLowerCase());
+        },
+        readPrototype: async (runId, experimentId) =>
+          client.request("/v1/experiment-artifact", {
+            runId: run(runId),
+            experimentId: identifier(experimentId),
+          }),
         deliveryOutcomes: async (runId) => {
           try {
             return deliveryOutcomes(

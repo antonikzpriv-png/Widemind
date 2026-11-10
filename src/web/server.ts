@@ -31,6 +31,38 @@ import { setupGuide } from "../runtime/setup.ts";
 import { activityTimeline } from "../runtime/timeline.ts";
 import { activityPage, startPage, type StartData } from "./agent-pages.ts";
 import {
+  addSample,
+  attributionCounts,
+  countNewLeads,
+  countPublishedSamples,
+  feeModel,
+  listLeads,
+  listSamples,
+  localOnly,
+  MAX_SAMPLE,
+  ownerSample,
+  prototypes,
+  publishedSample,
+  recordAttribution,
+  referralCounts,
+  sampleFromArtifact,
+  setSampleState,
+  shareCardSvg,
+  shareKit,
+  syncLeads,
+  updateLead,
+  type LeadAction,
+  type Sample,
+} from "../runtime/growth.ts";
+import {
+  leadsPage,
+  samplesOperatorPage,
+  samplesPublicPage,
+  sharePage,
+  type LeadsData,
+  type SamplesData,
+} from "./growth-pages.ts";
+import {
   outsideLedgerCosts,
   recordAttestation,
   recordCost,
@@ -55,16 +87,22 @@ import {
   operatorFormErrorPage,
   publicPage,
 } from "./pages.ts";
+const SITE_POLICY =
+  "default-src 'none'; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
+/** Untrusted sample markup: no scripts, no network, its own opaque origin. */
+const SAMPLE_POLICY =
+  "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox";
 async function body(
   request: IncomingMessage,
   capture?: (bytes: Buffer) => void,
+  limit = 16384,
 ): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     size += bytes.length;
-    if (size > 16384) throw new RequestError(413, "Request too large");
+    if (size > limit) throw new RequestError(413, "Request too large");
     chunks.push(bytes);
   }
   const raw = Buffer.concat(chunks);
@@ -134,6 +172,15 @@ export function webServer(context: {
           | undefined)
       : undefined;
     return {
+      fees: feeModel(env),
+      firstCustomer:
+        run && profile
+          ? {
+              newLeads: countNewLeads(db, runId!),
+              publishedSamples: countPublishedSamples(db, runId!),
+              requests: attributionCounts(db, runId!).total,
+            }
+          : null,
       runId,
       running: run?.state === "active" || run?.state === "waiting",
       guide: setupGuide(db, run ? runId : null, readiness),
@@ -176,6 +223,95 @@ export function webServer(context: {
       chain: verifyChain(db, runId),
     };
   };
+  /** The owner's agent run and profile, when the agent has been created. */
+  const agent = () => {
+    const runId = config.publicRunId;
+    if (!runId || !store.run(runId)) return null;
+    const profile = currentProfile(db, runId);
+    return profile ? { runId, profile } : null;
+  };
+  const dependencyMs = config.dependencyMs ?? 5000;
+  const discoveryStatus = async (runId: string) => {
+    const business = services.business;
+    if (!business.readDiscoveries || !business.health().available)
+      return {
+        status: null,
+        detail:
+          "The business service is not connected, so new discoveries could not be read",
+      };
+    try {
+      return {
+        status: await callDependency(
+          "business.discoveries",
+          () => business.readDiscoveries!(runId),
+          dependencyMs,
+        ),
+        detail: "",
+      };
+    } catch {
+      return {
+        status: null,
+        detail:
+          "The business service did not answer; showing what was saved earlier",
+      };
+    }
+  };
+  /** Who asked not to be contacted; null when the list cannot be read. */
+  const optOuts = async (runId: string): Promise<Set<string> | null> => {
+    const business = services.business;
+    if (!business.readOptOuts || !business.health().available) return null;
+    try {
+      return new Set(
+        await callDependency(
+          "business.optOuts",
+          () => business.readOptOuts!(runId),
+          dependencyMs,
+        ),
+      );
+    } catch {
+      return null;
+    }
+  };
+  const leadsData = async (): Promise<LeadsData> => {
+    const current = agent();
+    if (!current)
+      return {
+        profile: null,
+        leads: [],
+        sync: { ok: false, added: 0, detail: "" },
+        optedOut: null,
+      };
+    const read = await discoveryStatus(current.runId);
+    const added = read.status
+      ? syncLeads({
+          db,
+          runId: current.runId,
+          status: read.status,
+          profile: current.profile,
+          origin: config.publicOrigin,
+        })
+      : 0;
+    return {
+      profile: current.profile,
+      leads: listLeads(db, current.runId),
+      sync: { ok: Boolean(read.status), added, detail: read.detail },
+      optedOut: await optOuts(current.runId).then((found) =>
+        found ? [...found] : null,
+      ),
+    };
+  };
+  const samplesData = async (): Promise<SamplesData> => {
+    const current = agent();
+    if (!current)
+      return { profile: null, samples: [], prototypes: [], unavailable: null };
+    const read = await discoveryStatus(current.runId);
+    return {
+      profile: current.profile,
+      samples: listSamples(db, current.runId),
+      prototypes: read.status ? prototypes(read.status) : [],
+      unavailable: read.status ? null : read.detail,
+    };
+  };
   if (
     secrets.operatorPasswordHash &&
     !validPasswordHash(secrets.operatorPasswordHash)
@@ -190,10 +326,7 @@ export function webServer(context: {
       response.setHeader("X-Content-Type-Options", "nosniff");
       response.setHeader("Referrer-Policy", "same-origin");
       response.setHeader("X-Frame-Options", "DENY");
-      response.setHeader(
-        "Content-Security-Policy",
-        "default-src 'none'; style-src 'self'; font-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-      );
+      response.setHeader("Content-Security-Policy", SITE_POLICY);
       const send = (
         status: number,
         value: unknown,
@@ -205,6 +338,24 @@ export function webServer(context: {
         response.end(
           type === "application/json" ? JSON.stringify(value) : String(value),
         );
+      };
+      /** Serve one sample as an image or a locked-down framed document. */
+      const sendSample = (sample: Sample | null, extension: string) => {
+        if (!sample || sample.kind !== extension) {
+          send(404, { error: "Not found" });
+          return;
+        }
+        if (sample.kind === "html") {
+          response.setHeader("X-Frame-Options", "SAMEORIGIN");
+          response.setHeader(
+            "Content-Security-Policy",
+            `${SAMPLE_POLICY}; frame-ancestors 'self'`,
+          );
+          send(200, sample.content, "text/html");
+        } else {
+          response.setHeader("Content-Security-Policy", SAMPLE_POLICY);
+          send(200, sample.content, "image/svg+xml");
+        }
       };
       const redirect = (path: string) => {
         response.writeHead(303, { Location: path });
@@ -237,6 +388,51 @@ export function webServer(context: {
           send(200, { ok: true, service: "web", profile: config.profile });
           return;
         }
+        if (method === "GET" && path === "/samples") {
+          const current = agent();
+          // Sample pages are framed by this page only.
+          response.setHeader(
+            "Content-Security-Policy",
+            `${SITE_POLICY}; frame-src 'self'`,
+          );
+          send(
+            200,
+            samplesPublicPage(
+              current?.profile.name ?? null,
+              current ? listSamples(db, current.runId, true) : [],
+              config.publicOrigin,
+            ),
+            "text/html",
+          );
+          return;
+        }
+        const sampleFile = /^\/samples\/([1-9][0-9]{0,9})\.(svg|html)$/.exec(
+          path,
+        );
+        if (method === "GET" && sampleFile) {
+          const current = agent();
+          sendSample(
+            current
+              ? publishedSample(db, current.runId, Number(sampleFile[1]))
+              : null,
+            sampleFile[2]!,
+          );
+          return;
+        }
+        const shareCard = /^\/share\/([a-z][a-z0-9-]{0,40})\.svg$/.exec(path);
+        if (method === "GET" && shareCard) {
+          const current = agent();
+          const card = current
+            ? shareCardSvg(current.profile, shareCard[1]!, config.publicOrigin)
+            : null;
+          if (!card) {
+            send(404, { error: "Not found" });
+            return;
+          }
+          response.setHeader("Content-Security-Policy", SAMPLE_POLICY);
+          send(200, card, "image/svg+xml");
+          return;
+        }
         if (method === "GET" && (path === "/pilot" || path === "/api/pilot")) {
           // Only operator-published, unretracted snapshots; never a live read.
           const data =
@@ -266,7 +462,11 @@ export function webServer(context: {
                     () => services.website.renderPublic!(data),
                     config.dependencyMs ?? 5000,
                   )
-                : publicPage(data)
+                : publicPage(data, {
+                    samples: agent()
+                      ? countPublishedSamples(db, config.publicRunId!)
+                      : 0,
+                  })
               : data,
             path === "/" ? "text/html" : "application/json",
           );
@@ -402,6 +602,24 @@ export function webServer(context: {
             result.status > 599
           )
             throw new Error("Invalid module response");
+          // Count which tracked link an accepted public request came from.
+          // The request route is already rate limited; this adds no new input path.
+          if (
+            path === "/api/modules/business/request" &&
+            result.status === 202 &&
+            input.ref !== undefined &&
+            agent()
+          )
+            try {
+              recordAttribution(
+                db,
+                config.publicRunId!,
+                input.ref,
+                (result.body as Record<string, Json> | null)?.opportunityId,
+              );
+            } catch {
+              // Attribution is a convenience and never fails a request.
+            }
           if (
             moduleRoute.access === "operator" &&
             method === "POST" &&
@@ -572,6 +790,63 @@ export function webServer(context: {
           else send(data ? 200 : 404, data ?? { error: "No pilot run" });
           return;
         }
+        if (
+          method === "GET" &&
+          (path === "/operator/leads" || path === "/api/operator/leads")
+        ) {
+          const data = await leadsData();
+          if (path === "/operator/leads")
+            send(200, leadsPage(data, session.csrf), "text/html");
+          else send(200, data);
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/share" || path === "/api/operator/share")
+        ) {
+          const current = agent();
+          const data = {
+            profile: current?.profile ?? null,
+            items: current
+              ? shareKit(current.profile, config.publicOrigin)
+              : [],
+            local: localOnly(config.publicOrigin),
+            counts: attributionCounts(db, current?.runId ?? ""),
+            referrals: referralCounts(db, current?.runId ?? ""),
+          };
+          if (path === "/operator/share")
+            send(200, sharePage(data), "text/html");
+          else send(200, data);
+          return;
+        }
+        if (
+          method === "GET" &&
+          (path === "/operator/samples" || path === "/api/operator/samples")
+        ) {
+          const data = await samplesData();
+          if (path === "/operator/samples") {
+            response.setHeader(
+              "Content-Security-Policy",
+              `${SITE_POLICY}; frame-src 'self'`,
+            );
+            send(200, samplesOperatorPage(data, session.csrf), "text/html");
+          } else send(200, data);
+          return;
+        }
+        const samplePreview =
+          /^\/operator\/sample-preview\/([1-9][0-9]{0,9})\.(svg|html)$/.exec(
+            path,
+          );
+        if (method === "GET" && samplePreview) {
+          const current = agent();
+          sendSample(
+            current
+              ? ownerSample(db, current.runId, Number(samplePreview[1]))
+              : null,
+            samplePreview[2]!,
+          );
+          return;
+        }
         if (method === "GET" && path === "/operator/integrations") {
           send(200, integrationsPage(), "text/html");
           return;
@@ -591,7 +866,15 @@ export function webServer(context: {
           send(404, { error: "Not found" });
           return;
         }
-        const input = await body(request);
+        // Only a signed-in owner posting a sample may send a larger body.
+        const input = await body(
+          request,
+          undefined,
+          // Form encoding can triple markup; allow for it, plus the other fields.
+          path.replace(/^\/api/, "") === "/operator/samples"
+            ? MAX_SAMPLE * 4
+            : 16384,
+        );
         if (sessions.get(request)?.tokenHash !== session.tokenHash) {
           send(401, { error: "Operator session revoked or expired" });
           return;
@@ -752,6 +1035,104 @@ export function webServer(context: {
           });
           if (api) send(200, { results });
           else redirect("/operator/start");
+          return;
+        }
+        if (route === "/operator/leads" || route === "/operator/samples") {
+          const text = (name: string) =>
+            typeof input[name] === "string" ? (input[name] as string) : "";
+          const number = (name: string) => {
+            const value = text(name) || String(input[name] ?? "");
+            if (!/^[1-9][0-9]{0,9}$/.test(value))
+              throw new Error("A record id is required");
+            return Number(value);
+          };
+          let result: unknown;
+          try {
+            const current = agent();
+            if (!current) throw new Error("Create the agent first");
+            const { runId } = current;
+            const action = text("action");
+            if (route === "/operator/leads") {
+              if (!["save", "contacted", "dismiss", "reopen"].includes(action))
+                throw new Error("Unknown lead action");
+              result = updateLead({
+                db,
+                runId,
+                id: number("id"),
+                action: action as LeadAction,
+                ...(action === "save" || action === "contacted"
+                  ? { draft: input.draft }
+                  : {}),
+                ...(action === "contacted"
+                  ? { optedOut: await optOuts(runId) }
+                  : {}),
+              });
+            } else if (action === "add")
+              result = {
+                id: addSample({
+                  db,
+                  runId,
+                  service: input.service,
+                  title: input.title,
+                  kind: input.kind,
+                  content: input.content,
+                  origin: "owner",
+                }),
+              };
+            else if (action === "import") {
+              const experimentId = text("experimentId");
+              const read = await discoveryStatus(runId);
+              const prototype = read.status
+                ? prototypes(read.status).find(
+                    (item) => item.experimentId === experimentId,
+                  )
+                : undefined;
+              if (!prototype || !services.business.readPrototype)
+                throw new Error(
+                  read.detail || "That prototype is not available",
+                );
+              const sample = sampleFromArtifact(
+                await callDependency(
+                  "business.prototype",
+                  () => services.business.readPrototype!(runId, experimentId),
+                  dependencyMs,
+                ),
+              );
+              result = {
+                id: addSample({
+                  db,
+                  runId,
+                  service:
+                    prototype.service ??
+                    Object.keys(current.profile.offerings)[0],
+                  title: sample.title,
+                  kind: sample.kind,
+                  content: sample.content,
+                  origin: `experiment:${experimentId}`,
+                }),
+              };
+            } else if (action === "publish" || action === "retract") {
+              setSampleState({ db, runId, id: number("id"), action });
+              result = { ok: true };
+            } else throw new Error("Unknown sample action");
+          } catch (error) {
+            const message =
+              error instanceof DependencyTimeout
+                ? "The business service did not answer in time"
+                : error instanceof Error
+                  ? error.message.slice(0, 500)
+                  : "Invalid request";
+            if (api) send(400, { error: message });
+            else
+              send(
+                400,
+                operatorFormErrorPage({ error: message }, route),
+                "text/html",
+              );
+            return;
+          }
+          if (api) send(200, result);
+          else redirect(route);
           return;
         }
         const pilotAction =

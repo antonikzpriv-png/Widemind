@@ -1,0 +1,38 @@
+# Sandbox deploy: the app container behind Caddy for HTTPS.
+#   WIDEMIND_DOMAIN=agent.example.com docker compose up -d --build
+#   docker compose logs app     # shows the owner password once, on first start
+# Use WIDEMIND_DOMAIN=localhost to try it on one machine (Caddy issues a
+# local certificate your browser will ask you to accept).
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      WIDEMIND_HOST: 0.0.0.0
+      WIDEMIND_PUBLIC_ORIGIN: https://${WIDEMIND_DOMAIN:?Set WIDEMIND_DOMAIN to the site's domain}
+      WIDEMIND_SECURE_COOKIES: "true"
+      # Customers use their private link; no Gmail account is needed to start.
+      WIDEMIND_PORTAL_ONLY: ${WIDEMIND_PORTAL_ONLY:-true}
+    volumes:
+      # Databases, service tokens and the owner password hash live here.
+      - widemind-data:/app/var
+    expose:
+      - "3000"
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      WIDEMIND_DOMAIN: ${WIDEMIND_DOMAIN:?Set WIDEMIND_DOMAIN to the site's domain}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/Caddyfile.docker:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+volumes:
+  widemind-data:
+  caddy-data:
+  caddy-config:

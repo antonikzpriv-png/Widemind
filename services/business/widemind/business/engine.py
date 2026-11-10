@@ -202,6 +202,13 @@ class Business(DiscoveryMixin):
             self.store.db.execute("UPDATE customer_threads SET status='opted_out',intervention=NULL WHERE run_id=? AND customer_id=?", (self.run_id, customer_id))
             self.store.memory(self.run_id, customer_id, "opt_out", {"reference": text(reference, "opt-out reference")}, self.clock(), customer_id)
 
+    def contact_blocks(self):
+        """Addresses that asked not to be contacted, for owner-side outreach checks."""
+        rows = self.store.all("""SELECT c.email FROM customers c WHERE c.run_id=? AND (c.opted_out=1 OR c.id IN
+            (SELECT t.customer_id FROM customer_threads t WHERE t.run_id=? AND t.contact_allowed=0))
+            ORDER BY c.email LIMIT 5000""", (self.run_id, self.run_id))
+        return [row["email"].lower() for row in rows]
+
     def _opted_out(self, customer_id):
         return bool(self.store.one("SELECT opted_out FROM customers WHERE id=? AND run_id=?", (customer_id, self.run_id))["opted_out"])
 

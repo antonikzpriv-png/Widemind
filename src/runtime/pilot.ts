@@ -237,11 +237,15 @@ export async function pilotReadiness(input: {
   const email = capabilities.filter(
     (item) => item.id.startsWith("gmail.") && item.availability.available,
   );
+  // Portal-only: customers use their private link and no mailbox is needed.
+  const portalOnly = env.WIDEMIND_PORTAL_ONLY === "true";
   add(
     "email_capability",
-    email.length > 0,
-    `Email capability available (${email.map((item) => item.id).join(", ")})`,
-    "No Gmail capability available; complete dedicated mailbox OAuth",
+    portalOnly || email.length > 0,
+    email.length
+      ? `Email capability available (${email.map((item) => item.id).join(", ")})`
+      : "Portal-only mode: customers use their private link; no mailbox is connected",
+    "No Gmail capability available; complete dedicated mailbox OAuth, or set WIDEMIND_PORTAL_ONLY=true to work through the customer portal only",
   );
   let backups: { fresh: boolean; detail: string } | null = null;
   try {

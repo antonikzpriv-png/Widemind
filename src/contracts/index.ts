@@ -247,6 +247,11 @@ export interface Business {
   readPolicy?(runId: ID): Promise<Record<string, Json> | null>;
   writePolicy?(runId: ID, policy: Record<string, Json>): Promise<void>;
   writeDiscovery?(runId: ID, config: Record<string, Json>): Promise<void>;
+  /** Optional free reads of stored discovery records and one private prototype. */
+  readDiscoveries?(runId: ID): Promise<Json>;
+  readPrototype?(runId: ID, experimentId: string): Promise<Json>;
+  /** Lowercase addresses that asked not to be contacted. */
+  readOptOuts?(runId: ID): Promise<string[]>;
 }
 export interface PublicRun {
   runId: ID;
